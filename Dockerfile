@@ -16,5 +16,10 @@ RUN cargo build --release --bin YOUR_BINARY_NAME
 # We do not need the Rust toolchain to run the binary!
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
+RUN apt-get update -y \
+    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && apt-get autoremove -y \
+    && apt-get clean -y \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/YOUR_BINARY_NAME /usr/local/bin
 ENTRYPOINT ["/usr/local/bin/YOUR_BINARY_NAME"]
