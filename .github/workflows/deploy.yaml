@@ -71,10 +71,6 @@ jobs:
           service: ${{ vars.SERVICE_NAME }}
           image: ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.ARTIFACT_ID }}/${{ vars.ARTIFACT_REPO_ID }}/${{ github.event.repository.name }}:latest
           suffix: ${{ needs.version.outputs.shortsha }}
+          tag: latest
+          revision_traffic: 'LATEST=100'
 
-      - name: Route traffic to Cloud Run
-        uses: google-github-actions/deploy-cloudrun@v2
-        with:
-          service: ${{ vars.SERVICE_NAME }}
-          region: ${{ env.GAR_LOCATION }}
-          revision_traffic: "${{ vars.SERVICE_NAME }}-${{ needs.version.outputs.shortsha }}=100"
