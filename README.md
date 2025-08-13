@@ -18,15 +18,16 @@ git fetch ci
 git merge --allow-unrelated ci/master
 ```
 
-Sett disse variablene i Github Settings, under Environment opprett environment(dev/prod), disse må samsvare med de miljøene du finner i release.yaml i deploy matrix :
-PROJECT_ID
-PROJECT_NUMBER
+### Sett disse variablene i Github Settings: 
+Under Environment, opprett environment(dev/prod). Disse må samsvare med de miljøene du finner i release.yaml i deploy matrix:
+- PROJECT_ID
+- PROJECT_NUMBER
 
 Under Secret and variables -> Variables tab -> New repository variable
-ARTIFACT_REPO_ID
-SERVICE_NAME
+- ARTIFACT_REPO_ID
+- SERVICE_NAME
 
-I prosjektet ditt må man under src foldern endre .Dockerfile
-YOUR_BINARY_NAME må settes til package name i cargo.toml
+I prosjektet ditt må man under src foldern endre .Dockerfile:
+- YOUR_BINARY_NAME (må settes til package name i cargo.toml)
 
 release.yaml kan endres om man skal legge til andre miljøer enn dev/prod
