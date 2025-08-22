@@ -30,4 +30,56 @@ Under Secret and variables -> Variables tab -> New repository variable
 I prosjektet ditt må man under src foldern endre .Dockerfile:
 - YOUR_BINARY_NAME (må settes til package name i cargo.toml)
 
-release.yaml kan endres om man skal legge til andre miljøer enn dev/prod
+## Oppdater Cargo.toml
+For at workflowen skal kunne bygge riktig må Cargo.toml inneholde en eksplisitt [[bin]]- eller [lib]-seksjon.
+Eksempel for et binærprosjekt:
+```toml
+[package]
+name = "mitt_prosjekt"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mitt_prosjekt"
+path = "src/main.rs"
+```
+
+Eksempel for et bibliotek:
+```toml
+[package]
+name = "mitt_bibliotek"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mitt_bibliotek"
+path = "src/lib.rs"
+```
+
+> [!IMPORTANT]
+> `name` under `[[bin]]` må matche `package.name` i `Cargo.toml`.
+> For `[lib]` anbefales det sterkt å bruke samme navn som `package.name` for å
+> unngå forvirring.
+> I begge tilfeller må verdien brukes i Dockerfile (`YOUR_BINARY_NAME`).
+
+## Deploy til Cloud Run
+I release.yaml er deploy definert slik:
+```yaml
+deploy:
+  name: Deploy
+  needs: upload
+  strategy:
+    matrix:
+      env: ['dev']
+  uses: ./.github/workflows/deploy.yaml
+  with:
+    env: ${{ matrix.env }}
+```
+Dette betyr at deploy kun går mot dev som standard.
+
+> [!TIP]
+> Hvis du ønsker å deploye til prod, må du legge til prod i listen:
+> ```yaml
+> matrix:
+>  env: ['dev', 'prod']
+> ```
