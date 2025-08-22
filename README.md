@@ -34,7 +34,7 @@ Under **Settings -> Secret and variables -> Actions -> Variables**, legg til
 I prosjektets Dockerfile må du erstatte:
 - YOUR_BINARY_NAME (må settes til package name i cargo.toml)
 
-## Oppdater Cargo.toml
+### Oppdater Cargo.toml
 For at workflowen skal kunne bygge riktig må Cargo.toml inneholde en eksplisitt [[bin]]- eller [lib]-seksjon.
 
 Eksempel for et binærprosjekt:
