@@ -19,19 +19,24 @@ git merge --allow-unrelated ci/master
 ```
 
 ### Sett disse variablene i Github Settings: 
-Under Environment, opprett environment(dev/prod). Disse må samsvare med de miljøene du finner i release.yaml i deploy matrix:
-- PROJECT_ID
-- PROJECT_NUMBER
+Under **Settings -> Environments** opprett environments (`dev` og `prod`). 
+Disse må samsvare med de miljøene du finner i `release.yaml` sin deploy-matrix:
 
-Under Secret and variables -> Variables tab -> New repository variable
-- ARTIFACT_REPO_ID
-- SERVICE_NAME
+**Environment variables (per miljø `dev`/`prod`):**
+- `PROJECT_ID`
+- `PROJECT_NUMBER`
 
-I prosjektet ditt må man under src foldern endre .Dockerfile:
+Under **Settings -> Secret and variables -> Actions -> Variables**, legg til
+- `ARTIFACT_REPO_ID`
+- `SERVICE_NAME`
+
+### Oppdater Dockerfile
+I prosjektets Dockerfile må du erstatte:
 - YOUR_BINARY_NAME (må settes til package name i cargo.toml)
 
 ## Oppdater Cargo.toml
 For at workflowen skal kunne bygge riktig må Cargo.toml inneholde en eksplisitt [[bin]]- eller [lib]-seksjon.
+
 Eksempel for et binærprosjekt:
 ```toml
 [package]
@@ -57,10 +62,8 @@ path = "src/lib.rs"
 ```
 
 > [!IMPORTANT]
-> `name` under `[[bin]]` må matche `package.name` i `Cargo.toml`.
-> For `[lib]` anbefales det sterkt å bruke samme navn som `package.name` for å
-> unngå forvirring.
-> I begge tilfeller må verdien brukes i Dockerfile (`YOUR_BINARY_NAME`).
+> `name` i `Cargo.toml` (enten under `[[bin]]` eller `[lib]`) må samsvare med `package.name`.
+> Den samme verdien må brukes i Dockerfile som `YOUR_BINARY_NAME`, ellers vil bygg/deploy feile.
 
 ## Deploy til Cloud Run
 I release.yaml er deploy definert slik:
