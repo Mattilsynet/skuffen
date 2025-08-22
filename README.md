@@ -18,15 +18,15 @@ git fetch ci
 git merge --allow-unrelated ci/master
 ```
 
-### Sett disse variablene i Github Settings: 
-Under **Settings -> Environments** opprett environments (`dev` og `prod`). 
+### Konfigurer Github Settings: 
+Under **Settings &rarr; Environments** opprett environments (`dev` og `prod`). 
 Disse må samsvare med de miljøene du finner i `release.yaml` sin deploy-matrix:
 
 **Environment variables (per miljø `dev`/`prod`):**
 - `PROJECT_ID`
 - `PROJECT_NUMBER`
 
-Under **Settings -> Secret and variables -> Actions -> Variables**, legg til
+Under **Settings &rarr; Secret and variables &rarr; Actions &rarr; Variables**, legg til
 - `ARTIFACT_REPO_ID`
 - `SERVICE_NAME`
 
