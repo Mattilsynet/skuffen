@@ -1,6 +1,12 @@
-[package]
-name = "skuffen"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = ["app", "read_worker", "health_check"]
+resolver = "2"
 
-[dependencies]
+# optional: apply lints to all members
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+enum_glob_use = "deny"
+
+

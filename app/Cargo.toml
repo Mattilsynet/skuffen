@@ -1,0 +1,23 @@
+
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# libs
+read_worker = { path = "../read_worker" }
+health_check = {path = "../health_check" }
+
+tokio = { version = "1.39", features = ["macros", "rt-multi-thread", "time"] }
+
+dotenvy = "0.15.7"
+async-nats = "0.42"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+
+# Feilhåndtering
+anyhow = "1.0.99"
+thiserror = "2.0.16"
+

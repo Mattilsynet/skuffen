@@ -1,0 +1,21 @@
+
+[package]
+name = "read_worker"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "time"] }
+async-nats = "0.42"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+
+# Tracing
+tracing = "0.1.41"
+
+# Feilhåndtering
+anyhow = "1.0.99"
+thiserror = "2.0.16"
+
+futures = "0.3.31"
