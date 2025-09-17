@@ -1,0 +1,24 @@
+# Byggartefakter
+target/
+**/target/
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Editor/IDE
+*.swp
+*.swo
+*.idea
+*.vscode
+
+# OS-spesifikt
+.DS_Store
+Thumbs.db
+
+# Miljøfiler
+.env
