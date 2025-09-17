@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - master
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Code Reassurance
+    uses: ./.github/workflows/validate.yaml
+
+  upload:
+    name: Upload
+    needs: build
+    uses: ./.github/workflows/upload.yaml
+    with:
+      ar_repo_id: ${{ vars.ARTIFACT_REPO_ID }}
+    secrets: inherit
+
+  deploy:
+    name: Deploy
+    needs: upload
+    strategy:
+      matrix:
+        env: ['dev']
+    uses: ./.github/workflows/deploy.yaml
+    with:
+     env: ${{ matrix.env }}
