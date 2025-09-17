@@ -12,7 +12,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 # Build application
 COPY . .
 ENV SQLX_OFFLINE true
-RUN cargo build --release --bin YOUR_BINARY_NAME
+RUN cargo build --release --bin skuffen
 
 # We do not need the Rust toolchain to run the binary!
 FROM debian:bookworm-slim AS runtime
@@ -22,5 +22,5 @@ RUN apt-get update -y \
     && apt-get autoremove -y \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/YOUR_BINARY_NAME /usr/local/bin
-ENTRYPOINT ["/usr/local/bin/YOUR_BINARY_NAME"]
+COPY --from=builder /app/target/release/skuffen /usr/local/bin
+ENTRYPOINT ["/usr/local/bin/skuffen"]
