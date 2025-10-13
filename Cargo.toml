@@ -1,5 +1,12 @@
 [workspace]
-members = ["app", "read_worker", "health_check"]
+members = [
+  "crates/app",
+  "crates/domain",
+  "crates/application",
+  "crates/infrastructure",
+  "crates/read_worker",
+  "crates/health_check",
+]
 resolver = "2"
 
 # optional: apply lints to all members
