@@ -1,7 +1,7 @@
 use tokio::task::JoinHandle;
 use tracing::info;
 
-use crate::infrastucture::nats::{client::NatsClient, config::NatsConfig, replier};
+use crate::infrastucture::nats::{client::NatsClient, config::NatsConfig, listener};
 
 pub async fn setup_nats_replier() -> Result<JoinHandle<()>, anyhow::Error> {
     info!("Configuring nats replier");
@@ -11,7 +11,7 @@ pub async fn setup_nats_replier() -> Result<JoinHandle<()>, anyhow::Error> {
         .expect("failed to connect nats client");
 
     let handle = tokio::spawn(async move {
-        if let Err(e) = replier::serve(client).await {
+        if let Err(e) = listener::serve(client).await {
             tracing::error!("Error with the nats replier server: {e}");
         }
     });
