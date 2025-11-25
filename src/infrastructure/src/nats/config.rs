@@ -8,7 +8,7 @@ impl NatsConfig {
     pub fn from_env() -> Result<Self, std::env::VarError> {
         Ok(Self {
             server_url: std::env::var("NATS_URL")?,
-            credentials: std::env::var("NATS_CREDENTIALS").ok(),
+            credentials: std::env::var("APP_NATS_CREDENTIALS").ok(),
         })
     }
 

@@ -1,5 +1,3 @@
-use std::net::SocketAddr;
-
 use application::services::hent_sak::HentSakService;
 use infrastructure::{
     adapter::hent_sak::SikriRepository,
@@ -16,8 +14,7 @@ async fn main() -> anyhow::Result<()> {
     init_subscriber(subscriber);
     let nats = setup_nats().await?;
 
-    let addr: SocketAddr = "0.0.0.0:8080".parse().unwrap();
-    let health_check_handle = health_check(addr).await?;
+    let health_check_handle = health_check().await?;
     // let sak_repo = SakRepository::new(SikriRepository);
     // let jp_repo = JournalpostRepository::new(SikriRepository);
 
