@@ -1,26 +1,21 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
+ARG RUST_VERSION=1
+FROM rust:${RUST_VERSION} AS chef
 WORKDIR /app
-
+RUN cargo install cargo-chef
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
-# Build dependencies - this is the caching Docker layer!
+# Build dependencies - this is the caching layer!
 RUN cargo chef cook --release --recipe-path recipe.json
 # Build application
 COPY . .
-ENV SQLX_OFFLINE true
-RUN cargo build --release --bin skuffen
+ARG PACKAGE=skuffen
+RUN cargo build --release --package ${PACKAGE}
 
-# We do not need the Rust toolchain to run the binary!
-FROM debian:bookworm-slim AS runtime
-WORKDIR /app
-RUN apt-get update -y \
-    && apt-get install -y --no-install-recommends openssl ca-certificates \
-    && apt-get autoremove -y \
-    && apt-get clean -y \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/skuffen /usr/local/bin
-ENTRYPOINT ["/usr/local/bin/skuffen"]
+FROM gcr.io/distroless/cc-debian12:nonroot
+ARG PACKAGE=skuffen
+COPY --from=builder --chown=nonroot:nonroot /app/target/release/${PACKAGE} /usr/local/bin/${PACKAGE}
+CMD ["/usr/local/bin/skuffen"]
