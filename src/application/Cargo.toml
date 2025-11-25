@@ -1,0 +1,15 @@
+
+[package]
+name = "application"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+domain = { path = "../domain" }
+
+lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", features = ["arkiv"] }
+async-trait = "0.1.89"
+
+# Feilhåndtering
+anyhow = "1.0.99"
+thiserror = "2.0.16"

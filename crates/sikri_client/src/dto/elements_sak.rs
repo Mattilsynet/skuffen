@@ -90,8 +90,7 @@ impl ElementsSak {
         let len = self.sakstittel.len();
         if len == 0 || len > 256 {
             return Err(format!(
-                "sakstittel must be between 1 and 256 characters, got length {}",
-                len
+                "sakstittel must be between 1 and 256 characters, got length {len}"
             ));
         }
 

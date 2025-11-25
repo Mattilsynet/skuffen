@@ -6,14 +6,13 @@ edition = "2024"
 [lib]
 path = "src/lib.rs"
 
-[workspace]
-
 [[test]]
 name = "e2e_client"
 path = "tests/e2e/e2e_client.rs"
 
 
 [dependencies]
+lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", features = ["arkiv"] }
 reqwest = {version = "0.12.23", features = ["json"] }
 serde = {version = "1.0.228", features = ["derive"]}
 tokio = {version = "1.47.1", features = ["full"]}

@@ -21,8 +21,7 @@ pub async fn get_secret(
 ) -> Result<String> {
     let version = version.unwrap_or("latest");
     let url = format!(
-        "https://secretmanager.googleapis.com/v1/projects/{}/secrets/{}/versions/{}:access",
-        project_id, secret_id, version
+        "https://secretmanager.googleapis.com/v1/projects/{project_id}/secrets/{secret_id}/versions/{version}:access"
     );
 
     let token = get_token().await?;

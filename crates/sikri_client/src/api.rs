@@ -7,7 +7,7 @@ use std::env;
 
 fn base_url() -> String {
     env::var("BASE_URL_SIKRI").unwrap_or_else(|_| {
-        panic!("Miljøvariabelen BASE_URL_DIKRI er ikke satt. Sett denne før oppstart")
+        panic!("Miljøvariabelen BASE_URL_SIKRI er ikke satt. Sett denne før oppstart")
     })
 }
 
@@ -33,9 +33,9 @@ pub async fn alive() -> Result<()> {
         .basic_auth(username, Some(password))
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {}", url))?
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?
         .error_for_status()
-        .with_context(|| format!("Server svarte med feil for GET {}", url))?;
+        .with_context(|| format!("Server svarte med feil for GET {url}"))?;
 
     Ok(())
 }
@@ -64,16 +64,14 @@ pub async fn get_sak(
         .await
         .with_context(|| {
             format!(
-                "Klarte ikke å sende request til {} (kildesystem={}, saksnr={})",
-                url, kildesystem, saksnummer
+                "Klarte ikke å sende request til {url} (kildesystem={kildesystem}, saksnr={saksnummer})"
             )
         })?
         // Viktig: bevar reqwest::Error slik at .status() kan leses i tester
         .error_for_status()
         .with_context(|| {
             format!(
-                "Server svarte med feil for GET {} (kildesystem={}, saksnr={})",
-                url, kildesystem, saksnummer
+                "Server svarte med feil for GET {url} (kildesystem={kildesystem}, saksnr={saksnummer})"
             )
         })?;
 
@@ -94,9 +92,9 @@ pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposter
         .json(&data)
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {}", url))?
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?
         .error_for_status()
-        .with_context(|| format!("Server svarte med feil for POST {}", url))?;
+        .with_context(|| format!("Server svarte med feil for POST {url}"))?;
 
     resp.json::<ElementsSakMedJournalposterResponse>()
         .await
