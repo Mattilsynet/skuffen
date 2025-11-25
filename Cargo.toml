@@ -1,19 +1,35 @@
+[package]
+name = "skuffen"
+version = "0.1.0"
+edition = "2021"
+
 [workspace]
 members = [
-  "crates/app",
-  "crates/domain",
-  "crates/application",
-  "crates/infrastructure",
-  "crates/read_worker",
-  "crates/health_check",
+  ".",
+  "src/domain",
+  "src/application",
+  "src/infrastructure",
+  "crates/sikri_client"
 ]
 resolver = "2"
 
-# optional: apply lints to all members
+[[bin]]
+name = "skuffen"
+path = "src/main.rs"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 enum_glob_use = "deny"
 
+
+[dependencies]
+domain        = { path = "src/domain" }
+application   = { path = "src/application" }
+infrastructure = { path = "src/infrastructure" }
+lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", features = ["arkiv"] }
+dotenvy = "0.15.7"
+anyhow = "1.0.100"
+tokio = { version = "1", features = ["full"] }
 

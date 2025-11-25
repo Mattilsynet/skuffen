@@ -1,4 +1,5 @@
 use crate::dto::elements_sak_response::ElementsSakMedJournalposterResponse;
+use lib_schemas::arkiv::v2::sak::Saksnummer;
 use serde::{Deserialize, Serialize};
 
 // #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -113,6 +114,19 @@ impl From<ElementsSakMedJournalposterResponse> for SakResponse {
             kildesystem: value.kildesystem,
             lukket: value.lukket,
             mappetype: value.mappetype,
+        }
+    }
+}
+
+impl From<SakResponse> for lib_schemas::arkiv::v2::sak::SakResponse {
+    fn from(value: SakResponse) -> Self {
+        lib_schemas::arkiv::v2::sak::SakResponse {
+            sakstittel: value.sakstittel,
+            saksbehandler: value.saksbehandler.unwrap_or_default(),
+            saksstatus: value.saksstatus.unwrap_or_default(),
+            unntatt_offentlighet: true, //TODO: Satt til true bare for å teste. FIX
+            saksnr: Saksnummer::new(value.saksnr.unwrap_or_default()).unwrap(), //TODO: Fix unwrap
+            lukket: value.lukket,
         }
     }
 }

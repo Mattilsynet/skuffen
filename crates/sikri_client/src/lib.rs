@@ -1,5 +1,5 @@
 mod api;
-mod domain;
+pub mod domain;
 mod dto;
 mod secret;
 
