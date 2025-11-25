@@ -22,7 +22,7 @@ jobs:
     name: Get environment vaiables
     needs: [ version ]
     runs-on: ubuntu-latest
-    environment: dev
+    environment: test
     outputs:
       project_number: ${{ steps.get-project-number.outputs.project_number }}
       project_id: ${{ steps.get-project-id.outputs.project_id }}
