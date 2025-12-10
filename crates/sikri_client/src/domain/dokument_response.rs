@@ -19,7 +19,7 @@ impl From<ElementsDokumentRespons> for DokumentRespons {
             dokument_id: src.dokument_id,
             tittel: src.tittel,
             filtype: src.filtype,
-            url: src.url,
+            url: src.dokument_url,
         }
     }
 }

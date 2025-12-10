@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -43,7 +42,7 @@ pub struct JournalpostRespons {
     pub dokumentkategori: Option<String>,
     pub antall_vedlegg: i32,
     #[serde(rename = "dokumentDato", skip_serializing_if = "Option::is_none")]
-    pub dokument_dato: Option<DateTime<Utc>>,
+    pub dokument_dato: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hoveddok_id: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,18 +69,18 @@ impl From<ElementsJournalpostRespons> for JournalpostRespons {
             avsendere_mottakere: src
                 .avsendere_mottakere
                 .map(|v| v.into_iter().map(Into::into).collect()),
-            journalpost_id: src.journalpost_id,
+            journalpost_id: src.journalpost_id.unwrap_or_default(),
             journalpostnr: src.journalpostnr,
             journalpost_url: src.journalpost_url,
             kildesystem: src.kildesystem,
             lopenr: src.lopenr,
             dokumentnummer: src.dokumentnummer,
             dokumentkategori: src.dokumentkategori,
-            antall_vedlegg: src.antall_vedlegg,
+            antall_vedlegg: src.antall_vedlegg.unwrap_or_default(),
             dokument_dato: src.dokument_dato,
             hoveddok_id: src.hoveddok_id,
             hoveddokument_filtype: src.hoveddokument_filtype,
-            har_hoveddokument: src.har_hoveddokument,
+            har_hoveddokument: src.har_hoveddokument.unwrap_or_default(),
             hoveddokument_tittel: src.hoveddokument_tittel,
             dokumenter_respons: src
                 .dokumenter_respons

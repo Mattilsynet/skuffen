@@ -77,7 +77,6 @@ impl<U, Req, Res> NatsReplier<U, Req, Res> {
         }
     }
 }
-
 impl<U, Req, Res> NatsReplier<U, Req, Res>
 where
     U: UseCase<Req, Res> + Send + Sync,
@@ -90,6 +89,7 @@ where
 
         while let Some(msg) = sub.next().await {
             println!("Mottok et query på subject {}", self.subject);
+
             let reply_subject = match msg.reply {
                 Some(r) => r,
                 None => {
@@ -99,36 +99,33 @@ where
             };
 
             let req: Req = match serde_json::from_slice(&msg.payload) {
-                //TODO: Implementer en nats
-                //rewsponse type.
                 Ok(r) => r,
                 Err(e) => {
                     error!("Failed to deserialize request payload: {e}");
-                    // For now: ignore bad requests, no reply
+                    // Always reply with JSON error
+                    let err = NatsResponse::<Res>::Error {
+                        message: format!("Bad request: {e}"),
+                    };
+                    let bytes = serde_json::to_vec(&err)?;
+                    self.client
+                        .inner()
+                        .publish(reply_subject, bytes.into())
+                        .await?;
                     continue;
                 }
             };
 
-            let result = self.use_case.handle(req).await;
-
-            let nats_response: NatsResponse = match result {
-                Ok(payload) => match serde_json::to_vec(&payload) {
-                    Ok(bytes) => NatsResponse::Ok(bytes),
-                    Err(e) => {
-                        error!("Failed to serialize response payload: {e}");
-                        NatsResponse::Error(format!("serialize error: {e}").into_bytes())
-                    }
-                },
+            let nats_response: NatsResponse<Res> = match self.use_case.handle(req).await {
+                Ok(payload) => NatsResponse::Ok(payload),
                 Err(e) => {
                     error!("Use case returned error: {e:?}");
-                    NatsResponse::Error(e.to_string().into_bytes())
+                    NatsResponse::Error {
+                        message: e.to_string(),
+                    }
                 }
             };
 
-            let bytes: Vec<u8> = match &nats_response {
-                NatsResponse::Ok(b) => b.clone(),
-                NatsResponse::Error(b) => b.clone(),
-            };
+            let bytes = serde_json::to_vec(&nats_response)?;
 
             if let Err(e) = self
                 .client
@@ -138,7 +135,7 @@ where
             {
                 error!("Failed to publish reply: {:?}", e);
             } else {
-                tracing::info!("Successfully replied with: {:?}", nats_response);
+                tracing::info!("Successfully replied with JSON NatsResponse");
             }
         }
 
