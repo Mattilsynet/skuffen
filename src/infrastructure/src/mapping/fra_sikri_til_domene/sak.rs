@@ -24,7 +24,7 @@ pub fn from_sikri_sak_to_domain_sak(sikri_sak: SikriSak) -> Result<domain::model
         kildesystem: "SKUFFEN".to_string(),
         journalposter: sikri_sak
             .journalposter
-            .unwrap_or_else(|| Vec::new())
+            .unwrap_or_default() //Vec::new()
             .iter()
             .map(|jp| from_sikri_journalpost_to_domain_journalpost(jp.clone()))
             .collect::<Result<Vec<domain::model::journalpost::Journalpost>>>()?,
