@@ -37,7 +37,7 @@ pub fn from_sikri_journalpost_to_domain_journalpost(
             .ok_or_else(|| anyhow!("Journalpost har ikke saksbehandler."))?,
         dokumenter: sikri_journalpost
             .dokumenter_respons
-            .unwrap_or_else(|| Vec::new())
+            .unwrap_or_default() //Vec::new()
             .iter()
             .map(|doc| from_sikri_dokument_to_domain_dokument(doc.clone()))
             .collect::<anyhow::Result<Vec<Dokument>>>()?,
