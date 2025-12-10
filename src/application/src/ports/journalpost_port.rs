@@ -4,7 +4,7 @@ use async_trait::async_trait;
 pub trait JournalpostPort {
     async fn hent(
         &self,
-        journalpost_id: domain::model::journalpost::JournalpostId,
+        journalpost_key: domain::model::journalpost::JournalpostKey,
     ) -> Result<domain::model::journalpost::Journalpost, anyhow::Error>;
     async fn opprett(); //TODO
     async fn journalfoer(); //TODO

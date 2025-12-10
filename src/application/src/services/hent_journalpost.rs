@@ -1,17 +1,12 @@
 // application/src/services.rs
 use async_trait::async_trait;
-use lib_schemas::arkiv::v2::journalpost::{
-    HentJournalpostRequest, JournalpostKey, JournalpostResponse,
-};
+use domain::model::journalpost::{Journalpost, JournalpostKey};
 
 use crate::ports::use_cases::HentJournalpostUseCase;
 
 #[async_trait]
 pub trait JournalpostRepository {
-    async fn hent_journalpost(
-        &self,
-        id: JournalpostKey,
-    ) -> Result<JournalpostResponse, anyhow::Error>;
+    async fn hent_journalpost(&self, id: JournalpostKey) -> Result<Journalpost, anyhow::Error>;
 }
 
 pub struct HentJournalpostService<R> {
@@ -29,10 +24,7 @@ impl<R> HentJournalpostUseCase for HentJournalpostService<R>
 where
     R: JournalpostRepository + Send + Sync,
 {
-    async fn handle(
-        &self,
-        req: HentJournalpostRequest,
-    ) -> Result<JournalpostResponse, anyhow::Error> {
-        self.repo.hent_journalpost(req.key).await
+    async fn handle(&self, req: JournalpostKey) -> Result<Journalpost, anyhow::Error> {
+        self.repo.hent_journalpost(req).await
     }
 }

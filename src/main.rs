@@ -5,10 +5,12 @@ use infrastructure::{
     nats::{listener::NatsReplier, setup::setup_nats},
     telemetry::{get_subscriber, init_subscriber},
 };
-use lib_schemas::arkiv::v2::sak::{HentSakRequest, SakResponse};
+use lib_schemas::skuffen::query::queries::HentSakQuery;
+use lib_schemas::skuffen::sak::SakResponse;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    println!("main started.");
     dotenvy::dotenv().ok();
     let subscriber = get_subscriber();
     init_subscriber(subscriber);
@@ -20,8 +22,11 @@ async fn main() -> anyhow::Result<()> {
 
     let hent_sak_uc = HentSakService::new(SikriRepository);
     // let hent_jp_uc = HentJournalpostService::new(jp_repo);
-    let hent_sak_replier =
-        NatsReplier::<_, HentSakRequest, SakResponse>::new(nats.clone(), "sak.hent", hent_sak_uc);
+    let hent_sak_replier = NatsReplier::<_, HentSakQuery, SakResponse>::new(
+        nats.clone(),
+        "sak.hent.lokal",
+        hent_sak_uc,
+    );
 
     // let hent_jp_replier = NatsReplier::<_, HentJournalpostRequest, JournalpostResponse>::new(
     //     nats.clone(),

@@ -1,9 +1,9 @@
-use crate::domain::journalpost::Journalpost;
+use crate::domain::journalpost_response::JournalpostRespons;
 use crate::dto::elements_sak_response::ElementsSakMedJournalposterResponse;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FullSak {
+pub struct FullSakRespons {
     pub sakstittel: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arkivdel: Option<String>,
@@ -35,12 +35,12 @@ pub struct FullSak {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub antall_journalposter: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub journalposter: Option<Vec<Journalpost>>,
+    pub journalposter: Option<Vec<JournalpostRespons>>,
 }
 
-impl From<ElementsSakMedJournalposterResponse> for FullSak {
+impl From<ElementsSakMedJournalposterResponse> for FullSakRespons {
     fn from(src: ElementsSakMedJournalposterResponse) -> Self {
-        FullSak {
+        FullSakRespons {
             sakstittel: src.sakstittel,
             arkivdel: src.arkivdel,
             journalenhet: src.journalenhet,
@@ -60,8 +60,8 @@ impl From<ElementsSakMedJournalposterResponse> for FullSak {
             antall_journalposter: src.antall_journalposter,
             journalposter: src.journalposter.map(|v| {
                 v.into_iter()
-                    .map(Journalpost::from)
-                    .collect::<Vec<Journalpost>>()
+                    .map(JournalpostRespons::from)
+                    .collect::<Vec<JournalpostRespons>>()
             }),
         }
     }

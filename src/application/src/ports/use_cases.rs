@@ -1,6 +1,9 @@
 use anyhow;
 use async_trait::async_trait;
-use lib_schemas::arkiv::v2::{journalpost::HentJournalpostRequest, sak::HentSakRequest};
+use domain::model::{
+    journalpost::{Journalpost, JournalpostKey},
+    sak::{Sak, SakKey},
+};
 
 #[async_trait]
 pub trait QueryUseCase {
@@ -12,16 +15,11 @@ pub trait QueryUseCase {
 
 #[async_trait]
 pub trait HentSakUseCase: Send + Sync {
-    async fn handle(
-        &self,
-        req: HentSakRequest,
-    ) -> Result<lib_schemas::arkiv::v2::sak::SakResponse, anyhow::Error>;
+    async fn handle(&self, req: SakKey, inkluder_journalposter: bool)
+        -> Result<Sak, anyhow::Error>;
 }
 
 #[async_trait]
 pub trait HentJournalpostUseCase: Send + Sync {
-    async fn handle(
-        &self,
-        req: HentJournalpostRequest,
-    ) -> Result<lib_schemas::arkiv::v2::journalpost::JournalpostResponse, anyhow::Error>;
+    async fn handle(&self, req: JournalpostKey) -> Result<Journalpost, anyhow::Error>;
 }

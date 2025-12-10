@@ -4,11 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", features = ["arkiv"] }
 application = { path = "../application" }
-sikri_client = {path = "../../crates/sikri_client"}
-tokio = { version = "1.39", features = ["macros", "rt-multi-thread", "time"] }
+domain = { path = "../domain" }
 
+lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git" }
+sikri_client = {path = "../../crates/sikri_client"}
+
+
+
+tokio = { version = "1.39", features = ["macros", "rt-multi-thread", "time"] }
 futures = "0.3.31"
 async-trait = "0.1.89"
 axum = "0.8"

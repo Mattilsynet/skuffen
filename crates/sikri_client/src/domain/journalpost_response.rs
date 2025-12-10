@@ -1,11 +1,13 @@
-use crate::domain::avsender_mottaker::AvsenderMottaker;
-use crate::domain::dokument::Dokument;
-use crate::dto::elements_journalpost::ElementsJournalpostRespons;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::{
+    domain::{avsender_mottaker::AvsenderMottaker, dokument_response::DokumentRespons},
+    dto::elements_journalpost::ElementsJournalpostRespons,
+};
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Journalpost {
+pub struct JournalpostRespons {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tittel: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -26,8 +28,6 @@ pub struct Journalpost {
     pub saksbehandler_enhet: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avsendere_mottakere: Option<Vec<AvsenderMottaker>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dokumenter: Option<Vec<Dokument>>,
     pub journalpost_id: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub journalpostnr: Option<String>,
@@ -51,11 +51,13 @@ pub struct Journalpost {
     pub har_hoveddokument: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hoveddokument_tittel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dokumenter_respons: Option<Vec<DokumentRespons>>,
 }
 
-impl From<ElementsJournalpostRespons> for Journalpost {
+impl From<ElementsJournalpostRespons> for JournalpostRespons {
     fn from(src: ElementsJournalpostRespons) -> Self {
-        Journalpost {
+        JournalpostRespons {
             tittel: src.tittel,
             journalposttype: src.journalposttype,
             journalstatus: src.journalstatus,
@@ -67,9 +69,6 @@ impl From<ElementsJournalpostRespons> for Journalpost {
             saksbehandler_enhet: src.saksbehandler_enhet,
             avsendere_mottakere: src
                 .avsendere_mottakere
-                .map(|v| v.into_iter().map(Into::into).collect()),
-            dokumenter: src
-                .dokumenter
                 .map(|v| v.into_iter().map(Into::into).collect()),
             journalpost_id: src.journalpost_id,
             journalpostnr: src.journalpostnr,
@@ -84,6 +83,9 @@ impl From<ElementsJournalpostRespons> for Journalpost {
             hoveddokument_filtype: src.hoveddokument_filtype,
             har_hoveddokument: src.har_hoveddokument,
             hoveddokument_tittel: src.hoveddokument_tittel,
+            dokumenter_respons: src
+                .dokumenter_respons
+                .map(|v| v.into_iter().map(Into::into).collect()),
         }
     }
 }
