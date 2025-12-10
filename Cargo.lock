@@ -1000,7 +1000,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 [[package]]
 name = "lib-schemas"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#b1e3dca4ff0dfdd3c070781aab1c64f32881c3a4"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#d357ecd46607169402657447ce50ca7983bf3a60"
 dependencies = [
  "chrono",
  "serde",

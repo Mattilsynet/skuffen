@@ -1,7 +1,8 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-pub enum NatsResponse {
-    Ok(Vec<u8>),
-    Error(Vec<u8>),
+#[derive(Serialize)]
+#[serde(tag = "status", content = "payload")]
+pub enum NatsResponse<T> {
+    Ok(T),
+    Error { message: String },
 }

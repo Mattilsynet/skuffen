@@ -58,7 +58,7 @@ impl From<ElementsSakMedJournalposterResponse> for ElementsSak {
             saksbehandler: value.saksbehandler,
             saksbehandler_enhet: value.saksbehandler_enhet,
             saksstatus: value.saksstatus,
-            ordningsverdi: value.ordningsverdi,
+            ordningsverdi: value.ordningsverdi.unwrap_or_default(),
             tilgangskode: value.tilgangskode,
             tilgangshjemmel: value.tilgangshjemmel,
             virksomhetsmappe_id: value.virksomhetsmappe_id,

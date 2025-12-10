@@ -23,12 +23,17 @@ impl From<ElementsAvsenderMottaker> for AvsenderMottaker {
     fn from(src: ElementsAvsenderMottaker) -> Self {
         AvsenderMottaker {
             navn: src.navn,
-            adresse: src.adresse,
+
+            adresse: src.postadresse,
+
             postnummer: src.postnummer,
             poststed: src.poststed,
-            land: src.land,
-            id: src.id,
-            id_type: src.id_type,
+
+            land: None, //sikri json respons har ikke land
+
+            id: src.id.map(|id| id.to_string()),
+
+            id_type: None, //sikri json response har ikke id type
         }
     }
 }
