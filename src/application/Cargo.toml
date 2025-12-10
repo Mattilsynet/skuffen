@@ -7,7 +7,7 @@ edition = "2021"
 [dependencies]
 domain = { path = "../domain" }
 
-lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", features = ["arkiv"] }
+lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git" }
 async-trait = "0.1.89"
 
 # Feilhåndtering

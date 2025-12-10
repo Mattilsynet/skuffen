@@ -1,12 +1,23 @@
 use async_trait::async_trait;
 use futures::StreamExt;
-use lib_schemas::arkiv::v2::{
-    journalpost::{HentJournalpostRequest, JournalpostResponse},
-    sak::{HentSakRequest, SakResponse},
+use lib_schemas::skuffen::{
+    journalpost::JournalpostResponse,
+    query::queries::{HentJournalpostQuery, HentSakQuery},
+    sak::SakResponse,
 };
-use tracing::error;
+use tracing::{error, info};
 
-use crate::nats::{client::NatsClient, nats_response::NatsResponse};
+use crate::{
+    mapping::{
+        fra_domene_til_dto::{
+            journalpost::from_domain_journalpost_to_dto, sak::from_domain_sak_to_dto,
+        },
+        fra_dto_til_domene::{
+            journalpost::from_dto_journalpost_key_to_domain, sak::from_dto_sak_key_to_domain,
+        },
+    },
+    nats::{client::NatsClient, nats_response::NatsResponse},
+};
 
 #[async_trait]
 pub trait UseCase<Request, Response> {
@@ -14,25 +25,38 @@ pub trait UseCase<Request, Response> {
 }
 
 #[async_trait]
-impl<T> UseCase<HentSakRequest, SakResponse> for T
+impl<T> UseCase<HentSakQuery, SakResponse> for T
 where
     T: application::ports::use_cases::HentSakUseCase + Send + Sync,
 {
-    async fn handle(&self, req: HentSakRequest) -> Result<SakResponse, anyhow::Error> {
-        application::ports::use_cases::HentSakUseCase::handle(self, req).await
+    async fn handle(&self, req: HentSakQuery) -> Result<SakResponse, anyhow::Error> {
+        let domain_sak = application::ports::use_cases::HentSakUseCase::handle(
+            self,
+            from_dto_sak_key_to_domain(req.key)?,
+            req.inkluder_journalposter,
+        )
+        .await?;
+        let response = from_domain_sak_to_dto(domain_sak)?;
+        Ok(response)
     }
 }
 
 #[async_trait]
-impl<T> UseCase<HentJournalpostRequest, JournalpostResponse> for T
+impl<T> UseCase<HentJournalpostQuery, JournalpostResponse> for T
 where
     T: application::ports::use_cases::HentJournalpostUseCase + Send + Sync,
 {
     async fn handle(
         &self,
-        req: HentJournalpostRequest,
+        req: HentJournalpostQuery,
     ) -> Result<JournalpostResponse, anyhow::Error> {
-        application::ports::use_cases::HentJournalpostUseCase::handle(self, req).await
+        let domain_journalpost = application::ports::use_cases::HentJournalpostUseCase::handle(
+            self,
+            from_dto_journalpost_key_to_domain(req.key),
+        )
+        .await?;
+        let dto_journalpost = from_domain_journalpost_to_dto(domain_journalpost)?;
+        Ok(dto_journalpost)
     }
 }
 
@@ -61,9 +85,11 @@ where
     Res: serde::Serialize + Send,
 {
     pub async fn run(&self) -> anyhow::Result<()> {
+        info!("Lytter etter meldinger på subject '{}'", self.subject);
         let mut sub = self.client.inner().subscribe(self.subject.clone()).await?;
 
         while let Some(msg) = sub.next().await {
+            println!("Mottok et query på subject {}", self.subject);
             let reply_subject = match msg.reply {
                 Some(r) => r,
                 None => {
@@ -73,6 +99,8 @@ where
             };
 
             let req: Req = match serde_json::from_slice(&msg.payload) {
+                //TODO: Implementer en nats
+                //rewsponse type.
                 Ok(r) => r,
                 Err(e) => {
                     error!("Failed to deserialize request payload: {e}");
