@@ -5,10 +5,12 @@ use domain::model::sak::SakKey;
 
 use crate::mapping;
 
+#[derive(Debug)]
 pub struct SikriRepository;
 
 #[async_trait]
 impl SakRepository for SikriRepository {
+    #[tracing::instrument()]
     async fn hent_sak(
         &self,
         key: SakKey,

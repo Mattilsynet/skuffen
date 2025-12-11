@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use async_trait::async_trait;
 use futures::StreamExt;
 use lib_schemas::skuffen::{
@@ -60,6 +62,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct NatsReplier<U, Req, Res> {
     client: NatsClient,
     subject: String,
@@ -79,16 +82,17 @@ impl<U, Req, Res> NatsReplier<U, Req, Res> {
 }
 impl<U, Req, Res> NatsReplier<U, Req, Res>
 where
-    U: UseCase<Req, Res> + Send + Sync,
-    Req: serde::de::DeserializeOwned + Send,
-    Res: serde::Serialize + Send,
+    U: UseCase<Req, Res> + Send + Sync + Debug,
+    Req: serde::de::DeserializeOwned + Send + Debug,
+    Res: serde::Serialize + Send + Debug,
 {
+    #[tracing::instrument()]
     pub async fn run(&self) -> anyhow::Result<()> {
         info!("Lytter etter meldinger på subject '{}'", self.subject);
         let mut sub = self.client.inner().subscribe(self.subject.clone()).await?;
 
         while let Some(msg) = sub.next().await {
-            println!("Mottok et query på subject {}", self.subject);
+            info!("Mottok et query på subject {}", self.subject);
 
             let reply_subject = match msg.reply {
                 Some(r) => r,

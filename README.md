@@ -4,7 +4,7 @@ Skuffen er en tjeneste foran sikri sitt arkiv api.
 -  
  
 ## Eksempel
- nats request sak.hent.lokal '{
+ nats request sak.hent '{
   "key": {
      "type": "arkivId",
      "value": "2025/513910"

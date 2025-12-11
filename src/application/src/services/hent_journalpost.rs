@@ -9,6 +9,7 @@ pub trait JournalpostRepository {
     async fn hent_journalpost(&self, id: JournalpostKey) -> Result<Journalpost, anyhow::Error>;
 }
 
+#[derive(Debug)]
 pub struct HentJournalpostService<R> {
     repo: R,
 }
