@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use async_trait::async_trait;
 use domain::model::sak::{Sak, SakKey};
 
@@ -12,11 +14,18 @@ pub trait SakRepository {
     ) -> Result<Sak, anyhow::Error>;
 }
 
-pub struct HentSakService<R> {
+#[derive(Debug)]
+pub struct HentSakService<R>
+where
+    R: Debug,
+{
     repo: R,
 }
 
-impl<R> HentSakService<R> {
+impl<R> HentSakService<R>
+where
+    R: Debug,
+{
     pub fn new(repo: R) -> Self {
         Self { repo }
     }
@@ -25,7 +34,7 @@ impl<R> HentSakService<R> {
 #[async_trait]
 impl<R> HentSakUseCase for HentSakService<R>
 where
-    R: SakRepository + Send + Sync,
+    R: SakRepository + Send + Sync + Debug,
 {
     async fn handle(
         &self,

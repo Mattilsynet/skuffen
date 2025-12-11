@@ -10,7 +10,6 @@ use lib_schemas::skuffen::sak::SakResponse;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("main started.");
     dotenvy::dotenv().ok();
     let subscriber = get_subscriber();
     init_subscriber(subscriber);

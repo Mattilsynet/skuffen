@@ -4,7 +4,7 @@ use async_nats::{Client, ConnectOptions};
 
 use super::config::NatsConfig;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NatsClient {
     client: Client,
 }
