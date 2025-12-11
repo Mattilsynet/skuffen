@@ -22,11 +22,8 @@ async fn main() -> anyhow::Result<()> {
 
     let hent_sak_uc = HentSakService::new(SikriRepository);
     // let hent_jp_uc = HentJournalpostService::new(jp_repo);
-    let hent_sak_replier = NatsReplier::<_, HentSakQuery, SakResponse>::new(
-        nats.clone(),
-        "sak.hent.lokal",
-        hent_sak_uc,
-    );
+    let hent_sak_replier =
+        NatsReplier::<_, HentSakQuery, SakResponse>::new(nats.clone(), "sak.hent", hent_sak_uc);
 
     // let hent_jp_replier = NatsReplier::<_, HentJournalpostRequest, JournalpostResponse>::new(
     //     nats.clone(),
