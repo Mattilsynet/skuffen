@@ -1,9 +1,7 @@
-use anyhow::anyhow;
 use application::services::hent_sak::SakRepository;
 use async_trait::async_trait;
-use domain::model::sak::SakKey;
 
-use crate::mapping;
+use crate::mapping::{self, lookup::key_mapping_queries::lookup_arkiv_id_fra_skuffen_id};
 
 #[derive(Debug)]
 pub struct SikriRepository;
@@ -13,17 +11,15 @@ impl SakRepository for SikriRepository {
     #[tracing::instrument()]
     async fn hent_sak(
         &self,
-        key: SakKey,
+        key: domain::model::sak::SakKey,
         inkluder_journalposter: bool,
     ) -> Result<domain::model::sak::Sak, anyhow::Error> {
-        let saksnummer: domain::model::sak::Saksnummer = match key {
-            SakKey::SkuffenId(_uuid) => {
-                return Err(anyhow!("Har ikke implementert skuffen id enda."))
-            }
-            SakKey::ArkivId(saksnummer) => saksnummer,
+        let saksnummer: domain::model::sak::Saksnummer = match key.arkiv_id {
+            Some(sn) => sn,
+            None => lookup_arkiv_id_fra_skuffen_id(key.skuffen_id).await?,
         };
         let sak_reponse =
             sikri_client::hent_sak(saksnummer.as_str(), "SKUFFEN", inkluder_journalposter).await?;
-        Ok(mapping::fra_sikri_til_domene::sak::from_sikri_sak_to_domain_sak(sak_reponse)?)
+        Ok(mapping::fra_sikri_til_domene::sak::from_sikri_sak_to_domain_sak(sak_reponse).await?)
     }
 }

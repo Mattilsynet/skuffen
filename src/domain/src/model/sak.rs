@@ -1,24 +1,110 @@
+use core::fmt;
+use std::str::FromStr;
+
 use anyhow::{anyhow, Result};
 use uuid::Uuid;
 
-use crate::model::journalpost::Journalpost;
+use crate::model::{journalpost::Journalpost, tilgang::Tilgang};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Sak {
-    pub sakstittel: String,
+    pub sakstittel: Sakstittel,
     pub saksbehandler: String,
     pub saksstatus: Saksstatus,
-    pub unntatt_offentlighet: bool,
-    pub saksnr: Saksnummer,
+    pub tilgang: Option<Tilgang>,
+    pub sak_key: SakKey,
     pub kildesystem: String,
     pub lukket: bool,
     pub journalposter: Vec<Journalpost>,
+    pub ordningsverdi: Ordningsverdi,
 }
 
+/**
+* SaksTittel benyttes på opprettelse av sak i arkiv
+*/
+const SAKSTITTEL_MAX_LENGTH: usize = 256;
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Sakstittel(pub String);
+
+impl Sakstittel {
+    pub fn uo_tittel(&self) -> Sakstittel {
+        Sakstittel("*****".to_string())
+    }
+}
+
+impl FromStr for Sakstittel {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let trimmed = s.trim();
+
+        if trimmed.is_empty() {
+            return Err(anyhow!("Sakstittel er tom"));
+        }
+
+        if trimmed.len() > SAKSTITTEL_MAX_LENGTH {
+            return Err(anyhow!(
+                "Sakstittel er for lang. Max lengde: {SAKSTITTEL_MAX_LENGTH}"
+            ));
+        }
+
+        Ok(Sakstittel(trimmed.to_string()))
+    }
+}
+
+impl TryFrom<&str> for Sakstittel {
+    type Error = anyhow::Error;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl TryFrom<String> for Sakstittel {
+    type Error = anyhow::Error;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.as_str().parse()
+    }
+}
+
+impl fmt::Display for Sakstittel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Ordningsverdi(String);
+
+impl Ordningsverdi {
+    pub fn new(s: String) -> Result<Self> {
+        // non-empty
+        if s.is_empty() {
+            return Err(anyhow!("string is empty"));
+        }
+
+        // only digits or '-'
+        if !s.chars().all(|c| c.is_ascii_digit() || c == '-') {
+            return Err(anyhow!(format!("invalid character in '{s}'")));
+        }
+
+        // max 1 '-'
+        let hyphen_count = s.chars().filter(|&c| c == '-').count();
+        if hyphen_count > 1 {
+            return Err(anyhow!("more than one '-' found".to_string()));
+        }
+
+        Ok(Ordningsverdi(s))
+    }
+
+    pub fn get(&self) -> &str {
+        &self.0
+    }
+}
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum SakKey {
-    SkuffenId(Uuid),
-    ArkivId(Saksnummer),
+pub struct SakKey {
+    pub skuffen_id: Uuid,
+    pub arkiv_id: Option<Saksnummer>,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

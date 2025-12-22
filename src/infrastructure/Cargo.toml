@@ -44,3 +44,4 @@ opentelemetry-http = "0.31.0"
 tracing-stackdriver = "0.10.0"
 tracing-log = "0.2.0"
 
+uuid = { version = "1.18.1", features = ["serde", "v7", "v4"] }
