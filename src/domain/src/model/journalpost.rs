@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::model::dokument::Dokument;
+use crate::model::{dokument::Dokument, tilgang::Tilgang};
 
 #[allow(dead_code)]
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -12,7 +12,7 @@ pub struct Journalpost {
     pub dokument_dato: String,
     pub journalposttype: JournalpostType,
     pub journalstatus: Journalpoststatus,
-    pub unntatt_offentlighet: bool,
+    pub tilgang: Option<Tilgang>,
 
     pub saksbehandler: String,
     pub dokumenter: Vec<Dokument>,

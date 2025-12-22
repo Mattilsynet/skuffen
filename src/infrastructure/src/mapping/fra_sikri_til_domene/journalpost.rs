@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use domain::model::dokument::Dokument;
 use domain::model::journalpost::{JournalpostType, Journalpoststatus};
+use domain::model::tilgang::Tilgang;
 use sikri_client::domain::journalpost_response::JournalpostRespons as SikriJournalpostResponse;
 
 use crate::mapping::fra_sikri_til_domene::dokument::from_sikri_dokument_to_domain_dokument;
@@ -10,13 +11,16 @@ pub fn from_sikri_journalpost_to_domain_journalpost(
 ) -> Result<domain::model::journalpost::Journalpost> {
     let journalpost_response = domain::model::journalpost::Journalpost {
         tittel: sikri_journalpost
+            .clone()
             .tittel
             .ok_or_else(|| anyhow!("Journalpost har ikke tittel."))?,
         dokument_dato: sikri_journalpost
+            .clone()
             .dokument_dato
             .ok_or_else(|| anyhow!("Journalpost har ikke dokument dato."))?,
         journalposttype: journalposttype_from_char(
             sikri_journalpost
+                .clone()
                 .journalposttype
                 .ok_or_else(|| anyhow!("Journalpost har ikke journalposttype."))?
                 .chars()
@@ -26,12 +30,13 @@ pub fn from_sikri_journalpost_to_domain_journalpost(
         journalstatus: journalstatus_from_char(
             sikri_journalpost
                 .journalstatus
+                .clone()
                 .ok_or_else(|| anyhow!("Journalpost har ikke journalstatus."))?
                 .chars()
                 .next()
                 .ok_or_else(|| anyhow!("journalstatus string har ingen chars."))?,
         )?,
-        unntatt_offentlighet: true, //TODO: Satt til true for å teste. Fix!
+        tilgang: from_sikri_journalpost_to_domain_tilgang(sikri_journalpost.clone()),
         saksbehandler: sikri_journalpost
             .saksbehandler
             .ok_or_else(|| anyhow!("Journalpost har ikke saksbehandler."))?,
@@ -72,4 +77,16 @@ pub fn journalposttype_from_char(c: char) -> Result<JournalpostType> {
         }
     };
     Ok(journalpost_type)
+}
+
+fn from_sikri_journalpost_to_domain_tilgang(
+    sikri_journalpost: SikriJournalpostResponse,
+) -> Option<Tilgang> {
+    if sikri_journalpost.tilgangskode.is_some() && sikri_journalpost.tilgangskode.is_some() {
+        return Some(Tilgang {
+            tilgangskode: sikri_journalpost.tilgangskode.unwrap(),
+            tilgangshjemmel: sikri_journalpost.tilgangshjemmel.unwrap(),
+        });
+    }
+    None
 }

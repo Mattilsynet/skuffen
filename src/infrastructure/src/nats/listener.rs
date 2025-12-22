@@ -34,11 +34,11 @@ where
     async fn handle(&self, req: HentSakQuery) -> Result<SakResponse, anyhow::Error> {
         let domain_sak = application::ports::use_cases::HentSakUseCase::handle(
             self,
-            from_dto_sak_key_to_domain(req.key)?,
+            from_dto_sak_key_to_domain(req.key).await?,
             req.inkluder_journalposter,
         )
         .await?;
-        let response = from_domain_sak_to_dto(domain_sak)?;
+        let response = from_domain_sak_to_dto(domain_sak).await?;
         Ok(response)
     }
 }

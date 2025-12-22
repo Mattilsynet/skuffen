@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     // let hent_jp_uc = HentJournalpostService::new(jp_repo);
     let hent_sak_replier =
         NatsReplier::<_, HentSakQuery, SakResponse>::new(nats.clone(), "sak.hent", hent_sak_uc);
-
+    //TODO: ha to endepunkter for å hente sak med og uten skuffen id
     // let hent_jp_replier = NatsReplier::<_, HentJournalpostRequest, JournalpostResponse>::new(
     //     nats.clone(),
     //     "journalpost.hent",
