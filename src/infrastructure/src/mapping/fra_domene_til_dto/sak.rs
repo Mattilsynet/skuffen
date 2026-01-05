@@ -33,7 +33,7 @@ pub fn from_domain_sak_key_to_dto(key: domain::model::sak::SakKey) -> Result<Dto
         skuffen_id: key.skuffen_id,
         arkiv_id: key
             .arkiv_id
-            .map(|aid| from_domain_saksnummer_to_dto(aid))
+            .map(from_domain_saksnummer_to_dto)
             .transpose()?,
     })
 }
