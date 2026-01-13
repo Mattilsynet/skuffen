@@ -1183,7 +1183,7 @@ dependencies = [
 [[package]]
 name = "lib-schemas"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#58fa71cb3be43a12d88117319f62642dd10d348f"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#58c97b47d7b86f96a37e8932582b2ede9e11e04c"
 dependencies = [
  "chrono",
  "serde",
