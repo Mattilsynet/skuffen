@@ -3,7 +3,6 @@
 **/target
 
 # Avhengighetscache (Cargo)
-/.cargo/
 /.cargo-ok
 
 # Debug / profiling
