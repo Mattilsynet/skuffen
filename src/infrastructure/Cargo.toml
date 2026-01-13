@@ -10,7 +10,7 @@ domain = { path = "../domain" }
 lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas" }
 sikri_client = {path = "../../crates/sikri_client"}
 
-lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.0.0" }
+lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.4.8" }
 sqlx = { version = "0.8.6", default-features = false, features = [
   "postgres",
   "runtime-tokio-native-tls",
