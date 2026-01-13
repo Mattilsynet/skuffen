@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use sikri_client::domain::dokument_response::DokumentRespons as SikriDokumentResponse;
 
 pub fn from_sikri_dokument_to_domain_dokument(

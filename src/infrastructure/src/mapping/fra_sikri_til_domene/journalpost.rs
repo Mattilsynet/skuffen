@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use domain::model::dokument::Dokument;
 use domain::model::journalpost::{JournalpostType, Journalpoststatus};
 use domain::model::tilgang::Tilgang;
