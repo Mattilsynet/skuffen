@@ -14,28 +14,25 @@ pub trait SakRepository {
     ) -> Result<Sak, anyhow::Error>;
 }
 
-#[derive(Debug)]
-pub struct HentSakService<R>
-where
-    R: Debug,
-{
-    repo: R,
+// #[derive(Debug)] // removed derive
+pub struct HentSakService {
+    repo: Box<dyn SakRepository + Send + Sync>,
 }
 
-impl<R> HentSakService<R>
-where
-    R: Debug,
-{
-    pub fn new(repo: R) -> Self {
+impl Debug for HentSakService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HentSakService").finish_non_exhaustive()
+    }
+}
+
+impl HentSakService {
+    pub fn new(repo: Box<dyn SakRepository + Send + Sync>) -> Self {
         Self { repo }
     }
 }
 
 #[async_trait]
-impl<R> HentSakUseCase for HentSakService<R>
-where
-    R: SakRepository + Send + Sync + Debug,
-{
+impl HentSakUseCase for HentSakService {
     async fn handle(
         &self,
         req: SakKey,
