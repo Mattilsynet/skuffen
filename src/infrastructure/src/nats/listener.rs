@@ -62,16 +62,28 @@ where
     }
 }
 
-#[derive(Debug)]
-pub struct NatsReplier<U, Req, Res> {
+// #[derive(Debug)] // removed derive
+pub struct NatsReplier<Req, Res> {
     client: NatsClient,
     subject: String,
-    use_case: U,
+    use_case: Box<dyn UseCase<Req, Res> + Send + Sync>,
     _marker: std::marker::PhantomData<(Req, Res)>,
 }
 
-impl<U, Req, Res> NatsReplier<U, Req, Res> {
-    pub fn new(client: NatsClient, subject: impl Into<String>, use_case: U) -> Self {
+impl<Req, Res> Debug for NatsReplier<Req, Res> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NatsReplier")
+            .field("subject", &self.subject)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Req, Res> NatsReplier<Req, Res> {
+    pub fn new(
+        client: NatsClient,
+        subject: impl Into<String>,
+        use_case: Box<dyn UseCase<Req, Res> + Send + Sync>,
+    ) -> Self {
         Self {
             client,
             subject: subject.into(),
@@ -80,9 +92,8 @@ impl<U, Req, Res> NatsReplier<U, Req, Res> {
         }
     }
 }
-impl<U, Req, Res> NatsReplier<U, Req, Res>
+impl<Req, Res> NatsReplier<Req, Res>
 where
-    U: UseCase<Req, Res> + Send + Sync + Debug,
     Req: serde::de::DeserializeOwned + Send + Debug,
     Res: serde::Serialize + Send + Debug,
 {

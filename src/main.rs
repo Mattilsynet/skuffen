@@ -19,10 +19,13 @@ async fn main() -> anyhow::Result<()> {
     // let sak_repo = SakRepository::new(SikriRepository);
     // let jp_repo = JournalpostRepository::new(SikriRepository);
 
-    let hent_sak_uc = HentSakService::new(SikriRepository);
+    let hent_sak_uc = HentSakService::new(Box::new(SikriRepository));
     // let hent_jp_uc = HentJournalpostService::new(jp_repo);
-    let hent_sak_replier =
-        NatsReplier::<_, HentSakQuery, SakResponse>::new(nats.clone(), "sak.hent", hent_sak_uc);
+    let hent_sak_replier = NatsReplier::<HentSakQuery, SakResponse>::new(
+        nats.clone(),
+        "sak.hent",
+        Box::new(hent_sak_uc),
+    );
     //TODO: ha to endepunkter for å hente sak med og uten skuffen id
     // let hent_jp_replier = NatsReplier::<_, HentJournalpostRequest, JournalpostResponse>::new(
     //     nats.clone(),

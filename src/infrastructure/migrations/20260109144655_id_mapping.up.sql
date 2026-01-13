@@ -35,8 +35,8 @@ CREATE TABLE IF NOT EXISTS id_mapping (
 );
 
 -- Index: (entity_type, client_reference) -> skuffen_id
-CREATE INDEX IF NOT EXISTS ix_id_mapping_type_client_reference
-    ON id_mapping (entity_type, client_reference);
+CREATE INDEX IF NOT EXISTS ix_id_mapping_client_reference
+    ON id_mapping client_reference;
 
 -- Index: (entity_type, arkiv_id) -> skuffen_id
 CREATE INDEX IF NOT EXISTS ix_id_mapping_type_arkiv
