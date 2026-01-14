@@ -37,7 +37,7 @@ async fn hent_sak_e2e_henter_secrets_og_kaller_api() {
     assert!(!project_id.is_empty());
     assert!(!base_url.is_empty());
 
-    let resp = sikri_client::hent_sak("2025/500961", "MATS")
+    let resp = sikri_client::hent_sak("2025/500961", "MATS", false)
         .await
         .expect("hent_sak feilet");
     println!("{:#?}", resp);
@@ -75,7 +75,7 @@ async fn hent_sak_e2e_henter_secrets_og_kaller_api_med_saksnummer_som_ikke_finne
     assert!(!base_url.is_empty());
 
     // Kall API med et saksnummer som ikke finnes og verifiser at vi får 404
-    let err = sikri_client::hent_sak("0000/00000", "MATS")
+    let err = sikri_client::hent_sak("0000/00000", "MATS", false)
         .await
         .expect_err("Forventet 404 for not found");
     if let Some(req_err) = err.downcast_ref::<reqwest::Error>() {
