@@ -6,3 +6,6 @@ pub mod journalpost;
 pub mod journalpost_response;
 pub mod ny_sak;
 pub mod sak;
+
+#[cfg(test)]
+mod sak_test;
