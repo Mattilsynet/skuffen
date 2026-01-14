@@ -101,7 +101,7 @@ impl Ordningsverdi {
         &self.0
     }
 }
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub struct SakKey {
     pub skuffen_id: Uuid,
     pub arkiv_id: Option<Saksnummer>,
@@ -114,7 +114,7 @@ pub enum Saksstatus {
     Avsluttet,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub struct Saksnummer(pub String);
 
 impl Saksnummer {
