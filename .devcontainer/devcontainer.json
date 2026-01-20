@@ -1,0 +1,14 @@
+{
+  "name": "Rust",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb"
+      ]
+    }
+  }
+}
