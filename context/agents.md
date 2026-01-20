@@ -1,10 +1,10 @@
 # Project Context: Skuffen
 
-`skuffen` is a **middleware archiving service** designed to provide a stable, asynchronous interface on top of the complex and potentially unstable Sikri Archive API.
+`skuffen` is a **middleware archiving service** designed to provide a stable, asynchronous interface on top of the Sikri Archive API. Skuffen shall be built such that it can continue to function even if the Sikri Archive API is unavailable.
 
 ## 🏗 Architecture & Code Organization
 
-The project adheres to a **Strict Hexagonal Architecture** with **CQRS**, implemented via a workspace of crates and modules.
+The project adheres to a **Hexagonal Architecture** with **CQRS**, implemented via a workspace of crates and modules.
 
 ### High-Level Directory Map
 
