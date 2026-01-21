@@ -1,0 +1,7 @@
+# Copy of Table
+
+| Kommando | Operasjoner | Beskrivelse | Notater |
+| :--- | :--- | :--- | :--- |
+| Hent sak | Hent sak. | Henter en sak, med eller uten journalposter | Henter kun metadata intil videre. Dokumenter og vedlegg kommer senere ved endring i sikri api |
+| Hent Journalpost | Hent Journalpost | Henter en journalpost | Henter kun metadata intil videre. Dokumenter og vedlegg kommer senere ved endring i sikri api |
+| Hent Dokument | | Henter et dokument fra enten sikri eller internt blob storage. | Ikke i scope enda |
