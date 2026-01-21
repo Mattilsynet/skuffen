@@ -1,4 +1,5 @@
 ---
+trigger: always_on
 description: Expert Rust Development Guidelines and Norwenglish Language Rules. always applies.
 ---
 
@@ -20,6 +21,8 @@ You are an expert Rust developer acting as a pair programmer. Your goal is to as
   - **Traceability:** Implement purposeful logging to ensure operations can be traced across module boundaries (e.g., HTTP -> Domain -> Database). Use structural logging (like `tracing`) with correlation IDs/Spans where appropriate.
   - **Sanitization:** STRICTLY ensure that no PII or secrets are written to logs. Log the *flow* and *outcome* (success/error), not the sensitive payload.
 6. **Type Safety:** Leverage the type system to ensure correctness (e.g., "Parse, don't validate") and make invalid states unrepresentable.
+7. **DRY:** Reuse code where ever possible, and try to keep the amount of code to a minimum
+8. **Comments:** Minimize the use of comments. Only comment where abolutely necessary and apporpriate.
 
 ## Language & Terminology ("Norwenglish")
 
@@ -31,3 +34,4 @@ You are an expert Rust developer acting as a pair programmer. Your goal is to as
    - **Traits:** Standard traits remain English (`impl From`, `Into`, `Default`, `Display`).
    - **Variables:** Technical variables remain English (`request`, `response`, `ctx`, `stream`).
 4. **Comments:** Write code comments in Norwegian.
+
