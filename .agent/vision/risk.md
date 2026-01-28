@@ -1,31 +1,37 @@
-# Risk Analysis Protocol
+# Protokoll for Risikoanalyse
 
-This document defines the rules for analyzing the project's roadmap and plan to identify potential risks.
+Dette dokumentet definerer reglene for å analysere prosjektets veikart og plan for å identifisere potensielle risikoer.
 
-## Analysis Checklist
+## Sjekkliste for Analyse
 
-When reviewing `roadmap.md` and `plan.md`, or proposing new architectural changes, the following questions MUST be answered:
+Når man går gjennom `roadmap.md` og `plan.md`, eller foreslår nye arkitekturendringer, MÅ følgende spørsmål besvares:
 
-### 1. Security & Authentication
-- [ ] **Is the auth situation properly addressed?**
-    - Are strict authentication and authorization boundaries maintained?
-    - Are secrets handled securely (e.g., using `secrecy` crate, not logged)?
+### 1. Sikkerhet & Autentisering
+- [ ] **Er auth-situasjonen håndtert skikkelig?**
+    - Opprettholdes strenge grenser for autentisering og autorisering?
+    - Håndteres hemmeligheter (secrets) sikkert (f.eks. ved bruk av `secrecy`-cratet, ikke logget)?
+    - **Fase 4 Risiko**: Eksponerer Admin CLI sensitive operasjoner til uautoriserte brukere?
+    - **Fase 4 Risiko**: Kan en bruker gjøre "retry" på en operasjon de bestemt ikke burde ha tilgang til?
 
-### 2. Data Integrity
-- [ ] **Is there a potential for important data loss somewhere?**
-    - Do schema changes preserve existing data?
-    - Are there race conditions or lack of transactions in critical paths?
-    - Is the idempotency of operations considered?
+### 2. Dataintegritet
+- [ ] **Er det potensiale for tap av viktig data noen steder?**
+    - Bevarer skjemaendringer eksisterende data?
+    - **Fase 2 Risiko (State)**: Hva skjer hvis den lokale sjekken av "Arkivstatus" er utdatert (stale)? (Race condition: Sak B slettet eksternt, men vi tror den finnes).
+    - **Fase 3 Risiko (Errors)**: Er skillet mellom Recoverable og Irrecoverable errors matematisk holdbart? (Risiko for uendelige retry-løkker eller tapt data).
 
-### 3. Architecture & Maintainability
-- [ ] **Are there architecture architecture decisions that will cause problems down the line?**
-    - Does this introduce tight coupling between independent modules?
-    - Does this violate the "Norwenglish" separation (domain logic vs technical details)?
-    - Is it consistent with the existing architecture guidelines?
+### 3. Arkitektur & Vedlikeholdbarhet (Maintainability)
+- [ ] **Er det tatt arkitekturbeslutninger som vil skape problemer senere?**
+    - **Fase 3 Risiko**: Hvordan håndterer vi Status-systemet uten å bygge en distribuert monolitt?
+    - **Fase 2 Risiko**: "Sjekk i arkivet" impliserer ekstern avhengighet og latency. Hvordan håndterer vi timeouts under validering?
 
-### 4. Supply Chain & Dependencies
-- [ ] **Does this minimalize the attack surface?**
-    - Are we avoiding unnecessary heavyweight dependencies?
+### 4. Leverandørkjede & Avhengigheter
+- [ ] **Minimerer dette angrepsflaten (attack surface)?**
+    - Unngår vi unødvendige tunge avhengigheter?
 
-## Risk Log
-*(Record identified risks here)*
+## Risikologg
+
+### 2026-01-22 - Oppdatering av Veikart
+- **Identifisert**: Fase 2 validering krever kunnskap om ekstern state.
+    - **Mitigering**: Trenger en cache-strategi eller "Optimistic Concurrency"-modell. Vi kan ikke blokkere hver command på et eksternt HTTP-kall.
+- **Identifisert**: Fase 4 "Retry"-funksjonalitet tillater mutering av state fra et vilkårlig tidspunkt.
+    - **Mitigering**: Streng validering må kjøres *på nytt* ved retry.

@@ -1,13 +1,13 @@
-# Skuffen Tasks (Backlog)
+# Skuffen Oppgaver (Backlog)
 
-This file tracks general engineering tasks, feature requests, and refactoring work.
-Tasks should be executed one at a time.
+Denne filen sporer generelle utviklingsoppgaver, funksjonsønsker og refaktoreringsarbeid.
+Oppgaver skal utføres én om gangen.
 
-## Active Task
-- [ ] Commit and push the new structure
+## Aktiv Oppgave (Active Task)
+- [ ] Oversett dokumentasjon til norsk
 
 ## Backlog
 
-- [ ] Populate `roadmap.md` with initial project roadmap
-- [ ] Populate `plan.md` with detailed plan for immediate work
-
+- [x] Populate `plan.md` with detailed plan for immediate work
+- [x] Commit and push the new structure
+- [x] Populate `roadmap.md` with initial project roadmap
