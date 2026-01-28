@@ -10,7 +10,7 @@ use crate::mapping::lookup::key_mapping_queries::{
 
 pub async fn from_dto_sak_key_to_domain(dto_sak_key: SakKey) -> Result<domain::model::sak::SakKey> {
     let key = match dto_sak_key {
-        SakKey::SkuffenId(uuid) => domain::model::sak::SakKey {
+        SakKey::ClientReference(uuid) => domain::model::sak::SakKey {
             skuffen_id: uuid,
             arkiv_id: Some(lookup_arkiv_id_fra_skuffen_id(uuid).await?),
         },
