@@ -4,10 +4,13 @@ Denne filen sporer generelle utviklingsoppgaver, funksjonsønsker og refaktoreri
 Oppgaver skal utføres én om gangen.
 
 ## Aktiv Oppgave (Active Task)
-- [ ] Oversett dokumentasjon til norsk
+*(Ingen)*
 
 ## Backlog
 
+- [x] Refine process rules
+- [x] Oversett dokumentasjon til norsk
+- [x] Commit og push endringer
 - [x] Populate `plan.md` with detailed plan for immediate work
 - [x] Commit and push the new structure
 - [x] Populate `roadmap.md` with initial project roadmap

@@ -26,19 +26,28 @@ async fn main() -> anyhow::Result<()> {
         "sak.hent",
         Box::new(hent_sak_uc),
     );
-    //TODO: ha to endepunkter for å hente sak med og uten skuffen id
-    // let hent_jp_replier = NatsReplier::<_, HentJournalpostRequest, JournalpostResponse>::new(
-    //     nats.clone(),
-    //     "journalpost.hent",
-    //     hent_jp_uc,
-    // );
+
+    // Command Ingestion Wiring
+    let db_pool = infrastructure::database::setup::stup_database().await?;
+    let id_mapping_repo =
+        infrastructure::adapter::id_mapping_postgres::PostgresIdMappingRepository::new(db_pool);
+    let nats_dispatcher =
+        infrastructure::adapter::nats_publisher::NatsCommandDispatcher::new(nats.clone());
+
+    let command_service = application::services::ingest_command::IngestCommandService::new(
+        Box::new(id_mapping_repo),
+        Box::new(nats_dispatcher),
+    );
+
+    let command_listener =
+        infrastructure::nats::command_listener::CommandListener::new(nats.clone(), command_service);
 
     // let receiver_handle =
     // let processor_handle =
     let _ = tokio::join!(
         health_check_handle,
         hent_sak_replier.run(),
-        // hent_jp_replier,
+        command_listener.run(),
         // receiver_handle,
         // processor_handle,
     );
