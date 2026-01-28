@@ -1,17 +1,18 @@
-# Skuffen Process Guidelines
+# Skuffen Prosess-retningslinjer
 
-This file defines the strict process rules for the Skuffen project.
+Denne filen definerer de rigide prosessreglene for Skuffen-prosjektet.
 
-## 1. Task Management
-- **Source of Truth:** All work stems from `.agent/tasks.md`.
-- **Serial Execution:** Tasks are executed one by one. Finish the current task before starting the next.
+## 1. Oppgavehåndtering (Task Management)
+- **Oversikt og Kontroll:** Målet er at vi alltid vet hva vi gjør og hvorfor. Dokumentasjonen skal speile virkeligheten.
+- **Kilde:** Arbeid kan starte fra backloggen eller chat, men backloggen (`.agent/tasks.md`) skal oppdateres deretter.
+- **Seriell Utførelse:** Vi gjør ting ordentlig, én ting av gangen. Fullfør eller dokumenter status før du bytter fokus.
 
-## 2. Risk Management
-- **Consultation:** You must read and understand `.agent/vision/risk.md` before writing code that affects architecture or security.
-- **Dynamic Updates:**
-    - Any change to `.agent/vision/plan.md` or `.agent/vision/roadmap.md` **REQUIRES** a re-evaluation of `.agent/vision/risk.md`.
-    - You must actively look for new risks introduced by the change in plan.
+## 2. Risikostyring (Risk Management)
+- **Konsultasjon:** Du må lese og forstå `.agent/vision/risk.md` før du skriver kode som påvirker arkitektur eller sikkerhet.
+- **Dynamiske Oppdateringer:**
+    - Enhver endring i `.agent/vision/plan.md` eller `.agent/vision/roadmap.md` **KREVER** en revurdering av `.agent/vision/risk.md`.
+    - Du må aktivt se etter nye risikoer introdusert av endringen i planen.
 
-## 3. Planning
-- Keep `.agent/vision/plan.md` effective and up-to-date.
-- Keep `.agent/vision/roadmap.md` aligned with the long-term vision.
+## 3. Planlegging
+- Hold `.agent/vision/plan.md` effektiv og oppdatert.
+- Hold `.agent/vision/roadmap.md` justert med den langsiktige visjonen (veikartet).
