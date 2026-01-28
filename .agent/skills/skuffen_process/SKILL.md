@@ -1,31 +1,32 @@
 ---
 name: Skuffen Process
-description: Mandatory workflow rules for task execution, risk assessment, and planning.
+description: Obligatoriske arbeidsflytregler for oppgaveutførelse, risikovurdering og planlegging.
 ---
 
-# Skuffen Process & Governance
+# Skuffen Prosess & Styring (Governance)
 
-This skill defines the mandatory workflow for all development in Skuffen.
+Denne ferdigheten (skill) definerer den obligatoriske arbeidsflyten for all utvikling i Skuffen.
 
-## Core Rules
+## Kjerne-regler (Core Rules)
 
-1.  **Backlog Driven Development**
-    - **Always** select the top-most active task from `.agent/tasks.md`.
-    - Do not invent new tasks without adding them to the backlog first.
-    - Execute tasks strictly one at a time.
+1.  **Strukturert Utvikling & Kvalitet**
+    - **Mål:** Vi skal ha full kontroll og forståelse for alt som skjer i systemet. Dette er et produksjonssystem.
+    - **Fleksibilitet:** Oppgaver kan komme fra `.agent/tasks.md` ELLER direkte fra chat/dialog.
+    - **Krav:** Uansett kilde, SKAL `tasks.md`, `plan.md` og `roadmap.md` oppdateres for å reflektere virkeligheten. Vi bygger strukturert.
+    - **Fokus:** Kvalitet fremfor hastighet. Vi skal "skjønne alt".
 
-2.  **Risk & Vision Awareness**
-    - **Before** starting implementation, you MUST consult `.agent/vision/risk.md`.
-    - Ensure your planned changes do not violate the security, data integrity, or architectural risks defined there.
+2.  **Bevissthet om Risiko & Visjon**
+    - **Før** du starter implementasjon, MÅ du konsultere `.agent/vision/risk.md`.
+    - Sikre at dine planlagte endringer ikke bryter med sikkerhet, dataintegritet eller arkitektoniske risikoer definert der.
 
-3.  **Dynamic Planning & Risk Analysis**
-    - If your task involves updating `.agent/vision/plan.md` or `.agent/vision/roadmap.md`, you **MUST** perform a deep risk analysis.
-    - **Trigger:** Plan/Roadmap update -> **Action:** Review impact -> **Output:** Update `.agent/vision/risk.md` with new findings or mitigations.
+3.  **Dynamisk Planlegging & Risikoanalyse**
+    - Hvis oppgaven din involverer oppdatering av `.agent/vision/plan.md` eller `.agent/vision/roadmap.md`, **MÅ** du utføre en dyp risikoanalyse.
+    - **Trigger:** Plan/Veikart oppdateres -> **Handling:** Gå gjennom påvirkning -> **Output:** Oppdater `.agent/vision/risk.md` med nye funn eller mitigeringer.
 
-## Workflow Summary
+## Oppsummering av Arbeidsflyt
 
-1.  Check `tasks.md` for next task.
-2.  Read `risk.md` for constraints.
-3.  Create Implementation Plan.
-4.  (If Plan changes Project Plan/Roadmap) -> Update `risk.md`.
-5.  Execute.
+1.  Sjekk `tasks.md` for neste oppgave.
+2.  Les `risk.md` for begrensninger/føringer.
+3.  Opprett Implementasjonsplan.
+4.  (Hvis planen endrer Prosjektplan/Veikart) -> Oppdater `risk.md`.
+5.  Utfør (Execute).
