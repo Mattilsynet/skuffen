@@ -1,4 +1,5 @@
 use crate::nats::client::NatsClient;
+use crate::nats::nats_response::NatsResponse;
 use application::services::ingest_command::IngestCommandService;
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{CommandEnvelope, CommandSequence, Kommando};
@@ -43,10 +44,14 @@ impl CommandListener {
                     Err(e) => {
                         error!("Failed to deserialize commands: {e}");
                         // Reply error
+                        let response = NatsResponse::<()>::Error {
+                            message: format!("Invalid payload: {e}"),
+                        };
+                        let payload = serde_json::to_vec(&response).unwrap_or_default();
                         let _ = self
                             .client
                             .inner()
-                            .publish(reply_subject, format!("Invalid payload: {e}").into())
+                            .publish(reply_subject, payload.into())
                             .await;
                         continue;
                     }
@@ -57,31 +62,42 @@ impl CommandListener {
                 Ok(seq) => seq,
                 Err(e) => {
                     error!("Invalid command sequence: {e}");
+                    let response = NatsResponse::<()>::Error {
+                        message: format!("Invalid sequence: {e}"),
+                    };
+                    let payload = serde_json::to_vec(&response).unwrap_or_default();
                     let _ = self
                         .client
                         .inner()
-                        .publish(reply_subject, format!("Invalid sequence: {e}").into())
+                        .publish(reply_subject, payload.into())
                         .await;
                     continue;
                 }
             };
 
             // Ingest
+            // Ingest
             match self.service.handle(sequence).await {
                 Ok(_) => {
                     // Reply OK
+                    let response = NatsResponse::Ok(());
+                    let payload = serde_json::to_vec(&response).unwrap_or_default();
                     let _ = self
                         .client
                         .inner()
-                        .publish(reply_subject, "OK".into())
+                        .publish(reply_subject, payload.into())
                         .await;
                 }
                 Err(e) => {
                     error!("Failed to process commands: {e}");
+                    let response = NatsResponse::<()>::Error {
+                        message: e.to_string(),
+                    };
+                    let payload = serde_json::to_vec(&response).unwrap_or_default();
                     let _ = self
                         .client
                         .inner()
-                        .publish(reply_subject, format!("Error: {e}").into())
+                        .publish(reply_subject, payload.into())
                         .await;
                 }
             }
