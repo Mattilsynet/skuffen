@@ -33,9 +33,12 @@ impl IngestCommandService {
 
     async fn process_command(&self, envelope: CommandEnvelope<Kommando>) -> Result<()> {
         let command_id = envelope.command_id;
+
+        //TODO: Burde denne ligge bak mer logikk?
         let skuffen_id = Uuid::now_v7(); // Generate internal ID
 
         // Determine entity type based on command
+        //TODO: Flyttes til database-handelern
         let entity_type = match &envelope.payload {
             Kommando::OpprettSak(_) => "sak",
             Kommando::OpprettInngåendeJournalpost(_)
