@@ -13,9 +13,5 @@ async-trait = "0.1.89"
 # Feilhåndtering
 anyhow = "1.0.99"
 thiserror = "2.0.16"
-uuid = { version = "1.18.1", features = ["serde", "v7", "v4"] }
+uuid = { version = "1.18.1", features = ["v7", "v4"] }
 tokio = { version = "1", features = ["macros", "rt"] }
-serde_json = "1.0"
-
-[dev-dependencies]
-mockall = "0.13.0"
