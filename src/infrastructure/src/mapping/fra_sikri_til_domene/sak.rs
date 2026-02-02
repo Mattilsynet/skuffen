@@ -62,10 +62,12 @@ fn from_sikri_sak_to_domain_tilgang(
     sikri_sak
         .tilgangskode
         .zip(sikri_sak.tilgangshjemmel)
-        .map(|(tilgangskode, tilgangshjemmel)| domain::model::tilgang::Tilgang {
-            tilgangskode,
-            tilgangshjemmel,
-        })
+        .map(
+            |(tilgangskode, tilgangshjemmel)| domain::model::tilgang::Tilgang {
+                tilgangskode,
+                tilgangshjemmel,
+            },
+        )
 }
 
 async fn from_sikri_saksnummer_to_domain_sak_key(
