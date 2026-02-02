@@ -4,7 +4,7 @@ Denne filen sporer generelle utviklingsoppgaver, funksjonsønsker og refaktoreri
 Oppgaver skal utføres én om gangen.
 
 ## Aktiv Oppgave (Active Task)
-*(Ingen)*
+- [x] Rette linting-feil og kjøre cargo clippy
 
 ## Backlog
 
