@@ -59,13 +59,13 @@ fn saksstatus_from_char(c: char) -> Result<domain::model::sak::Saksstatus> {
 fn from_sikri_sak_to_domain_tilgang(
     sikri_sak: SikriSak,
 ) -> Option<domain::model::tilgang::Tilgang> {
-    if sikri_sak.tilgangskode.is_some() && sikri_sak.tilgangskode.is_some() {
-        return Some(domain::model::tilgang::Tilgang {
-            tilgangskode: sikri_sak.tilgangskode.unwrap(),
-            tilgangshjemmel: sikri_sak.tilgangshjemmel.unwrap(),
-        });
-    }
-    None
+    sikri_sak
+        .tilgangskode
+        .zip(sikri_sak.tilgangshjemmel)
+        .map(|(tilgangskode, tilgangshjemmel)| domain::model::tilgang::Tilgang {
+            tilgangskode,
+            tilgangshjemmel,
+        })
 }
 
 async fn from_sikri_saksnummer_to_domain_sak_key(

@@ -82,11 +82,11 @@ pub fn journalposttype_from_char(c: char) -> Result<JournalpostType> {
 fn from_sikri_journalpost_to_domain_tilgang(
     sikri_journalpost: SikriJournalpostResponse,
 ) -> Option<Tilgang> {
-    if sikri_journalpost.tilgangskode.is_some() && sikri_journalpost.tilgangskode.is_some() {
-        return Some(Tilgang {
-            tilgangskode: sikri_journalpost.tilgangskode.unwrap(),
-            tilgangshjemmel: sikri_journalpost.tilgangshjemmel.unwrap(),
-        });
-    }
-    None
+    sikri_journalpost
+        .tilgangskode
+        .zip(sikri_journalpost.tilgangshjemmel)
+        .map(|(tilgangskode, tilgangshjemmel)| Tilgang {
+            tilgangskode,
+            tilgangshjemmel,
+        })
 }
