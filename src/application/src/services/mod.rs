@@ -4,3 +4,5 @@ pub mod ingest_command;
 
 #[cfg(test)]
 mod hent_sak_test;
+#[cfg(test)]
+mod ingest_command_test;
