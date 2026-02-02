@@ -14,3 +14,4 @@ Oppgaver skal utføres én om gangen.
 - [x] Populate `plan.md` with detailed plan for immediate work
 - [x] Commit and push the new structure
 - [x] Populate `roadmap.md` with initial project roadmap
+- [ ] Properly write tests that nail down the logic for idempotency and command ingestion 
