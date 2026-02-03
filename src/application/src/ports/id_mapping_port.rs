@@ -13,4 +13,13 @@ pub trait IdMappingRepository: Send + Sync {
         entity_type: String,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error>;
+
+    async fn get_arkiv_id(&self, skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error>;
+
+    async fn get_skuffen_id(&self, client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error>;
+
+    async fn get_skuffen_id_from_arkiv_id(
+        &self,
+        arkiv_id: &str,
+    ) -> Result<Option<Uuid>, anyhow::Error>;
 }

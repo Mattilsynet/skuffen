@@ -104,7 +104,6 @@ impl Ordningsverdi {
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub struct SakKey {
     pub skuffen_id: Uuid,
-    pub arkiv_id: Option<Saksnummer>,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

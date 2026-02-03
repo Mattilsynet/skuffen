@@ -7,7 +7,10 @@ use lib_schemas::skuffen::{
     tilgang::Tilgang as DtoTilgang,
 };
 
-use crate::mapping::fra_domene_til_dto::journalpost::from_domain_journalpost_to_dto;
+use crate::mapping::{
+    fra_domene_til_dto::journalpost::from_domain_journalpost_to_dto,
+    lookup::key_mapping_queries::lookup_arkiv_id_fra_skuffen_id,
+};
 
 pub async fn from_domain_sak_to_dto(sak: domain::model::sak::Sak) -> Result<DtoSak> {
     Ok(DtoSak {
@@ -15,7 +18,7 @@ pub async fn from_domain_sak_to_dto(sak: domain::model::sak::Sak) -> Result<DtoS
         saksbehandler: sak.saksbehandler,
         saksstatus: from_domain_saksstatus_to_dto(sak.saksstatus),
         tilgang: from_domain_tilgang_to_dto(sak.tilgang),
-        sak_key: from_domain_sak_key_to_dto(sak.sak_key)?,
+        sak_key: from_domain_sak_key_to_dto(sak.sak_key).await?,
         lukket: sak.lukket,
         kildesystem: sak.kildesystem,
         journalposter: Some(
@@ -28,11 +31,10 @@ pub async fn from_domain_sak_to_dto(sak: domain::model::sak::Sak) -> Result<DtoS
     })
 }
 
-pub fn from_domain_sak_key_to_dto(key: domain::model::sak::SakKey) -> Result<DtoSakKey> {
+pub async fn from_domain_sak_key_to_dto(key: domain::model::sak::SakKey) -> Result<DtoSakKey> {
     Ok(DtoSakKey {
         skuffen_id: key.skuffen_id,
-        arkiv_id: key
-            .arkiv_id
+        arkiv_id: Some(lookup_arkiv_id_fra_skuffen_id(key.skuffen_id).await?)
             .map(from_domain_saksnummer_to_dto)
             .transpose()?,
     })

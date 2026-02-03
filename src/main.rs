@@ -31,6 +31,11 @@ async fn main() -> anyhow::Result<()> {
     let db_pool = infrastructure::database::setup::stup_database().await?;
     let id_mapping_repo =
         infrastructure::adapter::id_mapping_postgres::PostgresIdMappingRepository::new(db_pool);
+
+    infrastructure::mapping::lookup::key_mapping_queries::init_id_mapping_repo(
+        std::sync::Arc::new(id_mapping_repo.clone()),
+    );
+
     let nats_dispatcher =
         infrastructure::adapter::nats_publisher::NatsCommandDispatcher::new(nats.clone());
 

@@ -4,21 +4,15 @@ use lib_schemas::skuffen::{
     sak::{Saksnummer, Saksstatus},
 };
 
-use crate::mapping::lookup::key_mapping_queries::{
-    lookup_arkiv_id_fra_skuffen_id, lookup_skuffen_id_fra_arkiv_id,
-};
+use crate::mapping::lookup::key_mapping_queries::lookup_skuffen_id_fra_arkiv_id;
 
 pub async fn from_dto_sak_key_to_domain(dto_sak_key: SakKey) -> Result<domain::model::sak::SakKey> {
     let key = match dto_sak_key {
-        SakKey::ClientReference(uuid) => domain::model::sak::SakKey {
-            skuffen_id: uuid,
-            arkiv_id: Some(lookup_arkiv_id_fra_skuffen_id(uuid).await?),
-        },
+        SakKey::ClientReference(uuid) => domain::model::sak::SakKey { skuffen_id: uuid },
         SakKey::ArkivId(saksnummer) => {
             let snr = from_dto_saksnumer_to_domain(saksnummer)?;
             domain::model::sak::SakKey {
-                skuffen_id: lookup_skuffen_id_fra_arkiv_id(snr.clone()).await?,
-                arkiv_id: Some(snr),
+                skuffen_id: lookup_skuffen_id_fra_arkiv_id(snr).await?,
             }
         }
     };

@@ -75,7 +75,6 @@ async fn from_sikri_saksnummer_to_domain_sak_key(
 ) -> Result<domain::model::sak::SakKey> {
     let saksnummer = domain::model::sak::Saksnummer::new(sikri_saksnummer)?;
     Ok(domain::model::sak::SakKey {
-        arkiv_id: Some(saksnummer.clone()),
         skuffen_id: lookup_skuffen_id_fra_arkiv_id(saksnummer).await?,
     })
 }
