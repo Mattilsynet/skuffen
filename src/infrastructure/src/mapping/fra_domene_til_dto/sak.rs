@@ -36,8 +36,7 @@ pub async fn from_domain_sak_key_to_dto(key: domain::model::sak::SakKey) -> Resu
         skuffen_id: key.skuffen_id,
         arkiv_id: Some(from_domain_saksnummer_to_dto(
             lookup_arkiv_id_fra_skuffen_id(key.skuffen_id).await?,
-        )?)
-        .transpose(),
+        )?),
     })
 }
 
