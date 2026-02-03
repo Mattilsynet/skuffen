@@ -9,7 +9,7 @@ pub fn from_dto_journalpost_key_to_domain(
         JournalpostKey::SkuffenId(uuid) => {
             domain::model::journalpost::JournalpostKey::SkuffenId(uuid)
         }
-        JournalpostKey::ArkivId(journalpost_id) => {
+        JournalpostKey::ClientReference(journalpost_id) => {
             domain::model::journalpost::JournalpostKey::ArkivId(
                 domain::model::journalpost::JournalpostId(journalpost_id.as_str().to_string()),
             )
