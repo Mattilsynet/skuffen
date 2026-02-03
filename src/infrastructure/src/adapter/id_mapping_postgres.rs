@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use sqlx::postgres::PgPool;
 use uuid::Uuid;
 
+#[derive(Clone)]
 pub struct PostgresIdMappingRepository {
     pool: PgPool,
 }
@@ -43,5 +44,53 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         .await?;
 
         Ok(())
+    }
+
+    async fn get_arkiv_id(&self, skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
+        let arkiv_id: Option<String> = sqlx::query_scalar(
+            r#"
+            SELECT arkiv_id
+            FROM id_mapping
+            WHERE skuffen_id = $1
+            "#,
+        )
+        .bind(skuffen_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(arkiv_id)
+    }
+
+    async fn get_skuffen_id(&self, client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error> {
+        let skuffen_id: Option<Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT skuffen_id
+            FROM id_mapping
+            WHERE client_reference = $1
+            "#,
+        )
+        .bind(client_reference)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(skuffen_id)
+    }
+
+    async fn get_skuffen_id_from_arkiv_id(
+        &self,
+        arkiv_id: &str,
+    ) -> Result<Option<Uuid>, anyhow::Error> {
+        let skuffen_id: Option<Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT skuffen_id
+            FROM id_mapping
+            WHERE arkiv_id = $1
+            "#,
+        )
+        .bind(arkiv_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(skuffen_id)
     }
 }
