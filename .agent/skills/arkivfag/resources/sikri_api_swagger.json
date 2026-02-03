@@ -1,0 +1,1301 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Mattilsynet ArkivApi",
+    "description": "API for Elements arikvering hos Mattilsynet",
+    "contact": {
+      "name": "Sikri AS",
+      "url": "https://sikri.no",
+      "email": "post@sikri.no"
+    },
+    "version": "v1"
+  },
+  "servers": [
+    {
+      "url": "/test/MattilsynetArkivApiTestCloud"
+    }
+  ],
+  "paths": {
+    "/api/Archive/Test": {
+      "get": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Test om arkivkjernen er tilgjengelig",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/Archive/HentLoggInformasjon": {
+      "get": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Søk etter endringer i saker og journalposter",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endringerFraTidspunkt",
+            "in": "query",
+            "description": "f.eks 2025-04-20 22:00:00",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "databaseTabell",
+            "in": "query",
+            "description": "angi blank for alle tabeller eller angi navn på en spesifikk tabell, som f.eks en av disse: NOARKSAK,JOURNPOST,DOKBESKRIV,DOKVERSJON,AVSMOT",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ElementsLoggInfoRespons"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/Archive/OpprettArkivsak": {
+      "post": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Oppretter ny sak",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "En klasse som inneholder nødvendig informasjonen om den nye saken",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ElementsSak"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ElementsSak"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ElementsSak"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ElementsSakResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/Archive/SetStatusForArkivSak": {
+      "put": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Oppdaterer status på sak",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "saksnr",
+            "in": "query",
+            "description": "Saksnummer. Eks 2023/123",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "nySaksstatus",
+            "in": "query",
+            "description": "SaksstatusId slik som B (underbehandling), R (reservert), A (avsluttet), U (utgått/slettet)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/Archive/SetSaksansvarligIdForArkivSak": {
+      "put": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Oppdaterer saksbehandler og enhet på sak",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "saksnr",
+            "in": "query",
+            "description": "Saksnr. Eks 2023/123",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "saksbehandler",
+            "in": "query",
+            "description": "Saksbehandlers brukernavn/ansattnr. Eks: 14049",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "saksbehandlerEnhet",
+            "in": "query",
+            "description": "Kortnavn på saksbehandlers enhet. Eks: M34500",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/Archive/KnyttNoarksakTilVirksomhet": {
+      "put": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Oppdaterer virksomhetMappeId (tilleggsattributt1) på sak",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "saksnr",
+            "in": "query",
+            "description": "Saksnummer. Eks 2023/123",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "virksomhetMappeId",
+            "in": "query",
+            "description": "virksomhetMappeId",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/Archive/OpprettJournalpost": {
+      "post": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Oppretter ny journalpost i en eksisterende sak",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "saksnr",
+            "in": "query",
+            "description": "Saksnummer som journalposten skal legges på. Eks. 2012/123",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "En klasse som inneholder nødvendig informasjonen om den nye journalposten. \r\n            Journalpostens type kan være I (inngående), U (utgående) eller X (internt notat uten oppfølging). \r\n            Hvis verdien er I må man spesifere en avsender på journalposten. \r\n            Hvis verdien er U må man spesifere en mottaker på journalposten. \r\n            Hvis verdien er X trenger man hverken avsender eller mottaker.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ElementsJournalpost"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ElementsJournalpost"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ElementsJournalpost"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ElementsJournalpostRespons"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/Archive/LeggTilVedleggPaaJournalpost": {
+      "post": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Legger til et vedlegg i eksisterende journalpost",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "journalpostId",
+            "in": "query",
+            "description": "journalpostId",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "liste med vedleggsobjekter",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ElementsDokument"
+                }
+              }
+            },
+            "text/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ElementsDokument"
+                }
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ElementsDokument"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ElementsDokumentRespons"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/Archive/SetJournalpostStatus": {
+      "put": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Oppdaterer status på journalpost",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "journalpostId",
+            "in": "query",
+            "description": "JournalpostId",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "nyJournalstatus",
+            "in": "query",
+            "description": "ny journalstatus",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/Archive/SetJournalpostTittel": {
+      "put": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Oppdaterer tittel på journalpost",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "journalpostId",
+            "in": "query",
+            "description": "JournalpostId",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "nyTittel",
+            "in": "query",
+            "description": "ny tittel",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/Archive/SetJournalpostJournaldato": {
+      "put": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Oppdaterer journaldato på journalpost",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "journalpostId",
+            "in": "query",
+            "description": "JournalpostId",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "journalDato",
+            "in": "query",
+            "description": "ny journaldato",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/Archive/SetJournalpostFordeltTil": {
+      "put": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Oppretter intern mottaker på journalpost.\r\nHvis angitt mottaker ikke finnes fra før vil den opprettes. \r\nMan kan fordele til flere saksbehandlere (også innenfor samme enhet).\r\nHvis man kun angir enhet vil mottaker opprettes som ufordelt på enheten.\r\nNy mottaker opprettes ikke hvis angitt mottaker er det samme som ansvarlig saksbehander på journalposten.\r\nHvis man angir mottaker/enhet og enheten finnes allerede som ufordelt, vil denne mottaker oppdateres med angitt saksbehandler.",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "journalpostId",
+            "in": "query",
+            "description": "JournalpostId",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "saksbehandler",
+            "in": "query",
+            "description": "Saksbehandlers brukernavn/ansattnr. Eks: 14049",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "saksbehandlerEnhet",
+            "in": "query",
+            "description": "Kortnavn på saksbehandlers enhet. Eks: M34500",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/Archive/SetJournalpostsaksbehandler": {
+      "put": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Oppdaterer saksbehandler og enhet på journalpost.\r\nOm man ikke angir saksbehandler og saksbehandlerEnhet vil journalposten settes til ufordelt/ufordelt.",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "journalpostId",
+            "in": "query",
+            "description": "JournalpostId",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "saksbehandler",
+            "in": "query",
+            "description": "Saksbehandlers brukernavn/ansattnr. Eks: 14049",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "saksbehandlerEnhet",
+            "in": "query",
+            "description": "Kortnavn på saksbehandlers enhet. Eks: M34500",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/Archive/SetAvskrivRestanseJournalpost": {
+      "put": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Avskriver restanse på journalpost",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "journalpostId",
+            "in": "query",
+            "description": "JournalpostId",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "avskrivingsmaate",
+            "in": "query",
+            "description": "Avskrivingsmaate - f.eks TE som betyr 'Tatt til etterretning'",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "merknad",
+            "in": "query",
+            "description": "",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/Archive/HentArkivsak": {
+      "get": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Henter angitt arkivsak. Man angir om man vil inkludere tilhørende journalposter.",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "saksnr",
+            "in": "query",
+            "description": "Saksnummer. Eks: 2023/123",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "inkluderJournalposter",
+            "in": "query",
+            "description": "",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ElementsSakResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/Archive/HentJournalpost": {
+      "get": {
+        "tags": [
+          "Archive"
+        ],
+        "summary": "Henter angitt journalpost med tilhørende dokumentobjekter",
+        "parameters": [
+          {
+            "name": "kildesystem",
+            "in": "query",
+            "description": "Kildesystem",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "journalpostId",
+            "in": "query",
+            "description": "journalpostId",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ElementsJournalpostRespons"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ElementsAvsenderMottaker": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "navn": {
+            "type": "string",
+            "nullable": true
+          },
+          "organisasjonsnummer": {
+            "type": "string",
+            "nullable": true
+          },
+          "epost": {
+            "type": "string",
+            "nullable": true
+          },
+          "telefon": {
+            "type": "string",
+            "nullable": true
+          },
+          "postadresse": {
+            "type": "string",
+            "nullable": true
+          },
+          "postnummer": {
+            "type": "string",
+            "nullable": true
+          },
+          "poststed": {
+            "type": "string",
+            "nullable": true
+          },
+          "utlandsadresse": {
+            "type": "string",
+            "description": "Address abroad.\r\nErstatter postnr og poststed for adresser i utlandet.",
+            "nullable": true
+          },
+          "forsendelsesmetode": {
+            "type": "string",
+            "description": "Trigger automatisk elektronisk ekspedering av utgående post/signeringsoppdrag\r\nEks: NULL - elektronisk ekspedering\r\nEks: GENERELL - digital post med svarut\r\nEks: SO - signeringsoppdrag",
+            "nullable": true
+          },
+          "erMottaker": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "kopi": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "unntattOffentlighet": {
+            "type": "boolean"
+          },
+          "person": {
+            "type": "boolean",
+            "description": "true hvis avsender/mottaker er en person"
+          },
+          "tilSaksbehandler": {
+            "type": "string",
+            "description": "Mottakende saksbehandler\r\nAngi blank verdi for å legge ufordelt til TilSaksbehandlerEnhet",
+            "nullable": true
+          },
+          "tilSaksbehandlerEnhet": {
+            "type": "string",
+            "description": "Mottakende enhet",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ElementsDokument": {
+        "type": "object",
+        "properties": {
+          "tittel": {
+            "type": "string",
+            "nullable": true
+          },
+          "hoveddokument": {
+            "type": "boolean"
+          },
+          "publisert": {
+            "type": "boolean",
+            "description": "Default er denne satt til false på dokument men den kan settes til true her dersom man vil ha mulighet for fulltekstpublisering",
+            "nullable": true
+          },
+          "filtype": {
+            "type": "string",
+            "description": "File extensions, eksempel: PDF",
+            "nullable": true
+          },
+          "dokumentBase64": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ElementsDokumentRespons": {
+        "type": "object",
+        "properties": {
+          "tittel": {
+            "type": "string",
+            "nullable": true
+          },
+          "hoveddokument": {
+            "type": "boolean"
+          },
+          "publisert": {
+            "type": "boolean",
+            "description": "Default er denne satt til false på dokument men den kan settes til true her dersom man vil ha mulighet for fulltekstpublisering",
+            "nullable": true
+          },
+          "filtype": {
+            "type": "string",
+            "description": "File extensions, eksempel: PDF",
+            "nullable": true
+          },
+          "dokumentBase64": {
+            "type": "string",
+            "nullable": true
+          },
+          "dokumentId": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "hoveddokId": {
+            "type": "integer",
+            "description": "DokumentBeskrivelseId til hoveddokument i journalposten",
+            "format": "int32",
+            "nullable": true
+          },
+          "dokumentUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ElementsJournalpost": {
+        "type": "object",
+        "properties": {
+          "tittel": {
+            "type": "string",
+            "nullable": true
+          },
+          "dokumentDato": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "journalposttype": {
+            "type": "string",
+            "description": "Tilsvarer DokumentType i Elements.\r\nGyldige vedier: I (Inngående dokument), U (Utgående dokument) og X (internt notat uten oppfølging)\r\nHvis verdien er I må man spesifere en avsender på journalposten. \r\nHvis verdien er U må man spesifere en mottaker på journalposten. \r\nHvis verdien er X trenger man hverken avsender eller mottaker.",
+            "nullable": true
+          },
+          "journalstatus": {
+            "type": "string",
+            "description": "Journalpoststatus benyttes for å angi hvor langt en journalpost er kommet i  forhold til registrering i journalen",
+            "nullable": true
+          },
+          "avskrivDirekte": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "avskrivningsmaate": {
+            "type": "string",
+            "nullable": true
+          },
+          "tilgangskode": {
+            "type": "string",
+            "nullable": true
+          },
+          "tilgangshjemmel": {
+            "type": "string",
+            "nullable": true
+          },
+          "saksbehandler": {
+            "type": "string",
+            "nullable": true
+          },
+          "saksbehandlerEnhet": {
+            "type": "string",
+            "nullable": true
+          },
+          "avsendereMottakere": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ElementsAvsenderMottaker"
+            },
+            "description": "I (Inngående dokument) krever at avsender er utfylt\r\nU (Utgående dokument) krever at en mottaker er utfylt",
+            "nullable": true
+          },
+          "dokumenter": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ElementsDokument"
+            },
+            "description": "Input-liste med dokumenter som skal opprettes",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "Dokumenter som dokumenterer saksbehandlingen i Mattilsynet. I en journalpost registrerer man dokumentet, \r\nevt. vedlegg, og data om dokumentet; Journalopplysninger. Dvs. dokumenttype, tittel, dato, \r\ntilgangskode m/hjemmel, avsender/mottaker osv. som er viktig med tanke på gjenfinning av dokumenter i ettertid"
+      },
+      "ElementsJournalpostRespons": {
+        "type": "object",
+        "properties": {
+          "tittel": {
+            "type": "string",
+            "nullable": true
+          },
+          "journalposttype": {
+            "type": "string",
+            "description": "Tilsvarer DokumentType i Elements.\r\nGyldige vedier: I (Inngående dokument), U (Utgående dokument) og X (internt notat uten oppfølging)\r\nHvis verdien er I må man spesifere en avsender på journalposten. \r\nHvis verdien er U må man spesifere en mottaker på journalposten. \r\nHvis verdien er X trenger man hverken avsender eller mottaker.",
+            "nullable": true
+          },
+          "journalstatus": {
+            "type": "string",
+            "description": "Journalpoststatus benyttes for å angi hvor langt en journalpost er kommet i  forhold til registrering i journalen",
+            "nullable": true
+          },
+          "avskrivDirekte": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "avskrivningsmaate": {
+            "type": "string",
+            "nullable": true
+          },
+          "tilgangskode": {
+            "type": "string",
+            "nullable": true
+          },
+          "tilgangshjemmel": {
+            "type": "string",
+            "nullable": true
+          },
+          "saksbehandler": {
+            "type": "string",
+            "nullable": true
+          },
+          "saksbehandlerEnhet": {
+            "type": "string",
+            "nullable": true
+          },
+          "avsendereMottakere": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ElementsAvsenderMottaker"
+            },
+            "description": "I (Inngående dokument) krever at avsender er utfylt\r\nU (Utgående dokument) krever at en mottaker er utfylt",
+            "nullable": true
+          },
+          "dokumenter": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ElementsDokument"
+            },
+            "description": "Input-liste med dokumenter som skal opprettes",
+            "nullable": true
+          },
+          "journalpostId": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "journalpostnr": {
+            "type": "string",
+            "nullable": true
+          },
+          "journalpostUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "kildesystem": {
+            "type": "string",
+            "nullable": true
+          },
+          "lopenr": {
+            "type": "string",
+            "nullable": true
+          },
+          "dokumentnummer": {
+            "type": "integer",
+            "description": "Journalpostens dokumentnummer",
+            "format": "int32",
+            "nullable": true
+          },
+          "dokumentkategori": {
+            "type": "string",
+            "nullable": true
+          },
+          "antallVedlegg": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "dokumentDato": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "hoveddokId": {
+            "type": "integer",
+            "description": "DokumentBeskrivelseId til hoveddokument i journalposten",
+            "format": "int32",
+            "nullable": true
+          },
+          "hoveddokumentFiltype": {
+            "type": "string",
+            "description": "Filtypen (produksjonsversjon) til hoveddokumentet",
+            "nullable": true
+          },
+          "harHoveddokument": {
+            "type": "boolean"
+          },
+          "hoveddokumentTittel": {
+            "type": "string",
+            "nullable": true
+          },
+          "dokumenterRespons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ElementsDokumentRespons"
+            },
+            "description": "Liste med dokumenter som finnes i jrounalposten",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ElementsLoggInfoRespons": {
+        "type": "object",
+        "properties": {
+          "pK1": {
+            "type": "string",
+            "description": "Primærnøkkelfelt 1",
+            "nullable": true
+          },
+          "pK2": {
+            "type": "string",
+            "description": "Primærnøkkelfelt 2",
+            "nullable": true
+          },
+          "pK3": {
+            "type": "string",
+            "description": "Primærnøkkelfelt 3",
+            "nullable": true
+          },
+          "pK4": {
+            "type": "string",
+            "description": "Primærnøkkelfelt 4",
+            "nullable": true
+          },
+          "hendelsesTypeId": {
+            "type": "integer",
+            "description": "1=Ny post, 2=Endret post, 3=Slettet post",
+            "format": "int32",
+            "nullable": true
+          },
+          "databaseTabell": {
+            "type": "string",
+            "nullable": true
+          },
+          "feltnavn": {
+            "type": "string",
+            "nullable": true
+          },
+          "klokkeslett": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "tekst": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ElementsSak": {
+        "required": [
+          "ordningsverdi",
+          "sakstittel"
+        ],
+        "type": "object",
+        "properties": {
+          "sakstittel": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "arkivdel": {
+            "type": "string",
+            "description": "Arkivdel som saken skal oprettes i. Eks: MATS",
+            "nullable": true
+          },
+          "journalenhet": {
+            "type": "string",
+            "description": "Jorunalenhet som saken skal oprettes i. Eks: DOKSENTER",
+            "nullable": true
+          },
+          "saksbehandler": {
+            "type": "string",
+            "nullable": true
+          },
+          "saksbehandlerEnhet": {
+            "type": "string",
+            "nullable": true
+          },
+          "saksstatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "ordningsverdi": {
+            "minLength": 1,
+            "type": "string",
+            "description": "Ordningsverdi slik den er registrert i Mattilsynets akrivnøkkel"
+          },
+          "tilgangskode": {
+            "type": "string",
+            "description": "Tilgangskode fra kodeverk TILGANGSKODE",
+            "nullable": true
+          },
+          "tilgangshjemmel": {
+            "type": "string",
+            "description": "Hjemmel for at saken skal være unntatt fra offentigheten. Kode fra kodeverk TILGANGSHJEMMEL",
+            "nullable": true
+          },
+          "virksomhetsmappeId": {
+            "type": "string",
+            "description": "VirksomhetsmappeId kommer fra saksbehandling i MATS\r\nDersom denne er inkludert, vil den opprettede saken knyttes til virksomheten via tilleggsattributt1 på saken. \r\nNB! Flere saker kan være knyttet mot samme VirksomhetsmappeId",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ElementsSakResponse": {
+        "required": [
+          "ordningsverdi",
+          "sakstittel"
+        ],
+        "type": "object",
+        "properties": {
+          "sakstittel": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "arkivdel": {
+            "type": "string",
+            "description": "Arkivdel som saken skal oprettes i. Eks: MATS",
+            "nullable": true
+          },
+          "journalenhet": {
+            "type": "string",
+            "description": "Jorunalenhet som saken skal oprettes i. Eks: DOKSENTER",
+            "nullable": true
+          },
+          "saksbehandler": {
+            "type": "string",
+            "nullable": true
+          },
+          "saksbehandlerEnhet": {
+            "type": "string",
+            "nullable": true
+          },
+          "saksstatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "ordningsverdi": {
+            "minLength": 1,
+            "type": "string",
+            "description": "Ordningsverdi slik den er registrert i Mattilsynets akrivnøkkel"
+          },
+          "tilgangskode": {
+            "type": "string",
+            "description": "Tilgangskode fra kodeverk TILGANGSKODE",
+            "nullable": true
+          },
+          "tilgangshjemmel": {
+            "type": "string",
+            "description": "Hjemmel for at saken skal være unntatt fra offentigheten. Kode fra kodeverk TILGANGSHJEMMEL",
+            "nullable": true
+          },
+          "virksomhetsmappeId": {
+            "type": "string",
+            "description": "VirksomhetsmappeId kommer fra saksbehandling i MATS\r\nDersom denne er inkludert, vil den opprettede saken knyttes til virksomheten via tilleggsattributt1 på saken. \r\nNB! Flere saker kan være knyttet mot samme VirksomhetsmappeId",
+            "nullable": true
+          },
+          "saksid": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "saksnr": {
+            "type": "string",
+            "description": "Saksår og Sekvensnummer. Eks: 2023/1234",
+            "nullable": true
+          },
+          "saksUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "kildesystem": {
+            "type": "string",
+            "nullable": true
+          },
+          "lukket": {
+            "type": "boolean",
+            "description": "Angir om saken er lukket (status A)"
+          },
+          "mappetype": {
+            "type": "string",
+            "nullable": true
+          },
+          "antallJournalposter": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "journalposter": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ElementsJournalpostRespons"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "BasicAuth": {
+        "type": "http",
+        "scheme": "basic"
+      }
+    }
+  },
+  "security": [
+    {
+      "BasicAuth": [ ]
+    }
+  ]
+}
