@@ -12,15 +12,22 @@ use uuid::Uuid;
 
 #[derive(Clone, Default)]
 struct FakeIdMappingRepository {
-    pub mappings: Arc<Mutex<Vec<(Uuid, Uuid, String, Option<String>)>>>,
+    // (command_id, client_reference, skuffen_id, entity_type, arkiv_id)
+    pub mappings: Arc<Mutex<Vec<(Uuid, Uuid, Uuid, String, Option<String>)>>>,
     pub should_fail: bool,
 }
 
 #[async_trait]
 impl IdMappingRepository for FakeIdMappingRepository {
+    async fn has_processed_command(&self, command_id: Uuid) -> Result<bool, anyhow::Error> {
+        let store = self.mappings.lock().unwrap();
+        Ok(store.iter().any(|(cid, _, _, _, _)| *cid == command_id))
+    }
+
     async fn register_mapping(
         &self,
         command_id: Uuid,
+        client_reference: Uuid,
         skuffen_id: Uuid,
         entity_type: String,
         arkiv_id: Option<String>,
@@ -29,8 +36,29 @@ impl IdMappingRepository for FakeIdMappingRepository {
             return Err(anyhow::anyhow!("DB Error"));
         }
         let mut store = self.mappings.lock().unwrap();
-        store.push((command_id, skuffen_id, entity_type, arkiv_id));
+        store.push((
+            command_id,
+            client_reference,
+            skuffen_id,
+            entity_type,
+            arkiv_id,
+        ));
         Ok(())
+    }
+
+    async fn get_arkiv_id(&self, _skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
+        Ok(None)
+    }
+
+    async fn get_skuffen_id(&self, _client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error> {
+        Ok(None)
+    }
+
+    async fn get_skuffen_id_from_arkiv_id(
+        &self,
+        _arkiv_id: &str,
+    ) -> Result<Option<Uuid>, anyhow::Error> {
+        Ok(None)
     }
 }
 
@@ -61,7 +89,9 @@ async fn test_ingest_command_success() {
     let fake_dispatcher = FakeCommandDispatcher::default();
 
     let command_id = Uuid::new_v4();
+    let client_reference = Uuid::new_v4();
     let command = Kommando::OpprettSak(OpprettSak {
+        client_reference,
         sakstittel: Sakstittel("Test Sak".to_string()),
         ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
         arkivdel: None,
@@ -93,12 +123,66 @@ async fn test_ingest_command_success() {
     let mappings = fake_mapping.mappings.lock().unwrap();
     assert_eq!(mappings.len(), 1);
     assert_eq!(mappings[0].0, command_id); // command_id matches
-    assert_eq!(mappings[0].2, "sak"); // entity_type correct
+    assert_eq!(mappings[0].1, client_reference); // client_reference matches
+    assert_eq!(mappings[0].3, "sak"); // entity_type correct
 
     // Verify Dispatch
     let dispatched = fake_dispatcher.dispatched.lock().unwrap();
     assert_eq!(dispatched.len(), 1);
     assert_eq!(dispatched[0].command_id, command_id);
+}
+
+#[tokio::test]
+async fn test_ingest_command_idempotency_duplicate_command() {
+    // Arrange
+    let fake_mapping = FakeIdMappingRepository::default();
+    let fake_dispatcher = FakeCommandDispatcher::default();
+
+    let command_id = Uuid::new_v4();
+    let client_reference = Uuid::new_v4();
+    let command = Kommando::OpprettSak(OpprettSak {
+        client_reference,
+        sakstittel: Sakstittel("Test Sak".to_string()),
+        ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
+        arkivdel: None,
+        journalenhet: None,
+        saksbehandler: Some("Z99999".to_string()),
+        saksbehandler_enhet: None,
+        tilgang: None,
+        virksomhetsmappe_id: None,
+    });
+    let envelope = CommandEnvelope {
+        command_id,
+        correlation_id: Some(Uuid::new_v4()),
+        payload: command,
+    };
+    let sequence = CommandSequence::try_from(vec![envelope.clone()]).unwrap();
+
+    let service = IngestCommandService::new(
+        Box::new(fake_mapping.clone()),
+        Box::new(fake_dispatcher.clone()),
+    );
+
+    // Act - First Call
+    let result1 = service.handle(sequence.clone()).await;
+    assert!(result1.is_ok());
+
+    // Act - Second Call (Duplicate)
+    let result2 = service.handle(sequence).await;
+    assert!(result2.is_ok());
+
+    // Assert
+    let mappings = fake_mapping.mappings.lock().unwrap();
+    assert_eq!(mappings.len(), 1, "Should only register mapping once");
+
+    // Note: Dispatch might happen twice depending on implementation choices.
+    // In current implementation, we skip logic entirely if command processed.
+    let dispatched = fake_dispatcher.dispatched.lock().unwrap();
+    assert_eq!(
+        dispatched.len(),
+        1,
+        "Should only dispatch once if idempotent"
+    );
 }
 
 #[tokio::test]
@@ -110,7 +194,9 @@ async fn test_ingest_command_mapping_failure() {
     let fake_dispatcher = FakeCommandDispatcher::default();
 
     let command_id = Uuid::new_v4();
+    let client_reference = Uuid::new_v4();
     let command = Kommando::OpprettSak(OpprettSak {
+        client_reference,
         sakstittel: Sakstittel("Test Sak".to_string()),
         ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
         arkivdel: None,
@@ -155,7 +241,9 @@ async fn test_ingest_command_dispatch_failure() {
     fake_dispatcher.should_fail = true;
 
     let command_id = Uuid::new_v4();
+    let client_reference = Uuid::new_v4();
     let command = Kommando::OpprettSak(OpprettSak {
+        client_reference,
         sakstittel: Sakstittel("Test Sak".to_string()),
         ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
         arkivdel: None,
