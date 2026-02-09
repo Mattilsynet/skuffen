@@ -24,6 +24,30 @@ pub struct Sak {
 */
 const SAKSTITTEL_MAX_LENGTH: usize = 256;
 
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Saksbehandler {
+    pub saksbehandler_id: String,
+    pub saksbehandler_enhet: String,
+}
+
+impl Saksbehandler {
+    pub fn new(saksbehandler_id: String, saksbehandler_enhet: String) -> Result<Self> {
+        if saksbehandler_id.is_empty() {
+            return Err(anyhow!("Saksbehandler is empty"));
+        }
+        if saksbehandler_enhet.is_empty() {
+            return Err(anyhow!("SaksbehandlerEnhet is empty"));
+        }
+        Ok(Self {
+            saksbehandler_id,
+            saksbehandler_enhet,
+        })
+    }
+}
+
+
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Sakstittel(pub String);
 
@@ -111,6 +135,14 @@ pub enum Saksstatus {
     UnderBehandling,
     Ferdig,
     Avsluttet,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum Arkivdel {
+    // Tilsynsdivisjonene må bli mappet om til SAK og 
+    // Hovedkontoret må bli mappet om til SAKHK 
+    Tilsynsdivisjonene,
+    Hovedkontoret,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
