@@ -1,19 +1,19 @@
 #[cfg(test)]
 mod tests {
-    use crate::dto::elements_sak::ElementsSak;
+    use crate::dto::elements_sak::{ElementsSak, JOURNALENHET, DEFAULT_SAKSSTATUS};
+    use crate::domain::ny_sak::Arkivdel;
 
     #[test]
     fn validate_ok() {
         let sak = ElementsSak {
             sakstittel: "Testsak".to_string(),
             ordningsverdi: "2020".to_string(),
-            arkivdel: None,
-            journalenhet: None,
-            saksbehandler: None,
-            saksbehandler_enhet: None,
-            saksstatus: None,
-            tilgangskode: None,
-            tilgangshjemmel: None,
+            arkivdel: Arkivdel::Hovedkontoret.to_string(),
+            journalenhet: JOURNALENHET.to_string(),
+            saksbehandler: "saksbehandler".to_string(),
+            saksbehandler_enhet: "saksbehandler_enhet".to_string(),
+            saksstatus: DEFAULT_SAKSSTATUS.to_string(),
+            tilgang: None,
             virksomhetsmappe_id: None,
         };
         assert!(sak.validate().is_ok());
@@ -24,13 +24,12 @@ mod tests {
         let sak = ElementsSak {
             sakstittel: "".to_string(),
             ordningsverdi: "2020".to_string(),
-            arkivdel: None,
-            journalenhet: None,
-            saksbehandler: None,
-            saksbehandler_enhet: None,
-            saksstatus: None,
-            tilgangskode: None,
-            tilgangshjemmel: None,
+            arkivdel: Arkivdel::Hovedkontoret.to_string(),
+            journalenhet: JOURNALENHET.to_string(),
+            saksbehandler: "saksbehandler".to_string(),
+            saksbehandler_enhet: "saksbehandler_enhet".to_string(),
+            saksstatus: DEFAULT_SAKSSTATUS.to_string(),
+            tilgang: None,
             virksomhetsmappe_id: None,
         };
         assert!(sak.validate().is_err());
@@ -42,13 +41,12 @@ mod tests {
         let sak = ElementsSak {
             sakstittel: long_title,
             ordningsverdi: "2020".to_string(),
-            arkivdel: None,
-            journalenhet: None,
-            saksbehandler: None,
-            saksbehandler_enhet: None,
-            saksstatus: None,
-            tilgangskode: None,
-            tilgangshjemmel: None,
+            arkivdel: Arkivdel::Hovedkontoret.to_string(),
+            journalenhet: JOURNALENHET.to_string(),
+            saksbehandler: "saksbehandler".to_string(),
+            saksbehandler_enhet: "saksbehandler_enhet".to_string(),
+            saksstatus: DEFAULT_SAKSSTATUS.to_string(),
+            tilgang: None,
             virksomhetsmappe_id: None,
         };
         assert!(sak.validate().is_err());
@@ -59,13 +57,12 @@ mod tests {
         let sak = ElementsSak {
             sakstittel: "Testsak".to_string(),
             ordningsverdi: "".to_string(),
-            arkivdel: None,
-            journalenhet: None,
-            saksbehandler: None,
-            saksbehandler_enhet: None,
-            saksstatus: None,
-            tilgangskode: None,
-            tilgangshjemmel: None,
+            arkivdel: Arkivdel::Hovedkontoret.to_string(),
+            journalenhet: JOURNALENHET.to_string(),
+            saksbehandler: "saksbehandler".to_string(),
+            saksbehandler_enhet: "saksbehandler_enhet".to_string(),
+            saksstatus: DEFAULT_SAKSSTATUS.to_string(),
+            tilgang: None,
             virksomhetsmappe_id: None,
         };
         assert!(sak.validate().is_err());

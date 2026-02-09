@@ -54,7 +54,7 @@ Verdier og beskrivelser av de ulike feltene
 | Arkivdel | En definert del av et arkiv. I hovedsak brukes verdien **SAK** for tilsynsdivisjonene, mens **SAKHK** brukes for til hovedkontoret.  |
 | Journalenhet | En organisatorisk enhet som står for registrering (journalføring). I Mattilsynet skal denne fylles ut med verdien **DOKSENTER** |
 | Saksbehandler | Settes hvis saken skal registreres direkte på en saksbehandler. La stå blank hvis det skal legges til fordeling på enhet. |
-| SaksbehandlerEnhet | Settes dersom saken skal opprettes på en enhet til fordeling. Fylles ut automatisk hvis saksbehandler er satt.  |
+| SaksbehandlerEnhet | Settes dersom saken skal opprettes på en enhet til fordeling.  |
 | Saksstatus | Status på sak. Skal settes til **B (under behanding)** ved opprettelse og **A (avsluttet)** når saken er ferdig. |
 | Ordningsverdi | Basert på Mattilsynets arkivnøkkel. | Hvis saken skal unntas offentlighet må det påføres tilgangskode med verdien **UO** (Unntatt offentlighet).Tilgangskode krever at man oppgir hjemmel for unntak fra offentlighet. Vær oppmerksom på at journalpostene i saken må påføres tilgangskode og hjemmel etter en individuell vurdering, dvs at hvis man påfører tilgangskode og hjemmel på saksnivå, så betyr ikke det at journalpostene er unntatt offentlighet. |
 | Lovhjemmel | Dersom man har påført tilgangskode, kreves det at lovhjemmel oppgis. Eksempelvis Offl. § 23 tredje ledd |

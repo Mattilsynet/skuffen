@@ -1,6 +1,10 @@
-use crate::domain::ny_sak::NySak;
-use crate::dto::elements_sak_response::ElementsSakMedJournalposterResponse;
+use crate::domain::ny_sak::{NySak, Tilgang};
 use serde::{Deserialize, Serialize};
+
+pub const JOURNALENHET: &str = "DOKSENTER";
+
+pub const DEFAULT_SAKSSTATUS: &str = "B";
+
 
 /// Represents a Sak (case) in the Sikri API.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -9,38 +13,30 @@ pub struct ElementsSak {
     /// Max length: 256, Min length: 1
     pub sakstittel: String,
 
-    /// Arkivdel som saken skal opprettes i. Eks: MATS
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub arkivdel: Option<String>,
+    /// Arkivdel som saken skal opprettes i. 
+    pub arkivdel: String,
 
     /// Journalenhet som saken skal opprettes i. Eks: DOKSENTER
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub journalenhet: Option<String>,
+    pub journalenhet: String,
 
     /// Saksbehandler
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub saksbehandler: Option<String>,
+    pub saksbehandler: String,
 
     /// SaksbehandlerEnhet
-    #[serde(rename = "saksbehandlerEnhet", skip_serializing_if = "Option::is_none")]
-    pub saksbehandler_enhet: Option<String>,
+    pub saksbehandler_enhet: String,
 
     /// Saksstatus
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub saksstatus: Option<String>,
+    pub saksstatus: String,
 
     /// Ordningsverdi slik den er registrert i Mattilsynets arkivnøkkel (required)
     /// Min length: 1
     pub ordningsverdi: String,
 
     /// Tilgangskode fra kodeverk TILGANGSKODE
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tilgangskode: Option<String>,
-
     /// Hjemmel for at saken skal være unntatt fra offentligheten.
     /// Kode fra kodeverk TILGANGSHJEMMEL
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tilgangshjemmel: Option<String>,
+    pub tilgang: Option<Tilgang>,
 
     /// VirksomhetsmappeId kommer fra saksbehandling i MATS.
     /// Dersom denne er inkludert, vil den opprettede saken knyttes til virksomheten via tilleggsattributt1 på saken.
@@ -49,35 +45,18 @@ pub struct ElementsSak {
     pub virksomhetsmappe_id: Option<String>,
 }
 
-impl From<ElementsSakMedJournalposterResponse> for ElementsSak {
-    fn from(value: ElementsSakMedJournalposterResponse) -> Self {
-        ElementsSak {
-            sakstittel: value.sakstittel,
-            arkivdel: value.arkivdel,
-            journalenhet: value.journalenhet,
-            saksbehandler: value.saksbehandler,
-            saksbehandler_enhet: value.saksbehandler_enhet,
-            saksstatus: value.saksstatus,
-            ordningsverdi: value.ordningsverdi.unwrap_or_default(),
-            tilgangskode: value.tilgangskode,
-            tilgangshjemmel: value.tilgangshjemmel,
-            virksomhetsmappe_id: value.virksomhetsmappe_id,
-        }
-    }
-}
 
 impl From<NySak> for ElementsSak {
     fn from(src: NySak) -> Self {
         ElementsSak {
             sakstittel: src.sakstittel,
-            arkivdel: src.arkivdel,
-            journalenhet: src.journalenhet,
-            saksbehandler: src.saksbehandler,
+            arkivdel: src.arkivdel.to_string(),
+            journalenhet: JOURNALENHET.to_string(),
+            saksbehandler: src.saksbehandler_id,
             saksbehandler_enhet: src.saksbehandler_enhet,
-            saksstatus: src.saksstatus,
+            saksstatus: DEFAULT_SAKSSTATUS.to_string(),
             ordningsverdi: src.ordningsverdi,
-            tilgangskode: src.tilgangskode,
-            tilgangshjemmel: src.tilgangshjemmel,
+            tilgang: src.tilgang,
             virksomhetsmappe_id: src.virksomhetsmappe_id,
         }
     }
