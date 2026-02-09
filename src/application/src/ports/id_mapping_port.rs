@@ -3,12 +3,16 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait IdMappingRepository: Send + Sync {
+    /// Checks if a command with the given ID has already been fully processed (idempotency check).
+    async fn has_processed_command(&self, command_id: Uuid) -> Result<bool, anyhow::Error>;
+
     /// Registers a mapping.
     /// Returns Ok(()) if successful or if the mapping already exists (idempotent for same inputs).
     /// Returns Error if a conflict exists (e.g. same client_ref/command_id but different internal ID).
     async fn register_mapping(
         &self,
         command_id: Uuid,
+        client_reference: Uuid,
         skuffen_id: Uuid,
         entity_type: String,
         arkiv_id: Option<String>,

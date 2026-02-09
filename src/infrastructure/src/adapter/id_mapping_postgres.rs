@@ -16,17 +16,32 @@ impl PostgresIdMappingRepository {
 
 #[async_trait]
 impl IdMappingRepository for PostgresIdMappingRepository {
+    async fn has_processed_command(&self, command_id: Uuid) -> Result<bool, anyhow::Error> {
+        let exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS(SELECT 1 FROM id_mapping WHERE command_id = $1)
+            "#,
+        )
+        .bind(command_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(exists)
+    }
+
     async fn register_mapping(
         &self,
         command_id: Uuid,
+        client_reference: Uuid,
         skuffen_id: Uuid,
         entity_type: String,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
         // Insert into id_mapping.
-        // client_reference corresponds to command_id in this context (unique request ID).
-        // On conflict (client_reference): do nothing (idempotent), but we might want to verify if other fields match?
-        // For MVP, ON CONFLICT DO NOTHING is safest for idempotency.
+        // We now have distinct client_reference and command_id.
+        // On conflict (client_reference): do nothing (idempotent at entity level).
+        // Command idempotency is checked prior to this call via has_processed_command,
+        // but the constraint here protects data integrity.
 
         sqlx::query(
             r#"
@@ -36,8 +51,8 @@ impl IdMappingRepository for PostgresIdMappingRepository {
             "#,
         )
         .bind(skuffen_id)
-        .bind(entity_type.clone()) // Or just string if Postgres casts it, but explicit cast in SQL helps
-        .bind(command_id)
+        .bind(entity_type.clone())
+        .bind(client_reference)
         .bind(arkiv_id)
         .bind(command_id)
         .execute(&self.pool)
