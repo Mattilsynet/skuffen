@@ -10,6 +10,7 @@ pub fn from_domain_journalpost_to_dto(
     domain_journalpost: domain::model::journalpost::Journalpost,
 ) -> Result<JournalpostResponse> {
     let journalpost_response = JournalpostResponse {
+        client_reference: domain_journalpost.client_reference,
         tittel: domain_journalpost.tittel,
         dokument_dato: domain_journalpost.dokument_dato,
         journalposttype: from_domain_journalposttype_to_dto(domain_journalpost.journalposttype),

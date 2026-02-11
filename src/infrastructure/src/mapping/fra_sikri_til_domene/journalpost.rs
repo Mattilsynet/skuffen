@@ -1,15 +1,25 @@
 use anyhow::{Result, anyhow};
-use domain::model::dokument::Dokument;
+
 use domain::model::journalpost::{JournalpostType, Journalpoststatus};
 use domain::model::tilgang::Tilgang;
 use sikri_client::domain::journalpost_response::JournalpostRespons as SikriJournalpostResponse;
 
 use crate::mapping::fra_sikri_til_domene::dokument::from_sikri_dokument_to_domain_dokument;
 
-pub fn from_sikri_journalpost_to_domain_journalpost(
+pub async fn from_sikri_journalpost_to_domain_journalpost(
     sikri_journalpost: SikriJournalpostResponse,
 ) -> Result<domain::model::journalpost::Journalpost> {
+    let client_reference = None;
+
+    let mut dokumenter = Vec::new();
+    if let Some(docs) = sikri_journalpost.dokumenter_respons.clone() {
+        for doc in docs {
+            dokumenter.push(from_sikri_dokument_to_domain_dokument(doc).await?);
+        }
+    }
+
     let journalpost_response = domain::model::journalpost::Journalpost {
+        client_reference,
         tittel: sikri_journalpost
             .clone()
             .tittel
@@ -40,12 +50,7 @@ pub fn from_sikri_journalpost_to_domain_journalpost(
         saksbehandler: sikri_journalpost
             .saksbehandler
             .ok_or_else(|| anyhow!("Journalpost har ikke saksbehandler."))?,
-        dokumenter: sikri_journalpost
-            .dokumenter_respons
-            .unwrap_or_default() //Vec::new()
-            .iter()
-            .map(|doc| from_sikri_dokument_to_domain_dokument(doc.clone()))
-            .collect::<anyhow::Result<Vec<Dokument>>>()?,
+        dokumenter,
         journalpost_id: sikri_journalpost.journalpost_id,
         kildesystem: sikri_journalpost.kildesystem,
     };

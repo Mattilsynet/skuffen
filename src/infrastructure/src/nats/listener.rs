@@ -54,7 +54,7 @@ where
     ) -> Result<JournalpostResponse, anyhow::Error> {
         let domain_journalpost = application::ports::use_cases::HentJournalpostUseCase::handle(
             self,
-            from_dto_journalpost_key_to_domain(req.key),
+            from_dto_journalpost_key_to_domain(req.key)?,
         )
         .await?;
         let dto_journalpost = from_domain_journalpost_to_dto(domain_journalpost)?;
