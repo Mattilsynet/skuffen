@@ -3,7 +3,13 @@ use crate::ports::id_mapping_port::IdMappingRepository;
 use crate::services::ingest_command::IngestCommandService;
 use async_trait::async_trait;
 use lib_schemas::skuffen::command::commands::{CommandEnvelope, CommandSequence, Kommando};
-use lib_schemas::skuffen::command::sak::OpprettSak;
+use lib_schemas::skuffen::command::journalpost::{
+    JournalpostCommon, OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost,
+    OpprettUgåendeJournalpost,
+};
+use lib_schemas::skuffen::command::sak::{Arkivdel, OpprettSak};
+
+use lib_schemas::skuffen::query::queries::SakKey;
 use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -83,24 +89,80 @@ impl CommandDispatcher for FakeCommandDispatcher {
 // --- Tests ---
 
 #[tokio::test]
-async fn test_ingest_command_success() {
+async fn test_ingest_command_opprett_sak_success() {
+    // Arrange
+    let fake_mapping = FakeIdMappingRepository::default();
+    let fake_dispatcher = FakeCommandDispatcher::default();
+
+    let command_id = Uuid::new_v4();
+    let command = Kommando::OpprettSak(OpprettSak {
+        client_reference: Uuid::new_v4(),
+        sakstittel: Sakstittel("Test Sak".to_string()),
+        ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
+        arkivdel: Arkivdel::Tilsynsdivisjonene,
+        saksbehandler_id: "Z99999".to_string(),
+        saksbehandler_enhet: "42".to_string(),
+        tilgang: None,
+    });
+    let envelope = CommandEnvelope {
+        command_id,
+        correlation_id: Some(Uuid::new_v4()),
+        payload: command,
+    };
+    let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
+
+    let service = IngestCommandService::new(
+        Box::new(fake_mapping.clone()),
+        Box::new(fake_dispatcher.clone()),
+    );
+
+    // Act
+    let result: anyhow::Result<()> = service.handle(sequence).await;
+
+    // Assert
+    assert!(result.is_ok());
+
+    // Verify Mapping - Should be present for OpprettSak now
+    let mappings = fake_mapping.mappings.lock().unwrap();
+    assert_eq!(
+        mappings.len(),
+        1,
+        "OpprettSak SHOULD register mapping again"
+    );
+    assert_eq!(mappings[0].0, command_id);
+    assert_eq!(mappings[0].3, "sak");
+
+    // Verify Dispatch
+    let dispatched = fake_dispatcher.dispatched.lock().unwrap();
+    assert_eq!(dispatched.len(), 1);
+    assert_eq!(dispatched[0].command_id, command_id);
+}
+
+#[tokio::test]
+async fn test_ingest_command_journalpost_success() {
     // Arrange
     let fake_mapping = FakeIdMappingRepository::default();
     let fake_dispatcher = FakeCommandDispatcher::default();
 
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
-    let command = Kommando::OpprettSak(OpprettSak {
-        client_reference,
-        sakstittel: Sakstittel("Test Sak".to_string()),
-        ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
-        arkivdel: None,
-        journalenhet: None,
-        saksbehandler: Some("Z99999".to_string()),
-        saksbehandler_enhet: None,
-        tilgang: None,
-        virksomhetsmappe_id: None,
+
+    let command = Kommando::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+        felles: JournalpostCommon {
+            client_reference,
+            tittel: "Inngående brev".to_string(),
+            dokument_dato: "2023-01-01".to_string(),
+            saksbehandler: "Z99999".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            tilgang: None,
+            dokumenter: vec![],
+            sak_key: SakKey::ClientReference(client_reference),
+            kildesystem: None,
+        },
+        avsender: "Avsender AS".to_string(),
+        mottaker: None,
     });
+
     let envelope = CommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
@@ -122,9 +184,8 @@ async fn test_ingest_command_success() {
     // Verify Mapping
     let mappings = fake_mapping.mappings.lock().unwrap();
     assert_eq!(mappings.len(), 1);
-    assert_eq!(mappings[0].0, command_id); // command_id matches
-    assert_eq!(mappings[0].1, client_reference); // client_reference matches
-    assert_eq!(mappings[0].3, "sak"); // entity_type correct
+    assert_eq!(mappings[0].0, command_id);
+    assert_eq!(mappings[0].3, "journalpost");
 
     // Verify Dispatch
     let dispatched = fake_dispatcher.dispatched.lock().unwrap();
@@ -140,23 +201,30 @@ async fn test_ingest_command_idempotency_duplicate_command() {
 
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
-    let command = Kommando::OpprettSak(OpprettSak {
-        client_reference,
-        sakstittel: Sakstittel("Test Sak".to_string()),
-        ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
-        arkivdel: None,
-        journalenhet: None,
-        saksbehandler: Some("Z99999".to_string()),
-        saksbehandler_enhet: None,
-        tilgang: None,
-        virksomhetsmappe_id: None,
+
+    let command = Kommando::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+        felles: JournalpostCommon {
+            client_reference,
+            tittel: "Inngående brev".to_string(),
+            dokument_dato: "2023-01-01".to_string(),
+            saksbehandler: "Z99999".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            tilgang: None,
+            dokumenter: vec![],
+            sak_key: SakKey::ClientReference(client_reference),
+            kildesystem: None,
+        },
+        avsender: "Avsender AS".to_string(),
+        mottaker: None,
     });
+
     let envelope = CommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
         payload: command,
     };
-    let sequence = CommandSequence::try_from(vec![envelope.clone()]).unwrap();
+    let sequence1 = CommandSequence::try_from(vec![envelope.clone()]).unwrap();
+    let sequence2 = CommandSequence::try_from(vec![envelope.clone()]).unwrap();
 
     let service = IngestCommandService::new(
         Box::new(fake_mapping.clone()),
@@ -164,19 +232,17 @@ async fn test_ingest_command_idempotency_duplicate_command() {
     );
 
     // Act - First Call
-    let result1 = service.handle(sequence.clone()).await;
+    let result1 = service.handle(sequence1).await;
     assert!(result1.is_ok());
 
     // Act - Second Call (Duplicate)
-    let result2 = service.handle(sequence).await;
+    let result2 = service.handle(sequence2).await;
     assert!(result2.is_ok());
 
     // Assert
     let mappings = fake_mapping.mappings.lock().unwrap();
     assert_eq!(mappings.len(), 1, "Should only register mapping once");
 
-    // Note: Dispatch might happen twice depending on implementation choices.
-    // In current implementation, we skip logic entirely if command processed.
     let dispatched = fake_dispatcher.dispatched.lock().unwrap();
     assert_eq!(
         dispatched.len(),
@@ -195,17 +261,23 @@ async fn test_ingest_command_mapping_failure() {
 
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
-    let command = Kommando::OpprettSak(OpprettSak {
-        client_reference,
-        sakstittel: Sakstittel("Test Sak".to_string()),
-        ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
-        arkivdel: None,
-        journalenhet: None,
-        saksbehandler: None,
-        saksbehandler_enhet: None,
-        tilgang: None,
-        virksomhetsmappe_id: None,
+
+    let command = Kommando::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+        felles: JournalpostCommon {
+            client_reference,
+            tittel: "Inngående brev".to_string(),
+            dokument_dato: "2023-01-01".to_string(),
+            saksbehandler: "Z99999".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            tilgang: None,
+            dokumenter: vec![],
+            sak_key: SakKey::ClientReference(client_reference),
+            kildesystem: None,
+        },
+        avsender: "Avsender AS".to_string(),
+        mottaker: None,
     });
+
     let envelope = CommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
@@ -242,17 +314,23 @@ async fn test_ingest_command_dispatch_failure() {
 
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
-    let command = Kommando::OpprettSak(OpprettSak {
-        client_reference,
-        sakstittel: Sakstittel("Test Sak".to_string()),
-        ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
-        arkivdel: None,
-        journalenhet: None,
-        saksbehandler: None,
-        saksbehandler_enhet: None,
-        tilgang: None,
-        virksomhetsmappe_id: None,
+
+    let command = Kommando::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+        felles: JournalpostCommon {
+            client_reference,
+            tittel: "Inngående brev".to_string(),
+            dokument_dato: "2023-01-01".to_string(),
+            saksbehandler: "Z99999".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            tilgang: None,
+            dokumenter: vec![],
+            sak_key: SakKey::ClientReference(client_reference),
+            kildesystem: None,
+        },
+        avsender: "Avsender AS".to_string(),
+        mottaker: None,
     });
+
     let envelope = CommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
@@ -278,4 +356,114 @@ async fn test_ingest_command_dispatch_failure() {
     // But mapping should have happened
     let mappings = fake_mapping.mappings.lock().unwrap();
     assert_eq!(mappings.len(), 1);
+}
+
+#[tokio::test]
+async fn test_ingest_command_utgående_journalpost_success() {
+    // Arrange
+    let fake_mapping = FakeIdMappingRepository::default();
+    let fake_dispatcher = FakeCommandDispatcher::default();
+
+    let command_id = Uuid::new_v4();
+    let client_reference = Uuid::new_v4();
+
+    let command = Kommando::OpprettUtgåendeJournalpost(OpprettUgåendeJournalpost {
+        felles: JournalpostCommon {
+            client_reference,
+            tittel: "Utgående brev".to_string(),
+            dokument_dato: "2023-01-02".to_string(),
+            saksbehandler: "Z99999".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            tilgang: None,
+            dokumenter: vec![],
+            sak_key: SakKey::ClientReference(client_reference),
+            kildesystem: None,
+        },
+        avsender: None,
+        mottaker: "Mottaker AS".to_string(),
+    });
+
+    let envelope = CommandEnvelope {
+        command_id,
+        correlation_id: Some(Uuid::new_v4()),
+        payload: command,
+    };
+    let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
+
+    let service = IngestCommandService::new(
+        Box::new(fake_mapping.clone()),
+        Box::new(fake_dispatcher.clone()),
+    );
+
+    // Act
+    let result: anyhow::Result<()> = service.handle(sequence).await;
+
+    // Assert
+    assert!(result.is_ok());
+
+    // Verify Mapping
+    let mappings = fake_mapping.mappings.lock().unwrap();
+    assert_eq!(mappings.len(), 1);
+    assert_eq!(mappings[0].0, command_id);
+    assert_eq!(mappings[0].1, client_reference);
+    assert_eq!(mappings[0].3, "journalpost");
+
+    // Verify Dispatch
+    let dispatched = fake_dispatcher.dispatched.lock().unwrap();
+    assert_eq!(dispatched.len(), 1);
+    assert_eq!(dispatched[0].command_id, command_id);
+}
+
+#[tokio::test]
+async fn test_ingest_command_internt_notat_journalpost_success() {
+    // Arrange
+    let fake_mapping = FakeIdMappingRepository::default();
+    let fake_dispatcher = FakeCommandDispatcher::default();
+
+    let command_id = Uuid::new_v4();
+    let client_reference = Uuid::new_v4();
+
+    let command = Kommando::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
+        felles: JournalpostCommon {
+            client_reference,
+            tittel: "Internt notat".to_string(),
+            dokument_dato: "2023-01-03".to_string(),
+            saksbehandler: "Z99999".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            tilgang: None,
+            dokumenter: vec![],
+            sak_key: SakKey::ClientReference(client_reference),
+            kildesystem: None,
+        },
+    });
+
+    let envelope = CommandEnvelope {
+        command_id,
+        correlation_id: Some(Uuid::new_v4()),
+        payload: command,
+    };
+    let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
+
+    let service = IngestCommandService::new(
+        Box::new(fake_mapping.clone()),
+        Box::new(fake_dispatcher.clone()),
+    );
+
+    // Act
+    let result: anyhow::Result<()> = service.handle(sequence).await;
+
+    // Assert
+    assert!(result.is_ok());
+
+    // Verify Mapping
+    let mappings = fake_mapping.mappings.lock().unwrap();
+    assert_eq!(mappings.len(), 1);
+    assert_eq!(mappings[0].0, command_id);
+    assert_eq!(mappings[0].1, client_reference);
+    assert_eq!(mappings[0].3, "journalpost");
+
+    // Verify Dispatch
+    let dispatched = fake_dispatcher.dispatched.lock().unwrap();
+    assert_eq!(dispatched.len(), 1);
+    assert_eq!(dispatched[0].command_id, command_id);
 }

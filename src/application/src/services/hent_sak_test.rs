@@ -3,7 +3,7 @@ mod tests {
     use crate::ports::use_cases::HentSakUseCase;
     use crate::services::hent_sak::{HentSakService, SakRepository};
     use async_trait::async_trait;
-    use domain::model::sak::{Ordningsverdi, Sak, SakKey, Saksnummer, Saksstatus, Sakstittel};
+    use domain::model::sak::{Ordningsverdi, Sak, SakKey, Saksstatus, Sakstittel};
     use std::collections::HashMap;
     use std::sync::Mutex;
     use uuid::Uuid;
@@ -31,18 +31,20 @@ mod tests {
     async fn hent_sak_ok() {
         let key = SakKey {
             skuffen_id: Uuid::new_v4(),
-            arkiv_id: Some(Saksnummer::new("2021/1").unwrap()),
         };
         let sak = Sak {
-            sakstittel: Sakstittel::try_from("Tittel").unwrap(),
-            saksbehandler: "Me".to_string(),
+            client_reference: Some(Uuid::new_v4()),
+            sakstittel: Sakstittel("Test Sak 1".to_string()),
+            saksbehandler: "Z99999".to_string(),
             saksstatus: Saksstatus::UnderBehandling,
             tilgang: None,
-            sak_key: key.clone(),
-            kildesystem: "KS".to_string(),
+            sak_key: SakKey {
+                skuffen_id: key.skuffen_id, // Use the same skuffen_id as the key for consistency
+            },
+            kildesystem: "SKUFFEN".to_string(),
             lukket: false,
             journalposter: vec![],
-            ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
+            ordningsverdi: Ordningsverdi::new("2021-1".to_string()).unwrap(),
         };
 
         let mut map = HashMap::new();
@@ -61,7 +63,6 @@ mod tests {
     async fn hent_sak_not_found() {
         let key = SakKey {
             skuffen_id: Uuid::new_v4(),
-            arkiv_id: Some(Saksnummer::new("2021/2").unwrap()),
         };
         let repo = FakeSakRepository {
             saker: Mutex::new(HashMap::new()),

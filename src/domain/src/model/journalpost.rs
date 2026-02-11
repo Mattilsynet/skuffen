@@ -8,6 +8,7 @@ pub struct JournalpostId(pub String);
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Journalpost {
+    pub client_reference: Option<Uuid>,
     pub tittel: String,
     pub dokument_dato: String,
     pub journalposttype: JournalpostType,

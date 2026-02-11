@@ -14,6 +14,7 @@ use crate::mapping::{
 
 pub async fn from_domain_sak_to_dto(sak: domain::model::sak::Sak) -> Result<DtoSak> {
     Ok(DtoSak {
+        client_reference: sak.client_reference,
         sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(sak.sakstittel.0.as_str())?,
         saksbehandler: sak.saksbehandler,
         saksstatus: from_domain_saksstatus_to_dto(sak.saksstatus),

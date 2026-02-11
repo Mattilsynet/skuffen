@@ -8,7 +8,22 @@ use crate::mapping::{
 };
 
 pub async fn from_sikri_sak_to_domain_sak(sikri_sak: SikriSak) -> Result<domain::model::sak::Sak> {
+    let saksnummer_str = sikri_sak
+        .saksnr
+        .clone()
+        .ok_or_else(|| anyhow!("Sikri sak har ikke saksnummer."))?;
+
+    let client_reference = None;
+
+    let mut journalposter = Vec::new();
+    if let Some(ref sikri_journalposter) = sikri_sak.journalposter {
+        for jp in sikri_journalposter {
+            journalposter.push(from_sikri_journalpost_to_domain_journalpost(jp.clone()).await?);
+        }
+    }
+
     let sak_response = domain::model::sak::Sak {
+        client_reference,
         sakstittel: domain::model::sak::Sakstittel::try_from(sikri_sak.sakstittel.clone())?,
         saksbehandler: sikri_sak
             .saksbehandler
@@ -24,20 +39,10 @@ pub async fn from_sikri_sak_to_domain_sak(sikri_sak: SikriSak) -> Result<domain:
                 .ok_or_else(|| anyhow!("Saksstatus string har ingen characters."))?,
         )?,
         tilgang: from_sikri_sak_to_domain_tilgang(sikri_sak.clone()),
-        sak_key: from_sikri_saksnummer_to_domain_sak_key(
-            sikri_sak
-                .saksnr
-                .ok_or_else(|| anyhow!("Sikri sak har ikke saksnummer."))?,
-        )
-        .await?,
+        sak_key: from_sikri_saksnummer_to_domain_sak_key(saksnummer_str).await?,
         lukket: sikri_sak.lukket,
         kildesystem: "SKUFFEN".to_string(),
-        journalposter: sikri_sak
-            .journalposter
-            .unwrap_or_default() //Vec::new()
-            .iter()
-            .map(|jp| from_sikri_journalpost_to_domain_journalpost(jp.clone()))
-            .collect::<Result<Vec<domain::model::journalpost::Journalpost>>>()?,
+        journalposter,
         ordningsverdi: domain::model::sak::Ordningsverdi::new(sikri_sak.ordningsverdi)?,
     };
     info!("{:?}", sak_response);

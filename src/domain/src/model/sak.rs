@@ -8,6 +8,7 @@ use crate::model::{journalpost::Journalpost, tilgang::Tilgang};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Sak {
+    pub client_reference: Option<Uuid>,
     pub sakstittel: Sakstittel,
     pub saksbehandler: String,
     pub saksstatus: Saksstatus,
