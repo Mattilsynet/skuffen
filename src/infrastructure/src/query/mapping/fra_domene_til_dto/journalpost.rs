@@ -3,7 +3,7 @@ use lib_schemas::skuffen::journalpost::{JournalpostId, JournalpostType, Journalp
 use lib_schemas::skuffen::query::responses::JournalpostResponse;
 use lib_schemas::skuffen::tilgang::Tilgang;
 
-use crate::mapping::fra_domene_til_dto::dokument::from_domain_dokument_to_dto;
+use crate::query::mapping::fra_domene_til_dto::dokument::from_domain_dokument_to_dto;
 
 pub fn from_domain_journalpost_to_dto(
     domain_journalpost: domain::model::journalpost::Journalpost,

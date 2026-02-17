@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use sikri_client::domain::sak::SakRespons as SikriSak;
 use tracing::info;
 
-use crate::mapping::{
+use crate::query::mapping::{
     fra_sikri_til_domene::journalpost::from_sikri_journalpost_to_domain_journalpost,
     lookup::key_mapping_queries::lookup_skuffen_id_fra_arkiv_id,
 };
