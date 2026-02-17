@@ -41,18 +41,7 @@ impl IngestCommandService {
             return Ok(());
         }
 
-        //TODO: Burde denne ligge bak mer logikk?
         let skuffen_id = Uuid::now_v7(); // Generate internal ID
-
-        // Determine entity type based on command
-        //TODO: Flyttes til database-handelern
-        let entity_type = match &envelope.payload {
-            Command::OpprettSak(_) => "sak",
-            Command::OpprettInngåendeJournalpost(_)
-            | Command::OpprettUtgåendeJournalpost(_)
-            | Command::OpprettInterntNotatJournalpost(_) => "journalpost",
-            Command::AvsluttSak(_) => "sak",
-        };
 
         // Extract Client Reference
         let client_reference = self.extract_client_reference(&envelope.payload);
@@ -65,7 +54,7 @@ impl IngestCommandService {
                     command_id,
                     client_ref,
                     skuffen_id,
-                    entity_type.to_string(),
+                    &envelope.payload,
                     None, // arkiv_id unknown yet
                 )
                 .await
@@ -76,11 +65,10 @@ impl IngestCommandService {
                 for doc in documents {
                     let doc_skuffen_id = Uuid::now_v7();
                     self.id_mapping
-                        .register_mapping(
+                        .register_document_mapping(
                             command_id,
                             doc.client_reference,
                             doc_skuffen_id,
-                            "dokument".to_string(),
                             None,
                         )
                         .await

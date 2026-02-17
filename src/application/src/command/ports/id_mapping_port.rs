@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use lib_schemas::skuffen::command::commands::Command;
 use uuid::Uuid;
 
 #[async_trait]
@@ -14,7 +15,15 @@ pub trait IdMappingRepository: Send + Sync {
         command_id: Uuid,
         client_reference: Uuid,
         skuffen_id: Uuid,
-        entity_type: String,
+        command: &Command,
+        arkiv_id: Option<String>,
+    ) -> Result<(), anyhow::Error>;
+
+    async fn register_document_mapping(
+        &self,
+        command_id: Uuid,
+        client_reference: Uuid,
+        skuffen_id: Uuid,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error>;
 
