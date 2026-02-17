@@ -12,13 +12,13 @@ The project adheres to a **Hexagonal Architecture** with **CQRS**, implemented v
 
 | Path | Layer | Role | Key Components |
 | :--- | :--- | :--- | :--- |
-| `src/domain/` | **Domain** | Core Business Logic | Entities (`Sak`, `Journalpost`), Value Objects, Operations (`journalfør.rs`). **Pure Rust, no I/O.** |
+| `src/domain/` | **Domain** | Core Business Logic | Entities (`Sak`, `Journalpost`), Value Objects. **Pure Rust, no I/O.** |
 | `src/application/` | **Application** | Use Cases & Plugins | Ports (`SakPort`), Services (`HentSakService`). Orchestrates Domain <-> Infra. |
 | `src/infrastructure/` | **Infrastructure** | Concrete Impls | NATS Listeners (`listener.rs`), DB adapters, Repositories (`SikriRepository`). |
 | `crates/sikri_client/` | **Client** | External Client | Low-level HTTP client for Sikri API (`api.rs`). |
 
 ### 3. Observability & Replayability (NATS JetStream)
-**All state changes and operations shall be stored on a JetStream on NATS as JSON.**
+**All state changes and command results shall be stored on a JetStream on NATS as JSON.**
 - This serves as the source of truth for all changes in the system.
 - Enables better debugging and replaying of events.
 - General Guideline: If something enters the domain/application layers and causes a change, that change explicitly be reflected in a JetStream stream.
@@ -43,9 +43,8 @@ Encapsulates all business rules.
     *   **Types**: `Inngående`, `Utgående`, `InterntNotat`.
     *   **Status**: `Registrert` → `Reservert` → `Midlertidig` → `Ferdig` → `Ekspedert` → `Journalført`.
 
-#### Operations
-Atomic actions aimed at the archive (e.g., `journalfør`, `avskriv`, `legg_til_vedlegg`, `opprett_sak`).
-Located in `src/domain/src/model/operasjon/`.
+#### Commands
+Domain logic is expressed through commands that are validated against state and business rules before execution.
 
 ### Application Layer (`src/application/src/ports`)
 Defines the "Shape" of the application via Ports (Traits) and Use Cases.

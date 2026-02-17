@@ -12,7 +12,7 @@ This skill provides access to architecture documentation, command mappings, and 
 The following resources are available in the `resources` directory:
 
 ### Commands and Queries
-- **Commands**: [commands.md](resources/command/commands.md) - Documentation for commands (Opprett sak, Opprett Journalpost, etc.) and their operations.
+- **Commands**: [commands.md](resources/command/commands.md) - Documentation for commands (Opprett sak, Opprett Journalpost, etc.).
 - **Queries**: [query.md](resources/command/query.md) - Documentation for queries (Hent sak, Hent Journalpost, etc.).
 - **Visual Mapping**: `resources/command/Skuffen - Kommando mapping til Operasjon.svg`
 
