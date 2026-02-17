@@ -2,7 +2,7 @@
 use async_trait::async_trait;
 use domain::model::journalpost::{Journalpost, JournalpostKey};
 
-use crate::ports::use_cases::HentJournalpostUseCase;
+use crate::query::ports::use_cases::HentJournalpostUseCase;
 
 #[async_trait]
 pub trait JournalpostRepository {

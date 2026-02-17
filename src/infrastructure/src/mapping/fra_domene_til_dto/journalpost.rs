@@ -1,8 +1,7 @@
 use anyhow::Result;
-use lib_schemas::skuffen::{
-    journalpost::{JournalpostResponse, JournalpostType, Journalpoststatus},
-    tilgang::Tilgang,
-};
+use lib_schemas::skuffen::journalpost::{JournalpostId, JournalpostType, Journalpoststatus};
+use lib_schemas::skuffen::query::responses::JournalpostResponse;
+use lib_schemas::skuffen::tilgang::Tilgang;
 
 use crate::mapping::fra_domene_til_dto::dokument::from_domain_dokument_to_dto;
 
@@ -10,19 +9,19 @@ pub fn from_domain_journalpost_to_dto(
     domain_journalpost: domain::model::journalpost::Journalpost,
 ) -> Result<JournalpostResponse> {
     let journalpost_response = JournalpostResponse {
-        client_reference: domain_journalpost.client_reference,
         tittel: domain_journalpost.tittel,
         dokument_dato: domain_journalpost.dokument_dato,
         journalposttype: from_domain_journalposttype_to_dto(domain_journalpost.journalposttype),
         journalstatus: from_domain_journalpoststatus_to_dto(domain_journalpost.journalstatus),
         tilgang: from_domain_tilgang_to_dto(domain_journalpost.tilgang),
-        saksbehandler: domain_journalpost.saksbehandler,
+        saksbehandler: Some(domain_journalpost.saksbehandler),
+        saksbehandler_enhet: None,
         dokumenter: domain_journalpost
             .dokumenter
             .iter()
             .map(|doc| from_domain_dokument_to_dto(doc.clone()))
             .collect(),
-        journalpost_id: domain_journalpost.journalpost_id,
+        journalpost_id: JournalpostId(domain_journalpost.journalpost_id.to_string()),
         kildesystem: domain_journalpost.kildesystem.unwrap_or_default(),
     };
     Ok(journalpost_response)

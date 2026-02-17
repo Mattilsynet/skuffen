@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use lib_schemas::skuffen::command::commands::{CommandEnvelope, CommandSequence, Kommando};
+use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
 use lib_schemas::skuffen::dokument::Dokument;
 use uuid::Uuid;
 
-use crate::ports::{
+use crate::command::ports::{
     command_dispatcher_port::CommandDispatcher, id_mapping_port::IdMappingRepository,
 };
 
@@ -32,7 +32,7 @@ impl IngestCommandService {
         Ok(())
     }
 
-    async fn process_command(&self, envelope: CommandEnvelope<Kommando>) -> Result<()> {
+    async fn process_command(&self, envelope: CommandEnvelope<Command>) -> Result<()> {
         let command_id = envelope.command_id;
 
         // 1. Check Command Idempotency
@@ -47,11 +47,11 @@ impl IngestCommandService {
         // Determine entity type based on command
         //TODO: Flyttes til database-handelern
         let entity_type = match &envelope.payload {
-            Kommando::OpprettSak(_) => "sak",
-            Kommando::OpprettInngåendeJournalpost(_)
-            | Kommando::OpprettUtgåendeJournalpost(_)
-            | Kommando::OpprettInterntNotatJournalpost(_) => "journalpost",
-            Kommando::AvsluttSak(_) => "sak",
+            Command::OpprettSak(_) => "sak",
+            Command::OpprettInngåendeJournalpost(_)
+            | Command::OpprettUtgåendeJournalpost(_)
+            | Command::OpprettInterntNotatJournalpost(_) => "journalpost",
+            Command::AvsluttSak(_) => "sak",
         };
 
         // Extract Client Reference
@@ -103,21 +103,21 @@ impl IngestCommandService {
         Ok(())
     }
 
-    fn extract_client_reference(&self, command: &Kommando) -> Option<Uuid> {
+    fn extract_client_reference(&self, command: &Command) -> Option<Uuid> {
         match command {
-            Kommando::OpprettSak(c) => Some(c.client_reference),
-            Kommando::OpprettInngåendeJournalpost(c) => Some(c.felles.client_reference),
-            Kommando::OpprettUtgåendeJournalpost(c) => Some(c.felles.client_reference),
-            Kommando::OpprettInterntNotatJournalpost(c) => Some(c.felles.client_reference),
-            Kommando::AvsluttSak(_) => None, // No new client reference
+            Command::OpprettSak(c) => Some(c.client_reference),
+            Command::OpprettInngåendeJournalpost(c) => Some(c.felles.client_reference),
+            Command::OpprettUtgåendeJournalpost(c) => Some(c.felles.client_reference),
+            Command::OpprettInterntNotatJournalpost(c) => Some(c.felles.client_reference),
+            Command::AvsluttSak(_) => None, // No new client reference
         }
     }
 
-    fn extract_documents<'a>(&self, command: &'a Kommando) -> Option<&'a Vec<Dokument>> {
+    fn extract_documents<'a>(&self, command: &'a Command) -> Option<&'a Vec<Dokument>> {
         match command {
-            Kommando::OpprettInngåendeJournalpost(c) => Some(&c.felles.dokumenter),
-            Kommando::OpprettUtgåendeJournalpost(c) => Some(&c.felles.dokumenter),
-            Kommando::OpprettInterntNotatJournalpost(c) => Some(&c.felles.dokumenter),
+            Command::OpprettInngåendeJournalpost(c) => Some(&c.felles.dokumenter),
+            Command::OpprettUtgåendeJournalpost(c) => Some(&c.felles.dokumenter),
+            Command::OpprettInterntNotatJournalpost(c) => Some(&c.felles.dokumenter),
             _ => None,
         }
     }

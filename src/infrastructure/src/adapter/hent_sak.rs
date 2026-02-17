@@ -1,4 +1,4 @@
-use application::services::hent_sak::SakRepository;
+use application::query::services::hent_sak::SakRepository;
 use async_trait::async_trait;
 
 use crate::mapping::{self, lookup::key_mapping_queries::lookup_arkiv_id_fra_skuffen_id};

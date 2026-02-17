@@ -1,8 +1,8 @@
-use crate::ports::command_dispatcher_port::CommandDispatcher;
-use crate::ports::id_mapping_port::IdMappingRepository;
-use crate::services::ingest_command::IngestCommandService;
+use crate::command::ports::command_dispatcher_port::CommandDispatcher;
+use crate::command::ports::id_mapping_port::IdMappingRepository;
+use crate::command::services::ingest_command::IngestCommandService;
 use async_trait::async_trait;
-use lib_schemas::skuffen::command::commands::{CommandEnvelope, CommandSequence, Kommando};
+use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost,
     OpprettUgåendeJournalpost,
@@ -70,13 +70,13 @@ impl IdMappingRepository for FakeIdMappingRepository {
 
 #[derive(Clone, Default)]
 struct FakeCommandDispatcher {
-    pub dispatched: Arc<Mutex<Vec<CommandEnvelope<Kommando>>>>,
+    pub dispatched: Arc<Mutex<Vec<CommandEnvelope<Command>>>>,
     pub should_fail: bool,
 }
 
 #[async_trait]
 impl CommandDispatcher for FakeCommandDispatcher {
-    async fn dispatch(&self, command: &CommandEnvelope<Kommando>) -> Result<(), anyhow::Error> {
+    async fn dispatch(&self, command: &CommandEnvelope<Command>) -> Result<(), anyhow::Error> {
         if self.should_fail {
             return Err(anyhow::anyhow!("NATS Error"));
         }
@@ -95,7 +95,7 @@ async fn test_ingest_command_opprett_sak_success() {
     let fake_dispatcher = FakeCommandDispatcher::default();
 
     let command_id = Uuid::new_v4();
-    let command = Kommando::OpprettSak(OpprettSak {
+    let command = Command::OpprettSak(OpprettSak {
         client_reference: Uuid::new_v4(),
         sakstittel: Sakstittel("Test Sak".to_string()),
         ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
@@ -147,7 +147,7 @@ async fn test_ingest_command_journalpost_success() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = Kommando::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+    let command = Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Inngående brev".to_string(),
@@ -202,7 +202,7 @@ async fn test_ingest_command_idempotency_duplicate_command() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = Kommando::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+    let command = Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Inngående brev".to_string(),
@@ -262,7 +262,7 @@ async fn test_ingest_command_mapping_failure() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = Kommando::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+    let command = Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Inngående brev".to_string(),
@@ -315,7 +315,7 @@ async fn test_ingest_command_dispatch_failure() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = Kommando::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+    let command = Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Inngående brev".to_string(),
@@ -367,7 +367,7 @@ async fn test_ingest_command_utgående_journalpost_success() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = Kommando::OpprettUtgåendeJournalpost(OpprettUgåendeJournalpost {
+    let command = Command::OpprettUtgåendeJournalpost(OpprettUgåendeJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Utgående brev".to_string(),
@@ -423,7 +423,7 @@ async fn test_ingest_command_internt_notat_journalpost_success() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = Kommando::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
+    let command = Command::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Internt notat".to_string(),

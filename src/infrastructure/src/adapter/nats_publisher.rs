@@ -1,7 +1,7 @@
 use crate::nats::client::NatsClient;
-use application::ports::command_dispatcher_port::CommandDispatcher;
+use application::command::ports::command_dispatcher_port::CommandDispatcher;
 use async_trait::async_trait;
-use lib_schemas::skuffen::command::commands::{CommandEnvelope, Kommando};
+use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 
 #[derive(Clone)]
 pub struct NatsCommandDispatcher {
@@ -16,13 +16,13 @@ impl NatsCommandDispatcher {
 
 #[async_trait]
 impl CommandDispatcher for NatsCommandDispatcher {
-    async fn dispatch(&self, command: &CommandEnvelope<Kommando>) -> Result<(), anyhow::Error> {
+    async fn dispatch(&self, command: &CommandEnvelope<Command>) -> Result<(), anyhow::Error> {
         let entity_type = match &command.payload {
-            Kommando::OpprettSak(_) => "sak",
-            Kommando::OpprettInngåendeJournalpost(_)
-            | Kommando::OpprettUtgåendeJournalpost(_)
-            | Kommando::OpprettInterntNotatJournalpost(_) => "journalpost",
-            Kommando::AvsluttSak(_) => "sak",
+            Command::OpprettSak(_) => "sak",
+            Command::OpprettInngåendeJournalpost(_)
+            | Command::OpprettUtgåendeJournalpost(_)
+            | Command::OpprettInterntNotatJournalpost(_) => "journalpost",
+            Command::AvsluttSak(_) => "sak",
         };
 
         let subject = format!("skuffen.stream.command.{}", entity_type);

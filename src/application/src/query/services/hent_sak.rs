@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use async_trait::async_trait;
 use domain::model::sak::{Sak, SakKey};
 
-use crate::ports::use_cases::HentSakUseCase;
+use crate::query::ports::use_cases::HentSakUseCase;
 
 #[async_trait]
 pub trait SakRepository {

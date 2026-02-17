@@ -2,10 +2,9 @@ use std::fmt::Debug;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use lib_schemas::skuffen::{
-    journalpost::JournalpostResponse,
-    query::queries::{HentJournalpostQuery, HentSakQuery},
-    sak::SakResponse,
+use lib_schemas::skuffen::query::{
+    queries::{HentJournalpostQuery, HentSakQuery},
+    responses::{JournalpostResponse, SakResponse},
 };
 use tracing::{error, info};
 
@@ -29,13 +28,13 @@ pub trait UseCase<Request, Response> {
 #[async_trait]
 impl<T> UseCase<HentSakQuery, SakResponse> for T
 where
-    T: application::ports::use_cases::HentSakUseCase + Send + Sync,
+    T: application::query::ports::use_cases::HentSakUseCase + Send + Sync,
 {
     async fn handle(&self, req: HentSakQuery) -> Result<SakResponse, anyhow::Error> {
-        let domain_sak = application::ports::use_cases::HentSakUseCase::handle(
+        let domain_sak = application::query::ports::use_cases::HentSakUseCase::handle(
             self,
             from_dto_sak_key_to_domain(req.key).await?,
-            req.inkluder_journalposter,
+            false,
         )
         .await?;
         let response = from_domain_sak_to_dto(domain_sak).await?;
@@ -46,13 +45,13 @@ where
 #[async_trait]
 impl<T> UseCase<HentJournalpostQuery, JournalpostResponse> for T
 where
-    T: application::ports::use_cases::HentJournalpostUseCase + Send + Sync,
+    T: application::query::ports::use_cases::HentJournalpostUseCase + Send + Sync,
 {
     async fn handle(
         &self,
         req: HentJournalpostQuery,
     ) -> Result<JournalpostResponse, anyhow::Error> {
-        let domain_journalpost = application::ports::use_cases::HentJournalpostUseCase::handle(
+        let domain_journalpost = application::query::ports::use_cases::HentJournalpostUseCase::handle(
             self,
             from_dto_journalpost_key_to_domain(req.key)?,
         )

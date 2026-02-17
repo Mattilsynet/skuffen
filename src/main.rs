@@ -1,4 +1,4 @@
-use application::services::hent_sak::HentSakService;
+use application::query::services::hent_sak::HentSakService;
 use infrastructure::{
     adapter::hent_sak::SikriRepository,
     http::health_check::health_check,
@@ -6,7 +6,7 @@ use infrastructure::{
     telemetry::{get_subscriber, init_subscriber},
 };
 use lib_schemas::skuffen::query::queries::HentSakQuery;
-use lib_schemas::skuffen::sak::SakResponse;
+use lib_schemas::skuffen::query::responses::SakResponse;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
     let nats_dispatcher =
         infrastructure::adapter::nats_publisher::NatsCommandDispatcher::new(nats.clone());
 
-    let command_service = application::services::ingest_command::IngestCommandService::new(
+    let command_service = application::command::services::ingest_command::IngestCommandService::new(
         Box::new(id_mapping_repo),
         Box::new(nats_dispatcher),
     );
