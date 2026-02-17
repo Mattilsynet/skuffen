@@ -16,7 +16,7 @@ impl NatsClient {
         let mut options = ConnectOptions::new()
             .name(name)
             .connection_timeout(Duration::from_secs(5))
-            .require_tls(true);
+            .require_tls(config.require_tls);
 
         if let Some(ref creds) = config.credentials {
             options = options.credentials(creds.as_str()).unwrap();

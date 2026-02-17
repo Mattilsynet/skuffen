@@ -5,8 +5,38 @@
      "value": "2025/513910"
   },
   "inkluderJournalposter": true
-}
+ }
 '
+
+## Manuell E2E test via lokal NATS
+
+Dette setter opp lokal Postgres + NATS, starter Skuffen lokalt og sender en request over NATS som treffer Skuffen og kaller Sikri.
+
+Krever:
+- docker
+- cargo
+- nats (CLI)
+- nats-server (anbefalt) eller Docker image for NATS
+
+Miljøvariabler som må settes (bruk faktisk verdier):
+- BASE_URL_SIKRI
+- APP_APPLICATION__PROJECT_ID
+
+Kjør:
+
+```bash
+export BASE_URL_SIKRI=""
+export APP_APPLICATION__PROJECT_ID=""
+
+./scripts/local-sikri-e2e.sh
+```
+
+Valgfrie overrides:
+- SIKRI_SAKSNR (default 2026/501415, må finnes i Sikri)
+- NATS_URL (default nats://127.0.0.1:4222)
+- DATABASE_URL eller DATABASE_* (default skuffen/skuffen/skuffen på 127.0.0.1:5433)
+- KEEP_DB=1 (behold db etter kjøring)
+- KEEP_RUNNING=1 (behold tjenester kjørende og hopp over cleanup)
 # skuffen
 
 `skuffen` er en arkiveringstjeneste som ligger mellom interne systemer i Mattilsynet og Sikri sitt arkivsystem.
