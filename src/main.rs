@@ -1,10 +1,14 @@
 use application::query::services::hent_sak::HentSakService;
 use infrastructure::{
-    adapter::hent_sak::SikriRepository,
+    command::adapter::nats_publisher::NatsCommandDispatcher,
     http::health_check::health_check,
-    nats::{listener::NatsReplier, setup::setup_nats},
+    nats::setup::setup_nats,
+    query::adapter::hent_sak::SikriRepository,
+    query::nats::listener::NatsReplier,
     telemetry::{get_subscriber, init_subscriber},
 };
+use infrastructure::command::adapter::id_mapping_postgres::PostgresIdMappingRepository;
+use infrastructure::query::mapping::lookup::key_mapping_queries;
 use lib_schemas::skuffen::query::queries::HentSakQuery;
 use lib_schemas::skuffen::query::responses::SakResponse;
 
@@ -29,23 +33,21 @@ async fn main() -> anyhow::Result<()> {
 
     // Command Ingestion Wiring
     let db_pool = infrastructure::database::setup::stup_database().await?;
-    let id_mapping_repo =
-        infrastructure::adapter::id_mapping_postgres::PostgresIdMappingRepository::new(db_pool);
+    let id_mapping_repo = PostgresIdMappingRepository::new(db_pool);
 
-    infrastructure::mapping::lookup::key_mapping_queries::init_id_mapping_repo(
-        std::sync::Arc::new(id_mapping_repo.clone()),
-    );
+    key_mapping_queries::init_id_mapping_repo(std::sync::Arc::new(id_mapping_repo.clone()));
 
-    let nats_dispatcher =
-        infrastructure::adapter::nats_publisher::NatsCommandDispatcher::new(nats.clone());
+    let nats_dispatcher = NatsCommandDispatcher::new(nats.clone());
 
     let command_service = application::command::services::ingest_command::IngestCommandService::new(
         Box::new(id_mapping_repo),
         Box::new(nats_dispatcher),
     );
 
-    let command_listener =
-        infrastructure::nats::command_listener::CommandListener::new(nats.clone(), command_service);
+    let command_listener = infrastructure::command::nats::command_listener::CommandListener::new(
+        nats.clone(),
+        command_service,
+    );
 
     // let receiver_handle =
     // let processor_handle =

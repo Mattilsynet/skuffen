@@ -4,7 +4,7 @@ use domain::model::journalpost::{JournalpostType, Journalpoststatus};
 use domain::model::tilgang::Tilgang;
 use sikri_client::domain::journalpost_response::JournalpostRespons as SikriJournalpostResponse;
 
-use crate::mapping::fra_sikri_til_domene::dokument::from_sikri_dokument_to_domain_dokument;
+use crate::query::mapping::fra_sikri_til_domene::dokument::from_sikri_dokument_to_domain_dokument;
 
 pub async fn from_sikri_journalpost_to_domain_journalpost(
     sikri_journalpost: SikriJournalpostResponse,

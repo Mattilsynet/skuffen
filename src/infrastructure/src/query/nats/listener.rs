@@ -8,16 +8,12 @@ use lib_schemas::skuffen::query::{
 };
 use tracing::{error, info};
 
-use crate::{
-    mapping::{
-        fra_domene_til_dto::{
-            journalpost::from_domain_journalpost_to_dto, sak::from_domain_sak_to_dto,
-        },
-        fra_dto_til_domene::{
-            journalpost::from_dto_journalpost_key_to_domain, sak::from_dto_sak_key_to_domain,
-        },
-    },
-    nats::{client::NatsClient, nats_response::NatsResponse},
+use crate::nats::{client::NatsClient, nats_response::NatsResponse};
+use crate::query::mapping::fra_domene_til_dto::{
+    journalpost::from_domain_journalpost_to_dto, sak::from_domain_sak_to_dto,
+};
+use crate::query::mapping::fra_dto_til_domene::{
+    journalpost::from_dto_journalpost_key_to_domain, sak::from_dto_sak_key_to_domain,
 };
 
 #[async_trait]

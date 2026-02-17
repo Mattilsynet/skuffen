@@ -6,8 +6,8 @@ use lib_schemas::skuffen::sak::{
 };
 use lib_schemas::skuffen::tilgang::Tilgang as DtoTilgang;
 
-use crate::mapping::fra_domene_til_dto::journalpost::from_domain_journalpost_to_dto;
-use crate::mapping::lookup::key_mapping_queries::lookup_arkiv_id_fra_skuffen_id;
+use crate::query::mapping::fra_domene_til_dto::journalpost::from_domain_journalpost_to_dto;
+use crate::query::mapping::lookup::key_mapping_queries::lookup_arkiv_id_fra_skuffen_id;
 
 pub async fn from_domain_sak_to_dto(sak: domain::model::sak::Sak) -> Result<DtoSak> {
     Ok(DtoSak {
