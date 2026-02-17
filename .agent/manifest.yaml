@@ -1,0 +1,44 @@
+version: 1
+language:
+  response: "Norwegian with English technical terms"
+  code_domain: "Norwegian naming for domain logic"
+  code_technical: "English naming for technical constructs"
+
+rules:
+  - id: process
+    path: .agent/rules/process.md
+    description: "Oppgavehandtering, risiko og planlegging"
+  - id: rust_and_language
+    path: .agent/rules/rust_and_language.md
+    description: "Rust coding guidelines og Norwenglish"
+
+governance:
+  - id: tasks
+    path: .agent/governance/tasks.md
+  - id: plan
+    path: .agent/governance/plan.md
+  - id: roadmap
+    path: .agent/governance/roadmap.md
+  - id: risk
+    path: .agent/governance/risk.md
+
+workflows:
+  - id: commands
+    path: .agent/workflows/commands.md
+
+skills:
+  - id: arkivfag
+    path: .agent/skills/arkivfag/SKILL.md
+    resources:
+      - .agent/skills/arkivfag/resources
+  - id: skuffen_architecture
+    path: .agent/skills/skuffen_architecture/SKILL.md
+    resources:
+      - .agent/skills/skuffen_architecture/resources
+  - id: skuffen_process
+    path: .agent/skills/skuffen_process/SKILL.md
+
+assets:
+  - id: diagrams_text
+    path: .agent/assets/diagram_text
+    description: "Tekstlige tolkninger av SVG-diagrammer"

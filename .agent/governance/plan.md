@@ -2,10 +2,10 @@
 
 Dette dokumentet detaljerer den spesifikke implementasjonsplanen for kommende funksjoner og endringer.
 
-## Nåværende Fokus: Overgang Fase 1 & 2
+## Nåværende fokus: Overgang Fase 1 & 2
 Vi ferdigstiller nå Command Ingestion og beveger oss mot Domenevalidering.
 
-### Aktiv Arbeidsstrøm
+### Aktiv arbeidsstrøm
 1.  **Command Ingestion (Fase 1)**
     - Ferdigstille NATS listener.
     - Verifisere Idempotency-sjekker.
