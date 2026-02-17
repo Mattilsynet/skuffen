@@ -1,5 +1,6 @@
 use application::command::ports::id_mapping_port::IdMappingRepository;
 use async_trait::async_trait;
+use lib_schemas::skuffen::command::commands::Command;
 use sqlx::postgres::PgPool;
 use uuid::Uuid;
 
@@ -34,9 +35,25 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         command_id: Uuid,
         client_reference: Uuid,
         skuffen_id: Uuid,
-        entity_type: String,
+        command: &Command,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
+        if let Some(existing_skuffen_id) = self.get_skuffen_id(client_reference).await? {
+            if existing_skuffen_id != skuffen_id {
+                return Err(anyhow::anyhow!(
+                    "client_reference is already mapped to a different skuffen_id"
+                ));
+            }
+            return Ok(());
+        }
+
+        let entity_type = match command {
+            Command::OpprettSak(_) | Command::AvsluttSak(_) => "sak",
+            Command::OpprettInngåendeJournalpost(_)
+            | Command::OpprettUtgåendeJournalpost(_)
+            | Command::OpprettInterntNotatJournalpost(_) => "journalpost",
+        };
+
         // Insert into id_mapping.
         // We now have distinct client_reference and command_id.
         // On conflict (client_reference): do nothing (idempotent at entity level).
@@ -51,7 +68,43 @@ impl IdMappingRepository for PostgresIdMappingRepository {
             "#,
         )
         .bind(skuffen_id)
-        .bind(entity_type.clone())
+        .bind(entity_type)
+        .bind(client_reference)
+        .bind(arkiv_id)
+        .bind(command_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn register_document_mapping(
+        &self,
+        command_id: Uuid,
+        client_reference: Uuid,
+        skuffen_id: Uuid,
+        arkiv_id: Option<String>,
+    ) -> Result<(), anyhow::Error> {
+        if let Some(existing_skuffen_id) = self.get_skuffen_id(client_reference).await? {
+            if existing_skuffen_id != skuffen_id {
+                return Err(anyhow::anyhow!(
+                    "client_reference is already mapped to a different skuffen_id"
+                ));
+            }
+            return Ok(());
+        }
+
+        let entity_type = "dokument";
+
+        sqlx::query(
+            r#"
+            INSERT INTO id_mapping (skuffen_id, entity_type, client_reference, arkiv_id, command_id)
+            VALUES ($1, $2::entity_type, $3, $4, $5)
+            ON CONFLICT (client_reference) DO NOTHING
+            "#,
+        )
+        .bind(skuffen_id)
+        .bind(entity_type)
         .bind(client_reference)
         .bind(arkiv_id)
         .bind(command_id)
