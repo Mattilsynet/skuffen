@@ -6,7 +6,7 @@ use uuid::Uuid;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use application::ports::id_mapping_port::IdMappingRepository;
+use application::command::ports::id_mapping_port::IdMappingRepository;
 
 static ID_MAPPING_REPO: OnceLock<Arc<dyn IdMappingRepository + Send + Sync>> = OnceLock::new();
 

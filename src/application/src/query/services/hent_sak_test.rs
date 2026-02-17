@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use crate::ports::use_cases::HentSakUseCase;
-    use crate::services::hent_sak::{HentSakService, SakRepository};
+    use crate::query::ports::use_cases::HentSakUseCase;
+    use crate::query::services::hent_sak::{HentSakService, SakRepository};
     use async_trait::async_trait;
     use domain::model::sak::{Ordningsverdi, Sak, SakKey, Saksstatus, Sakstittel};
     use std::collections::HashMap;

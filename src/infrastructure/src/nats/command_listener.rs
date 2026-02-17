@@ -1,8 +1,8 @@
 use crate::nats::client::NatsClient;
 use crate::nats::nats_response::NatsResponse;
-use application::services::ingest_command::IngestCommandService;
+use application::command::services::ingest_command::IngestCommandService;
 use futures::StreamExt;
-use lib_schemas::skuffen::command::commands::{CommandEnvelope, CommandSequence, Kommando};
+use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
 use tracing::{error, info};
 
 pub struct CommandListener {
@@ -37,8 +37,8 @@ impl CommandListener {
                 }
             };
 
-            // Deserialize Vec<CommandEnvelope<Kommando>>
-            let commands: Vec<CommandEnvelope<Kommando>> =
+            // Deserialize Vec<CommandEnvelope<Command>>
+            let commands: Vec<CommandEnvelope<Command>> =
                 match serde_json::from_slice(&msg.payload) {
                     Ok(c) => c,
                     Err(e) => {

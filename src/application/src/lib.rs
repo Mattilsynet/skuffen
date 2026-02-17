@@ -1,2 +1,2 @@
-pub mod ports;
-pub mod services;
+pub mod command;
+pub mod query;

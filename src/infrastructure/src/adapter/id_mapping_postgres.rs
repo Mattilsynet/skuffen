@@ -1,4 +1,4 @@
-use application::ports::id_mapping_port::IdMappingRepository;
+use application::command::ports::id_mapping_port::IdMappingRepository;
 use async_trait::async_trait;
 use sqlx::postgres::PgPool;
 use uuid::Uuid;
