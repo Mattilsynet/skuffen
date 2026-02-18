@@ -94,6 +94,22 @@ All integrasjon skjer over **NATS**.
 - Ingen JWT over NATS
 - Klienter publiserer meldinger og lytter på svar
 
+### NATS subjects og streams
+
+Request-reply:
+- `arkiv.arkiver` (kommandoer). Request: `Vec<CommandEnvelope<Command>>`. Reply: JSON-status (forelopig `NatsResponse<()>`).
+- `arkiv.admin` (administrative funksjoner).
+
+JetStream (til klienter):
+- Stream: `arkiv_status` (subject: `arkiv.status`). Payload: `CommandStatusEvent`. Retention: 180 dager.
+
+Interne JetStreams (med `commandId` i subject for enklere debugging, retention 180 dager):
+- Stream: `arkiv_command_inbox` (subject: `arkiv.command.inbox.<entity>.<commandId>`)
+- Stream: `arkiv_command_ready` (subject: `arkiv.command.ready.<entity>.<commandId>`)
+- Stream: `arkiv_command_done` (subject: `arkiv.command.done.<entity>.<commandId>`)
+
+`<entity>` er `sak` eller `journalpost`.
+
 ---
 
 ## Data- og meldingsmodell

@@ -16,7 +16,7 @@ impl CommandListener {
     }
 
     pub async fn run(&self) -> anyhow::Result<()> {
-        let subject = "skuffen.command.submit";
+        let subject = "arkiv.arkiver";
         info!("Listening for command batches on '{}'", subject);
 
         // Queue group 'skuffen-command-processor' for load balancing if scaled

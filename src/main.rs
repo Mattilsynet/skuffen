@@ -1,6 +1,11 @@
 use application::query::services::hent_sak::HentSakService;
 use infrastructure::{
-    command::adapter::nats_publisher::NatsCommandDispatcher,
+    command::adapter::{
+        nats_publisher::NatsCommandDispatcher,
+        nats_status_publisher::NatsCommandStatusPublisher,
+        nats_validated_publisher::NatsValidatedCommandDispatcher,
+        sikri_command_state_repo::SikriCommandStateRepository,
+    },
     http::health_check::health_check,
     nats::setup::setup_nats,
     query::adapter::hent_sak::SikriRepository,
@@ -49,12 +54,26 @@ async fn main() -> anyhow::Result<()> {
         command_service,
     );
 
+    let validator_service = application::command::services::validate_command::ValidateCommandService::new(
+        Box::new(SikriCommandStateRepository),
+        Box::new(id_mapping_repo.clone()),
+        Box::new(NatsValidatedCommandDispatcher::new(nats.clone())),
+        Box::new(NatsCommandStatusPublisher::new(nats.clone())),
+    );
+
+    let validator_listener =
+        infrastructure::command::nats::validation_listener::CommandValidationListener::new(
+            nats.clone(),
+            validator_service,
+        );
+
     // let receiver_handle =
     // let processor_handle =
     let _ = tokio::join!(
         health_check_handle,
         hent_sak_replier.run(),
         command_listener.run(),
+        validator_listener.run(),
         // receiver_handle,
         // processor_handle,
     );
