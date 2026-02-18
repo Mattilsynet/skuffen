@@ -81,6 +81,7 @@ pub async fn get_sak(
         .with_context(|| "Feil ved parsing av JSON-respons for get_sak()")
 }
 
+
 pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposterResponse> {
     let _ = data.validate();
 

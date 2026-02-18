@@ -1,33 +1,36 @@
 use crate::nats::client::NatsClient;
-use application::command::ports::command_dispatcher_port::CommandDispatcher;
+use async_nats::jetstream::{self, PublishMessage};
 use async_trait::async_trait;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use async_nats::jetstream::{self, PublishMessage};
+
+#[async_trait]
+pub trait DoneCommandDispatcher: Send + Sync {
+    async fn dispatch_done(&self, command: &CommandEnvelope<Command>) -> Result<(), anyhow::Error>;
+}
 
 #[derive(Clone)]
-pub struct NatsCommandDispatcher {
+pub struct NatsDoneCommandDispatcher {
     client: NatsClient,
 }
 
-impl NatsCommandDispatcher {
+impl NatsDoneCommandDispatcher {
     pub fn new(client: NatsClient) -> Self {
         Self { client }
     }
 }
 
 #[async_trait]
-impl CommandDispatcher for NatsCommandDispatcher {
-    async fn dispatch(&self, command: &CommandEnvelope<Command>) -> Result<(), anyhow::Error> {
+impl DoneCommandDispatcher for NatsDoneCommandDispatcher {
+    async fn dispatch_done(&self, command: &CommandEnvelope<Command>) -> Result<(), anyhow::Error> {
         let entity_type = match &command.payload {
-            Command::OpprettSak(_) => "sak",
+            Command::OpprettSak(_) | Command::AvsluttSak(_) => "sak",
             Command::OpprettInngåendeJournalpost(_)
             | Command::OpprettUtgåendeJournalpost(_)
             | Command::OpprettInterntNotatJournalpost(_) => "journalpost",
-            Command::AvsluttSak(_) => "sak",
         };
 
         let subject = format!(
-            "arkiv.command.inbox.{}.{}",
+            "arkiv.command.done.{}.{}",
             entity_type, command.command_id
         );
         let payload = serde_json::to_vec(command)?;
