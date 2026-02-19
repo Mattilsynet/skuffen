@@ -149,6 +149,14 @@ done
 SKUFFEN_ID="$(make_uuid)"
 CLIENT_REFERENCE="$(make_uuid)"
 COMMAND_ID="$(make_uuid)"
+CORRELATION_ID="$(make_uuid)"
+COMMAND_ID_OPPRETT_SAK="$(make_uuid)"
+COMMAND_ID_JOURNALPOST="$(make_uuid)"
+COMMAND_ID_AVSLUTT_SAK="$(make_uuid)"
+SAK_CLIENT_REFERENCE="$(make_uuid)"
+JOURNALPOST_CLIENT_REFERENCE="$(make_uuid)"
+DOKUMENT_CLIENT_REFERENCE="$(make_uuid)"
+DOKUMENT_REFERANSE="$(make_uuid)"
 
 log "Seeding id_mapping with sak $SIKRI_SAKSNR"
 docker exec -i "$DB_CONTAINER" psql -U "$DATABASE_USER" -d "$DATABASE_NAME" \
@@ -163,12 +171,12 @@ SQL
 
 log "Starting local NATS"
 if command -v nats-server >/dev/null 2>&1; then
-  nats-server -p "$NATS_PORT" -m "$NATS_MONITOR_PORT" > "$NATS_LOG" 2>&1 &
+  nats-server -js -p "$NATS_PORT" -m "$NATS_MONITOR_PORT" > "$NATS_LOG" 2>&1 &
   NATS_PID="$!"
 else
   NATS_CONTAINER="skuffen-local-nats"
   docker run -d --name "$NATS_CONTAINER" -p "$NATS_PORT":4222 -p "$NATS_MONITOR_PORT":8222 nats:2.10.7 \
-    -p 4222 -m 8222 >/dev/null
+    -js -p 4222 -m 8222 >/dev/null
 fi
 
 log "Starting skuffen"
@@ -214,6 +222,87 @@ fi
 if printf '%s' "$NATS_RESPONSE" | grep -q '"status":"Error"'; then
   log "Sikri request returned Error."
   log "Check SIKRI_SAKSNR, BASE_URL_SIKRI, and secret access."
+  exit 1
+fi
+
+DOKUMENT_FILE="$TMP_DIR/vedlegg.txt"
+printf '%s\n' "Skuffen testvedlegg" > "$DOKUMENT_FILE"
+
+log "Uploading media to arkiv_media"
+nats --server "$NATS_URL" object put arkiv_media "$DOKUMENT_REFERANSE" "$DOKUMENT_FILE"
+
+COMMAND_SEQUENCE_PAYLOAD=$(cat <<JSON
+[
+  {
+    "command_id": "${COMMAND_ID_OPPRETT_SAK}",
+    "correlation_id": "${CORRELATION_ID}",
+    "payload": {
+      "OpprettSak": {
+        "client_reference": "${SAK_CLIENT_REFERENCE}",
+        "sakstittel": "Skuffen E2E test",
+        "arkivdel": "Tilsynsdivisjonene",
+        "saksbehandler_id": "Z12345",
+        "saksbehandler_enhet": "42",
+        "ordningsverdi": "123"
+      }
+    }
+  },
+  {
+    "command_id": "${COMMAND_ID_JOURNALPOST}",
+    "correlation_id": "${CORRELATION_ID}",
+    "payload": {
+      "OpprettInterntNotatJournalpost": {
+        "client_reference": "${JOURNALPOST_CLIENT_REFERENCE}",
+        "tittel": "Internt notat",
+        "dokument_dato": "2025-01-01",
+        "saksbehandler": "Z12345",
+        "saksbehandler_enhet": "42",
+        "dokumenter": [
+          {
+            "client_reference": "${DOKUMENT_CLIENT_REFERENCE}",
+            "tittel": "Vedlegg",
+            "filtype": "PDF",
+            "dokument_referanse": "${DOKUMENT_REFERANSE}"
+          }
+        ],
+        "sak_key": {
+          "type": "clientReference",
+          "value": "${SAK_CLIENT_REFERENCE}"
+        }
+      }
+    }
+  },
+  {
+    "command_id": "${COMMAND_ID_AVSLUTT_SAK}",
+    "correlation_id": "${CORRELATION_ID}",
+    "payload": {
+      "AvsluttSak": {
+        "sak_key": {
+          "type": "clientReference",
+          "value": "${SAK_CLIENT_REFERENCE}"
+        }
+      }
+    }
+  }
+]
+JSON
+)
+
+log "Sending NATS request to arkiv.arkiver"
+set +e
+COMMAND_RESPONSE=$(nats --server "$NATS_URL" request arkiv.arkiver "$COMMAND_SEQUENCE_PAYLOAD")
+COMMAND_STATUS=$?
+set -e
+
+printf '%s\n' "$COMMAND_RESPONSE"
+
+if [[ $COMMAND_STATUS -ne 0 ]]; then
+  log "NATS request failed with exit code $COMMAND_STATUS"
+  exit $COMMAND_STATUS
+fi
+
+if printf '%s' "$COMMAND_RESPONSE" | grep -q '"status":"Error"'; then
+  log "Command sequence returned Error."
   exit 1
 fi
 

@@ -1,5 +1,8 @@
+use crate::dto::elements_journalpost::{ElementsJournalpost, ElementsJournalpostRespons};
 use crate::dto::elements_sak::ElementsSak;
 use crate::dto::elements_sak_response::ElementsSakMedJournalposterResponse;
+use crate::dto::elements_dokument::ElementsDokument;
+use crate::dto::elements_dokument_response::ElementsDokumentRespons;
 use crate::secret::get_secret;
 use anyhow::{Context, Result};
 use reqwest::Client;
@@ -100,4 +103,99 @@ pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposter
     resp.json::<ElementsSakMedJournalposterResponse>()
         .await
         .with_context(|| "Feil ved parsing av JSON-respons for create_sak()")
+}
+
+pub async fn opprett_journalpost(
+    journalpost: ElementsJournalpost,
+    saksnummer: &str,
+) -> Result<ElementsJournalpostRespons> {
+    let (username, password) = hent_brukernavn_passord_sikri().await?;
+    let url = format!("{}/api/Archive/OpprettJournalpost", base_url());
+    let resp = Client::new()
+        .post(&url)
+        .basic_auth(username, Some(password))
+        .query(&[("saksnr", saksnummer)])
+        .json(&journalpost)
+        .send()
+        .await
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?
+        .error_for_status()
+        .with_context(|| format!("Server svarte med feil for POST {url}"))?;
+
+    resp.json::<ElementsJournalpostRespons>()
+        .await
+        .with_context(|| "Feil ved parsing av JSON-respons for opprett_journalpost()")
+}
+
+pub async fn legg_til_vedlegg(
+    journalpost_id: i32,
+    dokumenter: Vec<ElementsDokument>,
+) -> Result<Vec<ElementsDokumentRespons>> {
+    let (username, password) = hent_brukernavn_passord_sikri().await?;
+    let url = format!("{}/api/Archive/LeggTilVedlegg", base_url());
+    let resp = Client::new()
+        .post(&url)
+        .basic_auth(username, Some(password))
+        .query(&[("journalpostId", journalpost_id.to_string())])
+        .json(&dokumenter)
+        .send()
+        .await
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?
+        .error_for_status()
+        .with_context(|| format!("Server svarte med feil for POST {url}"))?;
+
+    resp.json::<Vec<ElementsDokumentRespons>>()
+        .await
+        .with_context(|| "Feil ved parsing av JSON-respons for legg_til_vedlegg()")
+}
+
+pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Result<()> {
+    let (username, password) = hent_brukernavn_passord_sikri().await?;
+    let url = format!("{}/api/Archive/SettJournalpostStatus", base_url());
+    Client::new()
+        .post(&url)
+        .basic_auth(username, Some(password))
+        .query(&[
+            ("journalpostId", journalpost_id.to_string()),
+            ("status", status.to_string()),
+        ])
+        .send()
+        .await
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?
+        .error_for_status()
+        .with_context(|| format!("Server svarte med feil for POST {url}"))?;
+    Ok(())
+}
+
+pub async fn avskriv_journalpost(journalpost_id: i32, avskrivingsmaate: &str) -> Result<()> {
+    let (username, password) = hent_brukernavn_passord_sikri().await?;
+    let url = format!("{}/api/Archive/AvskrivJournalpost", base_url());
+    Client::new()
+        .post(&url)
+        .basic_auth(username, Some(password))
+        .query(&[
+            ("journalpostId", journalpost_id.to_string()),
+            ("avskrivingsmaate", avskrivingsmaate.to_string()),
+        ])
+        .send()
+        .await
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?
+        .error_for_status()
+        .with_context(|| format!("Server svarte med feil for POST {url}"))?;
+    Ok(())
+}
+
+pub async fn avslutt_sak(saksnummer: &str) -> Result<()> {
+    let (username, password) = hent_brukernavn_passord_sikri().await?;
+    let url = format!("{}/api/Archive/AvsluttArkivsak", base_url());
+    Client::new()
+        .post(&url)
+        .basic_auth(username, Some(password))
+        .query(&[("saksnr", saksnummer)])
+        .send()
+        .await
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?
+        .error_for_status()
+        .with_context(|| format!("Server svarte med feil for POST {url}"))?;
+    Ok(())
 }

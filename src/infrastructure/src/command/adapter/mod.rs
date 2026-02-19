@@ -1,5 +1,8 @@
 pub mod id_mapping_postgres;
+pub mod eksekvering_state_postgres;
+pub mod sikri_arkiv_gateway;
 pub mod nats_done_publisher;
+pub mod nats_eksekvering_status_publisher;
 pub mod nats_publisher;
 pub mod nats_status_publisher;
 pub mod nats_validated_publisher;

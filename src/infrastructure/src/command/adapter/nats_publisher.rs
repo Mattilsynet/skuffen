@@ -2,7 +2,7 @@ use crate::nats::client::NatsClient;
 use application::command::ports::command_dispatcher_port::CommandDispatcher;
 use async_trait::async_trait;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use async_nats::jetstream::{self, PublishMessage};
+use async_nats::jetstream::{self, message::PublishMessage};
 
 #[derive(Clone)]
 pub struct NatsCommandDispatcher {

@@ -103,6 +103,14 @@ impl IdMappingRepository for FakeIdMappingRepository {
         Ok(())
     }
 
+    async fn oppdater_arkiv_id_for_client_reference(
+        &self,
+        _client_reference: Uuid,
+        _arkiv_id: String,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
     async fn get_arkiv_id(&self, _skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
         Ok(None)
     }
