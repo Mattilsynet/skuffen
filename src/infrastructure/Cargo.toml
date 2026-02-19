@@ -21,7 +21,7 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 ] }
 
 tokio = { version = "1.39", features = ["macros", "rt-multi-thread", "time"] }
-futures = "0.3.31"
+futures = "0.3.32"
 async-trait = "0.1.89"
 axum = "0.8"
 dotenvy = "0.15.7"
