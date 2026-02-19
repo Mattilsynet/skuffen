@@ -1,11 +1,10 @@
 use async_trait::async_trait;
-use async_nats::jetstream::object_store::ObjectStore;
+use async_nats::jetstream::object_store::{InfoErrorKind, ObjectStore};
 use uuid::Uuid;
 
-use lib_nats::error::Error as NatsError;
-use lib_nats::object_store;
+use bytes::Bytes;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MediaFile {
     pub id: Uuid,
     pub data: Vec<u8>,
@@ -19,7 +18,7 @@ pub trait MediaStore: Send + Sync {
     async fn exists(&self, id: Uuid) -> Result<bool, anyhow::Error>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ObjectStoreMediaStore {
     store: ObjectStore,
 }
@@ -34,15 +33,18 @@ impl ObjectStoreMediaStore {
 impl MediaStore for ObjectStoreMediaStore {
     async fn save(&self, file: MediaFile) -> Result<(), anyhow::Error> {
         let object_name = file.id.to_string();
-        object_store::store_bytes(&self.store, &object_name, &file.data).await?;
+        let mut reader = std::io::Cursor::new(Bytes::from(file.data));
+        self.store.put(object_name.as_str(), &mut reader).await?;
         Ok(())
     }
 
     async fn exists(&self, id: Uuid) -> Result<bool, anyhow::Error> {
         let object_name = id.to_string();
-        match object_store::object_info(&self.store, &object_name).await {
+        match self.store.info(object_name.as_str()).await {
             Ok(_) => Ok(true),
-            Err(NatsError::NotFoundError(_)) => Ok(false),
+            Err(err) if matches!(err.kind(), InfoErrorKind::NotFound) => {
+                Ok(false)
+            }
             Err(err) => Err(anyhow::anyhow!(err)),
         }
     }

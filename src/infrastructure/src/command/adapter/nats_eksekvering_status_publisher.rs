@@ -1,44 +1,40 @@
 use crate::nats::client::NatsClient;
-use application::command::ports::eksekvering_port::EksekveringKvitteringPublisher;
+use application::command::ports::eksekvering_port::EksekveringStatusPublisher;
 use async_nats::jetstream::{self, message::PublishMessage};
 use async_trait::async_trait;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+use lib_schemas::skuffen::command::commands::CommandStatusEvent;
 
 #[derive(Clone)]
-pub struct NatsDonePublisher {
+pub struct NatsEksekveringStatusPublisher {
     client: NatsClient,
 }
 
-impl NatsDonePublisher {
+impl NatsEksekveringStatusPublisher {
     pub fn new(client: NatsClient) -> Self {
         Self { client }
     }
 }
 
 #[async_trait]
-impl EksekveringKvitteringPublisher for NatsDonePublisher {
-    async fn publiser_done(
-        &self,
-        subject: &str,
-        command: &CommandEnvelope<Command>,
-    ) -> Result<(), anyhow::Error> {
-        let payload = serde_json::to_vec(command)?;
+impl EksekveringStatusPublisher for NatsEksekveringStatusPublisher {
+    async fn publiser_status(&self, event: CommandStatusEvent) -> Result<(), anyhow::Error> {
+        let subject = "arkiv.status";
+        let payload = serde_json::to_vec(&event)?;
         let jetstream = jetstream::new(self.client.inner().clone());
         jetstream
             .get_or_create_stream(jetstream::stream::Config {
-                name: "arkiv_command_done".to_string(),
-                subjects: vec!["arkiv.command.done.>".to_string()],
+                name: "arkiv_status".to_string(),
+                subjects: vec!["arkiv.status".to_string()],
                 max_age: std::time::Duration::from_secs(60 * 60 * 24 * 180),
                 ..Default::default()
             })
             .await?;
-        let subject = subject.to_string();
         jetstream
             .send_publish(
                 subject,
                 PublishMessage::build()
                     .payload(payload.into())
-                    .message_id(command.command_id.to_string()),
+                    .message_id(event.command_id.to_string()),
             )
             .await?
             .await?;

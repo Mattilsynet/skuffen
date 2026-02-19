@@ -114,6 +114,33 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         Ok(())
     }
 
+    async fn oppdater_arkiv_id_for_client_reference(
+        &self,
+        client_reference: Uuid,
+        arkiv_id: String,
+    ) -> Result<(), anyhow::Error> {
+        let result = sqlx::query(
+            r#"
+            UPDATE id_mapping
+            SET arkiv_id = $1
+            WHERE client_reference = $2
+            "#,
+        )
+        .bind(arkiv_id)
+        .bind(client_reference)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(anyhow::anyhow!(
+                "Fant ikke id_mapping for client_reference {}",
+                client_reference
+            ));
+        }
+
+        Ok(())
+    }
+
     async fn get_arkiv_id(&self, skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
         let arkiv_id: Option<String> = sqlx::query_scalar(
             r#"

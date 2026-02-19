@@ -1,5 +1,5 @@
-use crate::model::tilgang::Tilgang;
 use crate::model::sak::{Arkivdel, Saksbehandler};
+use crate::model::tilgang::Tilgang;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct OpprettSak {

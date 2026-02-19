@@ -27,6 +27,12 @@ pub trait IdMappingRepository: Send + Sync {
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error>;
 
+    async fn oppdater_arkiv_id_for_client_reference(
+        &self,
+        client_reference: Uuid,
+        arkiv_id: String,
+    ) -> Result<(), anyhow::Error>;
+
     async fn get_arkiv_id(&self, skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error>;
 
     async fn get_skuffen_id(&self, client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error>;

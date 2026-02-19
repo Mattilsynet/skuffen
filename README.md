@@ -112,6 +112,19 @@ Interne JetStreams (med `commandId` i subject for enklere debugging, retention 1
 
 ---
 
+## Eksekvering av kommandoer
+
+Se design og domenelogikk i `docs/command_executor.md`.
+
+## Retry- og eksekveringsmodell
+
+- NATS `arkiv.command.ready.*` brukes kun til innlesing. Meldingen ACKes når kommandoen er lagret i `command_execution`.
+- Eksekvering og retries styres av en intern worker som poller DB etter `pending/retrying/blocked` hvor `next_retry_at <= now()`.
+- Worker tar lås med `FOR UPDATE SKIP LOCKED` slik at flere workere ikke tar samme kommando.
+- `command_execution.payload` er den varige kilden; planen bygges på nytt for hvert forsøk.
+
+---
+
 ## Data- og meldingsmodell
 
 ### Sekvens
@@ -204,11 +217,8 @@ Avslutting kan ikke skje før alle journalposter er ferdig behandlet; avsrevet o
 Inngående / interne:
 Opprettet → Journalført → Avskrevet
 
-Utgående med utsending:
-Opprettet → Ferdigstilt → Sendt → Journalført → Avskrevet
-
 Utgående uten utsending:
-Opprettet → Ferdigstilt → Journalført → Avskrevet
+Opprettet → Journalført
 
 
 

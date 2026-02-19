@@ -22,9 +22,8 @@ async fn hent_sak_e2e_henter_secrets_og_kaller_api() {
             "https://services09.elementscloud.no/test/MattilsynetArkivApiTestCloud",
         );
     }
-    unsafe {
-        set_var("APP_APPLICATION__PROJECT_ID", "arkiv-test-605d");
-    }
+    let _ = env::var("APP_APPLICATION__PROJECT_ID")
+        .expect("APP_APPLICATION__PROJECT_ID må være satt (GCP prosjekt-ID)");
 
     // Miljøvariabler som må være satt
     let project_id = env::var("APP_APPLICATION__PROJECT_ID")
@@ -62,9 +61,8 @@ async fn hent_sak_e2e_henter_secrets_og_kaller_api_med_saksnummer_som_ikke_finne
             "https://services09.elementscloud.no/test/MattilsynetArkivApiTestCloud",
         );
     }
-    unsafe {
-        set_var("APP_APPLICATION__PROJECT_ID", "arkiv-test-605d");
-    }
+    let _ = env::var("APP_APPLICATION__PROJECT_ID")
+        .expect("APP_APPLICATION__PROJECT_ID må være satt (GCP prosjekt-ID)");
 
     let project_id = env::var("APP_APPLICATION__PROJECT_ID")
         .expect("APP_APPLICATION__PROJECT_ID må være satt (GCP prosjekt-ID)");
