@@ -4,15 +4,25 @@ use application::command::services::ingest_command::IngestCommandService;
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
 use tracing::{error, info};
+use crate::command::media::MediaStore;
 
 pub struct CommandListener {
     client: NatsClient,
     service: IngestCommandService,
+    media_store: std::sync::Arc<dyn MediaStore>,
 }
 
 impl CommandListener {
-    pub fn new(client: NatsClient, service: IngestCommandService) -> Self {
-        Self { client, service }
+    pub fn new(
+        client: NatsClient,
+        service: IngestCommandService,
+        media_store: std::sync::Arc<dyn MediaStore>,
+    ) -> Self {
+        Self {
+            client,
+            service,
+            media_store,
+        }
     }
 
     pub async fn run(&self) -> anyhow::Result<()> {
@@ -57,6 +67,20 @@ impl CommandListener {
                     }
                 };
 
+            if let Err(err) = self.validate_media(&commands).await {
+                error!("Media validation failed: {err}");
+                let response = NatsResponse::<()>::Error {
+                    message: format!("Media validation failed: {err}"),
+                };
+                let payload = serde_json::to_vec(&response).unwrap_or_default();
+                let _ = self
+                    .client
+                    .inner()
+                    .publish(reply_subject, payload.into())
+                    .await;
+                continue;
+            }
+
             // Validate sequence (Infrastructure responsibility: Parse/Validate input structure)
             let sequence = match CommandSequence::try_from(commands) {
                 Ok(seq) => seq,
@@ -75,7 +99,6 @@ impl CommandListener {
                 }
             };
 
-            // Ingest
             // Ingest
             match self.service.handle(sequence).await {
                 Ok(_) => {
@@ -100,6 +123,57 @@ impl CommandListener {
                         .publish(reply_subject, payload.into())
                         .await;
                 }
+            }
+        }
+        Ok(())
+    }
+
+    async fn validate_media(
+        &self,
+        commands: &[CommandEnvelope<Command>],
+    ) -> Result<(), String> {
+        let mut missing: Vec<String> = Vec::new();
+
+        for envelope in commands {
+            match &envelope.payload {
+                Command::OpprettInngåendeJournalpost(command) => {
+                    self.validate_media_references(&command.felles.dokumenter, &mut missing)
+                        .await?;
+                }
+                Command::OpprettUtgåendeJournalpost(command) => {
+                    self.validate_media_references(&command.felles.dokumenter, &mut missing)
+                        .await?;
+                }
+                Command::OpprettInterntNotatJournalpost(command) => {
+                    self.validate_media_references(&command.felles.dokumenter, &mut missing)
+                        .await?;
+                }
+                Command::OpprettSak(_) | Command::AvsluttSak(_) => {}
+            }
+        }
+
+        if missing.is_empty() {
+            return Ok(());
+        }
+
+        let list = missing.join(", ");
+        Err(format!("Missing media: {list}"))
+    }
+
+    async fn validate_media_references(
+        &self,
+        dokumenter: &[lib_schemas::skuffen::dokument::Dokument],
+        missing: &mut Vec<String>,
+    ) -> Result<(), String> {
+        for dokument in dokumenter {
+            let id = dokument.dokument_referanse;
+            let exists = self
+                .media_store
+                .exists(id)
+                .await
+                .map_err(|err| err.to_string())?;
+            if !exists {
+                missing.push(id.to_string());
             }
         }
         Ok(())

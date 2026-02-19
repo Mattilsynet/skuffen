@@ -48,6 +48,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "domain",
  "lib-schemas",
  "thiserror 2.0.18",
@@ -57,9 +58,9 @@ dependencies = [
 
 [[package]]
 name = "async-nats"
-version = "0.45.0"
+version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86dde77d8a733a9dbaf865a9eb65c72e09c88f3d14d3dd0d2aecf511920ee4fe"
+checksum = "df5af9ebfb0a14481d3eaf6101e6391261e4f30d25b26a7635ade8a39482ded0"
 dependencies = [
  "base64",
  "bytes",
@@ -74,7 +75,7 @@ dependencies = [
  "regex",
  "ring",
  "rustls-native-certs 0.7.3",
- "rustls-pemfile",
+ "rustls-pki-types",
  "rustls-webpki 0.102.8",
  "serde",
  "serde_json",
@@ -429,6 +430,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "lib-schemas",
  "uuid",
 ]
 
@@ -1132,12 +1134,14 @@ dependencies = [
  "domain",
  "dotenvy",
  "futures",
+ "lib-nats",
  "lib-schemas",
  "lib-sql",
  "opentelemetry",
  "opentelemetry-http",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "reqwest",
  "serde",
  "serde_json",
  "sikri_client",
@@ -1209,9 +1213,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
+name = "lib-nats"
+version = "0.1.0"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#7977948d6931c34a94e26f5ab6d544a87dc4aa0c"
+dependencies = [
+ "async-nats",
+ "bytes",
+ "futures",
+ "secrecy",
+ "uuid",
+]
+
+[[package]]
 name = "lib-schemas"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#ed21dcbaf3a15990d834eb1e85632ecd82523f41"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#7977948d6931c34a94e26f5ab6d544a87dc4aa0c"
 dependencies = [
  "chrono",
  "serde",
@@ -2296,6 +2312,7 @@ dependencies = [
  "domain",
  "dotenvy",
  "infrastructure",
+ "lib-nats",
  "lib-schemas",
  "serde",
  "thiserror 2.0.18",
@@ -2625,7 +2642,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0136791f7c95b1f6dd99f9cc786b91bb81c3800b639b3478e561ddb7be95e5f1"
 dependencies = [
  "fastrand",
- "getrandom 0.4.1",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
