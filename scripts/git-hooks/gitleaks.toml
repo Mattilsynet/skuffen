@@ -1,0 +1,151 @@
+title = "Skuffen pre-push rules"
+
+[[rules]]
+id = "internal-project-id"
+description = "Block internal project IDs"
+regex = "(?i)(arkiv|skuffen|mattilsynet)[-_]?(test|dev|prod)?[-_]?\\d{3,}[a-z0-9-]*"
+tags = ["internal", "id"]
+
+[[rules]]
+id = "internal-service-account-email"
+description = "Service account emails"
+regex = "\\b[a-z0-9-]+@[a-z0-9-]+\\.iam\\.gserviceaccount\\.com\\b"
+tags = ["gcp", "email"]
+
+[[rules]]
+id = "aws-access-key-id"
+description = "AWS access key id"
+regex = "\\bAKIA[0-9A-Z]{16}\\b"
+tags = ["aws", "key"]
+
+[[rules]]
+id = "aws-secret-access-key"
+description = "AWS secret access key"
+regex = "(?i)aws(.{0,20})?(secret|access)[-_ ]?key(.{0,20})?[:=][\\s'\"]?[A-Za-z0-9/+=]{40}"
+tags = ["aws", "secret"]
+
+[[rules]]
+id = "github-pat"
+description = "GitHub personal access token"
+regex = "\\bghp_[A-Za-z0-9]{36}\\b"
+tags = ["github", "token"]
+
+[[rules]]
+id = "github-oauth"
+description = "GitHub OAuth/access token"
+regex = "\\bgho_[A-Za-z0-9]{36}\\b|\\bghu_[A-Za-z0-9]{36}\\b|\\bghs_[A-Za-z0-9]{36}\\b|\\bghr_[A-Za-z0-9]{36}\\b"
+tags = ["github", "token"]
+
+[[rules]]
+id = "github-fine-grained"
+description = "GitHub fine-grained token"
+regex = "\\bgithub_pat_[A-Za-z0-9_]{82}\\b"
+tags = ["github", "token"]
+
+[[rules]]
+id = "gitlab-pat"
+description = "GitLab personal access token"
+regex = "\\bglpat-[A-Za-z0-9_-]{20,}\\b"
+tags = ["gitlab", "token"]
+
+[[rules]]
+id = "slack-token"
+description = "Slack token"
+regex = "\\bxox[baprs]-[A-Za-z0-9-]{10,48}\\b"
+tags = ["slack", "token"]
+
+[[rules]]
+id = "jwt"
+description = "JWT"
+regex = "\\beyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\b"
+tags = ["jwt", "token"]
+
+[[rules]]
+id = "private-key-block"
+description = "Private key blocks"
+regex = "-----BEGIN (RSA|EC|OPENSSH|DSA|ED25519) PRIVATE KEY-----"
+tags = ["key", "private"]
+
+[[rules]]
+id = "database-url"
+description = "Database connection URL"
+regex = "(?i)\\b(postgres|postgresql|mysql|mariadb|mongodb|redis)://[^$\\s][^\\s]*\\b"
+tags = ["database", "url"]
+
+[[rules]]
+id = "google-api-key"
+description = "Google API key"
+regex = "\\bAIza[0-9A-Za-z_-]{35}\\b"
+tags = ["gcp", "key"]
+
+[[rules]]
+id = "service-account-json"
+description = "GCP service account private key"
+regex = "(?i)\\\"private_key\\\"\\s*:\\s*\\\"-----BEGIN PRIVATE KEY-----"
+tags = ["gcp", "key"]
+
+[[rules]]
+id = "stripe-secret"
+description = "Stripe secret key"
+regex = "\\bsk_live_[0-9a-zA-Z]{24}\\b"
+tags = ["stripe", "secret"]
+
+[[rules]]
+id = "sendgrid-key"
+description = "SendGrid API key"
+regex = "\\bSG\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b"
+tags = ["sendgrid", "key"]
+
+[[rules]]
+id = "twilio-api-key"
+description = "Twilio API key"
+regex = "\\bSK[0-9a-fA-F]{32}\\b"
+tags = ["twilio", "key"]
+
+[[rules]]
+id = "twilio-account-sid"
+description = "Twilio account SID"
+regex = "\\bAC[0-9a-fA-F]{32}\\b"
+tags = ["twilio", "id"]
+
+[[rules]]
+id = "mailgun-key"
+description = "Mailgun key"
+regex = "\\bkey-[0-9a-fA-F]{32}\\b"
+tags = ["mailgun", "key"]
+
+[[rules]]
+id = "azure-storage-connection-string"
+description = "Azure storage connection string"
+regex = "DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[^;]+;EndpointSuffix=[^\\s;]+"
+tags = ["azure", "connection"]
+
+[[rules]]
+id = "sentry-dsn"
+description = "Sentry DSN"
+regex = "https://[0-9a-f]{32}@o\\d+\\.ingest\\.sentry\\.io/\\d+"
+tags = ["sentry", "dsn"]
+
+[[rules]]
+id = "nats-credentials"
+description = "NATS credentials file content"
+regex = "-----BEGIN NATS USER JWT-----"
+tags = ["nats", "credentials"]
+
+[[rules]]
+id = "basic-auth"
+description = "Basic auth credentials"
+regex = "(?i)\\bAuthorization:\\s*Basic\\s+[A-Za-z0-9+/=]{8,}\\b"
+tags = ["auth", "basic"]
+
+[[rules]]
+id = "bearer-token"
+description = "Bearer token"
+regex = "(?i)\\bAuthorization:\\s*Bearer\\s+[A-Za-z0-9._-]{16,}\\b"
+tags = ["auth", "bearer"]
+
+[allowlist]
+paths = [
+  "scripts/git-hooks/gitleaks.toml",
+  "scripts/git-hooks/forbidden-patterns.txt"
+]

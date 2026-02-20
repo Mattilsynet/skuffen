@@ -18,15 +18,15 @@ Krever:
 - nats (CLI)
 - nats-server (anbefalt) eller Docker image for NATS
 
-Miljøvariabler som må settes (bruk faktisk verdier):
+Miljøvariabler som må settes:
 - BASE_URL_SIKRI
 - APP_APPLICATION__PROJECT_ID
 
 Kjør:
 
 ```bash
-export BASE_URL_SIKRI=""
-export APP_APPLICATION__PROJECT_ID=""
+export BASE_URL_SIKRI="<sikri-base-url>"
+export APP_APPLICATION__PROJECT_ID="<project-id>"
 
 ./scripts/local-sikri-e2e.sh
 ```
@@ -37,6 +37,24 @@ Valgfrie overrides:
 - DATABASE_URL eller DATABASE_* (default skuffen/skuffen/skuffen på 127.0.0.1:5433)
 - KEEP_DB=1 (behold db etter kjøring)
 - KEEP_RUNNING=1 (behold tjenester kjørende og hopp over cleanup)
+
+## Git hooks (pre-push)
+
+For å hindre at interne IDs eller secrets havner i historikken, installer pre-push hooken:
+
+```bash
+scripts/git-hooks/install.sh
+```
+
+Hvis du faar "permission denied", bruk:
+
+```bash
+chmod +x scripts/git-hooks/install.sh
+./scripts/git-hooks/install.sh
+```
+
+Hooken bruker `gitleaks` hvis den er installert, og i tillegg en felles liste over
+forbudte patterns fra `scripts/git-hooks/forbidden-patterns.txt` (i repoet).
 # skuffen
 
 `skuffen` er en arkiveringstjeneste som ligger mellom interne systemer i Mattilsynet og Sikri sitt arkivsystem.

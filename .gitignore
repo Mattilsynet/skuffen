@@ -27,6 +27,7 @@ Thumbs.db
 # Miljøfiler og hemmeligheter
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 

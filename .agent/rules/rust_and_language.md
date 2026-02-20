@@ -35,3 +35,12 @@ Regler for hvordan kode og kommunikasjon skal se ut i Skuffen.
    - **Traits:** `From`, `Into`, `Default`, `Display`.
    - **Tekniske variabler:** `request`, `response`, `ctx`, `stream`.
 4. **Kommentarer:** Skriv kommentarer på norsk.
+
+## Secrets, variables, IDs
+
+1. **Ingen hardkoding:** Ikke hardkod interne project IDs, bucket names, tokens, eller andre drifts- og miljøverdier i kode, tester eller dokumentasjon.
+2. **Miljovariabler:** Alle slike verdier skal settes via env vars lokalt og via GitHub Actions secrets/vars i CI.
+3. **Testverdier:** Bruk kun syntetiske placeholders i tester (f.eks. `example-project-id`). Aldri bruk ekte interne IDs.
+4. **Dokumentasjon:** Bruk generiske eksempler (`<project-id>`, `your-project-id`), aldri reelle verdier.
+5. **.env hygiene:** Lokale .env-filer skal ikke commits; hold dem i .gitignore og del eksempler som `.env.example` uten ekte verdier.
+6. **Pre-commit sjekk:** Sjekk for utilsiktede verdier i diff/logg for sentrale env-navn/ID-er for hver PR.

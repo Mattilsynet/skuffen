@@ -1,0 +1,21 @@
+# One regex per line (PCRE). Use patterns only, no exact values.
+# Keep this generic and non-sensitive.
+
+# Internal IDs (pattern-based)
+(arkiv|skuffen|mattilsynet)[-_]?(test|dev|prod)?[-_]?[0-9]{3,}[a-z0-9-]*
+
+# NATS creds markers
+-----BEGIN NATS USER JWT-----
+-----BEGIN USER NKEY SEED-----
+
+# Private keys
+-----BEGIN (RSA|EC|OPENSSH|DSA|ED25519) PRIVATE KEY-----
+
+# Tokens
+\bghp_[A-Za-z0-9]{36}\b
+\bgithub_pat_[A-Za-z0-9_]{82}\b
+\bxox[baprs]-[A-Za-z0-9-]{10,48}\b
+\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b
+
+# Common connection URLs
+(postgres|postgresql|mysql|mariadb|mongodb|redis)://[^$\s][^\s]*\b

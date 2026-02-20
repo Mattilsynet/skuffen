@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+SHARED_RULES="${REPO_ROOT}/scripts/git-hooks/forbidden-patterns.txt"
+
+RULES_FILES=()
+if [[ -f "${SHARED_RULES}" ]]; then
+  RULES_FILES+=("${SHARED_RULES}")
+fi
+
+RANGES=()
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [[ "${local_sha}" == "0000000000000000000000000000000000000000" ]]; then
+    continue
+  fi
+  if [[ "${remote_sha}" == "0000000000000000000000000000000000000000" ]]; then
+    RANGES+=("${local_sha}")
+  else
+    if git rev-parse -q --verify "${remote_sha}^{commit}" >/dev/null 2>&1; then
+      RANGES+=("${remote_sha}..${local_sha}")
+    else
+      echo "pre-push: remote base not found for ${remote_ref}; scanning from ${local_sha}" >&2
+      RANGES+=("${local_sha}")
+    fi
+  fi
+done
+
+if [[ ${#RANGES[@]} -eq 0 ]]; then
+  RANGES=("HEAD")
+fi
+
+GITLEAKS_CONFIG="${REPO_ROOT}/scripts/git-hooks/gitleaks.toml"
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "pre-push: working tree not clean; skipping gitleaks" >&2
+  else
+  if [[ -f "${GITLEAKS_CONFIG}" ]]; then
+    for range in "${RANGES[@]}"; do
+      gitleaks detect --source "${REPO_ROOT}" --no-banner --redact --log-opts="${range}" --config "${GITLEAKS_CONFIG}"
+    done
+  else
+    echo "pre-push: gitleaks.toml not found; running default rules only" >&2
+    for range in "${RANGES[@]}"; do
+      gitleaks detect --source "${REPO_ROOT}" --no-banner --redact --log-opts="${range}"
+    done
+  fi
+  fi
+else
+  echo "pre-push: gitleaks not found; skipping secrets scan" >&2
+fi
+
+if [[ ${#RULES_FILES[@]} -gt 0 ]]; then
+  for rules_file in "${RULES_FILES[@]}"; do
+    while IFS= read -r rule; do
+      if [[ -z "${rule}" || "${rule}" == \#* ]]; then
+        continue
+      fi
+      for range in "${RANGES[@]}"; do
+        if git log -p -G "${rule}" "${range}" -- . \
+          ":(exclude)scripts/git-hooks/forbidden-patterns.txt" \
+          ":(exclude)scripts/git-hooks/gitleaks.toml" \
+          ":(exclude)scripts/git-hooks/pre-push" \
+          ":(exclude)scripts/git-hooks/install.sh" \
+          | grep -q "^commit"; then
+          echo "pre-push: forbidden pattern detected: ${rule}" >&2
+          echo "pre-push: update ${rules_file} or clean history before pushing." >&2
+          exit 1
+        fi
+      done
+    done < "${rules_file}"
+  done
+else
+  echo "pre-push: no forbidden-patterns.txt found; skipping pattern scan" >&2
+fi
+
+if command -v cargo >/dev/null 2>&1; then
+  if git diff --quiet && git diff --cached --quiet; then
+    CHANGED_FILES=()
+    for range in "${RANGES[@]}"; do
+      if [[ "${range}" == *".."* ]]; then
+        while IFS= read -r file; do
+          [[ -n "${file}" ]] && CHANGED_FILES+=("${file}")
+        done < <(git diff --name-only "${range}")
+      else
+        while IFS= read -r file; do
+          [[ -n "${file}" ]] && CHANGED_FILES+=("${file}")
+        done < <(git show --name-only --pretty="" "${range}")
+      fi
+    done
+
+    if printf '%s\n' "${CHANGED_FILES[@]}" | grep -Eq '(^|/)(Cargo\.toml|Cargo\.lock)$|\.rs$|(^|/)rustfmt\.toml$'; then
+      cargo fmt --check
+      cargo check
+      cargo test
+    else
+      echo "pre-push: no Rust changes in push range; skipping fmt/check/test" >&2
+    fi
+  else
+    echo "pre-push: working tree not clean; skipping fmt/check/test" >&2
+  fi
+else
+  echo "pre-push: cargo not found; skipping fmt/check/test" >&2
+fi
+
+exit 0
