@@ -28,10 +28,7 @@ impl ValidatedCommandDispatcher for NatsValidatedCommandDispatcher {
             | Command::OpprettInterntNotatJournalpost(_) => "journalpost",
         };
 
-        let subject = format!(
-            "arkiv.command.ready.{}.{}",
-            entity_type, command.command_id
-        );
+        let subject = format!("arkiv.command.ready.{}.{}", entity_type, command.command_id);
         let payload = serde_json::to_vec(command)?;
 
         let jetstream = jetstream::new(self.client.inner().clone());

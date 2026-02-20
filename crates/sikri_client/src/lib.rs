@@ -5,10 +5,10 @@ mod secret;
 
 use crate::domain::ny_sak::NySak;
 use crate::domain::sak::SakRespons;
-use crate::dto::elements_sak::ElementsSak;
-use crate::dto::elements_journalpost::{ElementsJournalpost, ElementsJournalpostRespons};
 use crate::dto::elements_dokument::ElementsDokument;
 use crate::dto::elements_dokument_response::ElementsDokumentRespons;
+use crate::dto::elements_journalpost::{ElementsJournalpost, ElementsJournalpostRespons};
+use crate::dto::elements_sak::ElementsSak;
 
 pub async fn alive() -> anyhow::Result<()> {
     api::alive().await
@@ -47,7 +47,10 @@ pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> anyho
     api::sett_journalpost_status(journalpost_id, status).await
 }
 
-pub async fn avskriv_journalpost(journalpost_id: i32, avskrivingsmaate: &str) -> anyhow::Result<()> {
+pub async fn avskriv_journalpost(
+    journalpost_id: i32,
+    avskrivingsmaate: &str,
+) -> anyhow::Result<()> {
     api::avskriv_journalpost(journalpost_id, avskrivingsmaate).await
 }
 

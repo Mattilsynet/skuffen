@@ -1,11 +1,13 @@
 use application::query::services::hent_sak::HentSakService;
+use infrastructure::command::adapter::id_mapping_postgres::PostgresIdMappingRepository;
+use infrastructure::command::nats::media_listener::MediaListener;
+use infrastructure::query::mapping::lookup::key_mapping_queries;
 use infrastructure::{
     command::adapter::{
         eksekvering_state_postgres::PostgresEksekveringStateRepository,
         nats_done_publisher::NatsDonePublisher,
         nats_eksekvering_status_publisher::NatsEksekveringStatusPublisher,
-        nats_publisher::NatsCommandDispatcher,
-        nats_status_publisher::NatsCommandStatusPublisher,
+        nats_publisher::NatsCommandDispatcher, nats_status_publisher::NatsCommandStatusPublisher,
         nats_validated_publisher::NatsValidatedCommandDispatcher,
         sikri_arkiv_gateway::SikriArkivGateway,
         sikri_command_state_repo::SikriCommandStateRepository,
@@ -17,10 +19,7 @@ use infrastructure::{
     query::nats::listener::NatsReplier,
     telemetry::{get_subscriber, init_subscriber},
 };
-use infrastructure::command::adapter::id_mapping_postgres::PostgresIdMappingRepository;
-use infrastructure::command::nats::media_listener::MediaListener;
 use lib_nats::jetstream;
-use infrastructure::query::mapping::lookup::key_mapping_queries;
 use lib_schemas::skuffen::query::queries::HentSakQuery;
 use lib_schemas::skuffen::query::responses::SakResponse;
 
@@ -57,10 +56,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let jetstream = jetstream::new(nats.clone().inner().clone());
-    let media_store = match jetstream
-        .get_object_store("arkiv_media")
-        .await
-    {
+    let media_store = match jetstream.get_object_store("arkiv_media").await {
         Ok(store) => store,
         Err(_) => {
             jetstream
@@ -79,12 +75,13 @@ async fn main() -> anyhow::Result<()> {
         media_store,
     );
 
-    let validator_service = application::command::services::validate_command::ValidateCommandService::new(
-        Box::new(SikriCommandStateRepository),
-        Box::new(id_mapping_repo.clone()),
-        Box::new(NatsValidatedCommandDispatcher::new(nats.clone())),
-        Box::new(NatsCommandStatusPublisher::new(nats.clone())),
-    );
+    let validator_service =
+        application::command::services::validate_command::ValidateCommandService::new(
+            Box::new(SikriCommandStateRepository),
+            Box::new(id_mapping_repo.clone()),
+            Box::new(NatsValidatedCommandDispatcher::new(nats.clone())),
+            Box::new(NatsCommandStatusPublisher::new(nats.clone())),
+        );
 
     let validator_listener =
         infrastructure::command::nats::validation_listener::CommandValidationListener::new(
@@ -93,25 +90,28 @@ async fn main() -> anyhow::Result<()> {
         );
 
     let eksekvering_state_repo = PostgresEksekveringStateRepository::new(db_pool.clone());
-    let eksekvering_service = application::command::services::eksekver_kommando::EksekverKommandoService::new(
-        Box::new(eksekvering_state_repo.clone()),
-        Box::new(SikriArkivGateway::new()),
-        Box::new(NatsEksekveringStatusPublisher::new(nats.clone())),
-        Box::new(NatsDonePublisher::new(nats.clone())),
-        Box::new(id_mapping_repo.clone()),
-    );
-    let eksekvering_listener = infrastructure::command::nats::eksekvering_listener::KommandoEksekveringListener::new(
-        nats.clone(),
-        Box::new(eksekvering_state_repo.clone()),
-    );
+    let eksekvering_service =
+        application::command::services::eksekver_kommando::EksekverKommandoService::new(
+            Box::new(eksekvering_state_repo.clone()),
+            Box::new(SikriArkivGateway::new()),
+            Box::new(NatsEksekveringStatusPublisher::new(nats.clone())),
+            Box::new(NatsDonePublisher::new(nats.clone())),
+            Box::new(id_mapping_repo.clone()),
+        );
+    let eksekvering_listener =
+        infrastructure::command::nats::eksekvering_listener::KommandoEksekveringListener::new(
+            nats.clone(),
+            Box::new(eksekvering_state_repo.clone()),
+        );
 
-    let eksekvering_worker = application::command::services::eksekvering_worker::EksekveringWorker::new(
-        Box::new(eksekvering_state_repo),
-        eksekvering_service,
-        "worker-1".to_string(),
-        std::time::Duration::from_secs(5),
-        10,
-    );
+    let eksekvering_worker =
+        application::command::services::eksekvering_worker::EksekveringWorker::new(
+            Box::new(eksekvering_state_repo),
+            eksekvering_service,
+            "worker-1".to_string(),
+            std::time::Duration::from_secs(5),
+            10,
+        );
 
     // let receiver_handle =
     // let processor_handle =

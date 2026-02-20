@@ -4,21 +4,31 @@ use anyhow::Result;
 use async_nats::jetstream;
 use bytes::Bytes;
 use futures::StreamExt;
-use lib_nats::chunked_upload::protocol::{build_chunk_headers, split_payload, ChunkedUploadConfig, UploadMetadata};
+use lib_nats::chunked_upload::protocol::{
+    build_chunk_headers, split_payload, ChunkedUploadConfig, UploadMetadata,
+};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use lib_schemas::skuffen::command::journalpost::{JournalpostCommon, OpprettInterntNotatJournalpost};
+use lib_schemas::skuffen::command::journalpost::{
+    JournalpostCommon, OpprettInterntNotatJournalpost,
+};
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::dokument::Dokument;
 use lib_schemas::skuffen::query::queries::SakKey;
-use sqlx::PgPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use testcontainers::{core::WaitFor, runners::AsyncRunner, ContainerAsync, GenericImage, RunnableImage};
+use sqlx::PgPool;
+use testcontainers::{
+    core::WaitFor, runners::AsyncRunner, ContainerAsync, GenericImage, RunnableImage,
+};
 use testcontainers_modules::postgres::Postgres;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use application::command::ports::command_state_port::{CommandStateError, CommandStateRepository, SakState};
-use application::command::ports::eksekvering_port::{ArkivGateway, OpprettJournalpostResultat, Utsendingsvalg};
+use application::command::ports::command_state_port::{
+    CommandStateError, CommandStateRepository, SakState,
+};
+use application::command::ports::eksekvering_port::{
+    ArkivGateway, OpprettJournalpostResultat, Utsendingsvalg,
+};
 use application::command::services::eksekver_kommando::EksekverKommandoService;
 use application::command::services::eksekvering_worker::EksekveringWorker;
 use application::command::services::ingest_command::IngestCommandService;
@@ -53,7 +63,10 @@ struct FakeArkivGateway;
 
 #[async_trait::async_trait]
 impl ArkivGateway for FakeArkivGateway {
-    async fn opprett_sak(&self, _command: &CommandEnvelope<Command>) -> Result<String, anyhow::Error> {
+    async fn opprett_sak(
+        &self,
+        _command: &CommandEnvelope<Command>,
+    ) -> Result<String, anyhow::Error> {
         Ok("2026/900001".to_string())
     }
 
@@ -63,7 +76,9 @@ impl ArkivGateway for FakeArkivGateway {
         _saksnummer: &str,
         _utsending: Option<Utsendingsvalg>,
     ) -> Result<OpprettJournalpostResultat, anyhow::Error> {
-        Ok(OpprettJournalpostResultat { journalpost_id: 12345 })
+        Ok(OpprettJournalpostResultat {
+            journalpost_id: 12345,
+        })
     }
 
     async fn legg_til_vedlegg(
@@ -103,7 +118,13 @@ fn nats_image() -> RunnableImage<GenericImage> {
             .with_exposed_port(8222)
             .with_wait_for(WaitFor::message_on_stdout("Server is ready")),
     )
-    .with_args(vec!["-js".to_string(), "-p".to_string(), "4222".to_string(), "-m".to_string(), "8222".to_string()])
+    .with_args(vec![
+        "-js".to_string(),
+        "-p".to_string(),
+        "4222".to_string(),
+        "-m".to_string(),
+        "8222".to_string(),
+    ])
 }
 
 async fn setup_postgres() -> Result<(ContainerAsync<Postgres>, PgConnectOptions)> {
@@ -193,8 +214,10 @@ async fn start_skuffen_runtime(
         Box::new(NatsDonePublisher::new(nats_client.clone())),
         Box::new(id_mapping_repo),
     );
-    let eksekvering_listener =
-        KommandoEksekveringListener::new(nats_client.clone(), Box::new(eksekvering_state_repo.clone()));
+    let eksekvering_listener = KommandoEksekveringListener::new(
+        nats_client.clone(),
+        Box::new(eksekvering_state_repo.clone()),
+    );
     let eksekvering_worker = EksekveringWorker::new(
         Box::new(eksekvering_state_repo),
         eksekvering_service,
@@ -241,13 +264,8 @@ async fn publish_media(nats_url: &str, dokument_id: Uuid) -> Result<()> {
     let mut sub = client.subscribe(inbox.clone()).await?;
 
     for (index, chunk) in chunks.into_iter().enumerate() {
-        let headers = build_chunk_headers(
-            &upload_id,
-            index as u32,
-            chunk_count,
-            total_size,
-            &metadata,
-        );
+        let headers =
+            build_chunk_headers(&upload_id, index as u32, chunk_count, total_size, &metadata);
         client
             .publish_with_reply_and_headers(
                 "arkiv.arkiver.media",
@@ -261,7 +279,10 @@ async fn publish_media(nats_url: &str, dokument_id: Uuid) -> Result<()> {
     let message = tokio::time::timeout(Duration::from_secs(5), sub.next()).await?;
     let message = message.ok_or_else(|| anyhow::anyhow!("Missing media upload response"))?;
     let response_json: serde_json::Value = serde_json::from_slice(&message.payload)?;
-    assert_eq!(response_json.get("status").and_then(|s| s.as_str()), Some("Ok"));
+    assert_eq!(
+        response_json.get("status").and_then(|s| s.as_str()),
+        Some("Ok")
+    );
     assert_eq!(
         response_json.get("payload").and_then(|p| p.as_str()),
         Some(upload_id.as_str())
@@ -383,11 +404,17 @@ async fn command_sequence_opprett_internt_notat_avslutt_sak() -> Result<()> {
     let client = async_nats::connect(nats_url.as_str()).await?;
     let response = client.request("arkiv.arkiver", payload.into()).await?;
     let response_json: serde_json::Value = serde_json::from_slice(&response.payload)?;
-    assert_eq!(response_json.get("status").and_then(|s| s.as_str()), Some("Ok"));
+    assert_eq!(
+        response_json.get("status").and_then(|s| s.as_str()),
+        Some("Ok")
+    );
 
     for envelope in &commands {
         let subject = format!("arkiv.command.done.journalpost.{}", envelope.command_id);
-        if matches!(envelope.payload, Command::OpprettSak(_) | Command::AvsluttSak(_)) {
+        if matches!(
+            envelope.payload,
+            Command::OpprettSak(_) | Command::AvsluttSak(_)
+        ) {
             let subject = format!("arkiv.command.done.sak.{}", envelope.command_id);
             wait_for_done(&nats_url, subject).await?;
         } else {
@@ -453,11 +480,17 @@ async fn command_sequence_opprett_internt_notat_avslutt_sak_sikri() -> Result<()
     let client = async_nats::connect(nats_url.as_str()).await?;
     let response = client.request("arkiv.arkiver", payload.into()).await?;
     let response_json: serde_json::Value = serde_json::from_slice(&response.payload)?;
-    assert_eq!(response_json.get("status").and_then(|s| s.as_str()), Some("Ok"));
+    assert_eq!(
+        response_json.get("status").and_then(|s| s.as_str()),
+        Some("Ok")
+    );
 
     for envelope in &commands {
         let subject = format!("arkiv.command.done.journalpost.{}", envelope.command_id);
-        if matches!(envelope.payload, Command::OpprettSak(_) | Command::AvsluttSak(_)) {
+        if matches!(
+            envelope.payload,
+            Command::OpprettSak(_) | Command::AvsluttSak(_)
+        ) {
             let subject = format!("arkiv.command.done.sak.{}", envelope.command_id);
             wait_for_done(&nats_url, subject).await?;
         } else {

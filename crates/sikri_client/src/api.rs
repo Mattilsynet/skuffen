@@ -1,8 +1,8 @@
+use crate::dto::elements_dokument::ElementsDokument;
+use crate::dto::elements_dokument_response::ElementsDokumentRespons;
 use crate::dto::elements_journalpost::{ElementsJournalpost, ElementsJournalpostRespons};
 use crate::dto::elements_sak::ElementsSak;
 use crate::dto::elements_sak_response::ElementsSakMedJournalposterResponse;
-use crate::dto::elements_dokument::ElementsDokument;
-use crate::dto::elements_dokument_response::ElementsDokumentRespons;
 use crate::secret::get_secret;
 use anyhow::{Context, Result};
 use reqwest::Client;
@@ -83,7 +83,6 @@ pub async fn get_sak(
         .await
         .with_context(|| "Feil ved parsing av JSON-respons for get_sak()")
 }
-
 
 pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposterResponse> {
     let _ = data.validate();

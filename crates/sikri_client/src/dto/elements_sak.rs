@@ -5,7 +5,6 @@ pub const JOURNALENHET: &str = "DOKSENTER";
 
 pub const DEFAULT_SAKSSTATUS: &str = "B";
 
-
 /// Represents a Sak (case) in the Sikri API.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ElementsSak {
@@ -13,7 +12,7 @@ pub struct ElementsSak {
     /// Max length: 256, Min length: 1
     pub sakstittel: String,
 
-    /// Arkivdel som saken skal opprettes i. 
+    /// Arkivdel som saken skal opprettes i.
     pub arkivdel: String,
 
     /// Journalenhet som saken skal opprettes i. Eks: DOKSENTER
@@ -44,7 +43,6 @@ pub struct ElementsSak {
     #[serde(rename = "virksomhetsmappeId", skip_serializing_if = "Option::is_none")]
     pub virksomhetsmappe_id: Option<String>,
 }
-
 
 impl From<NySak> for ElementsSak {
     fn from(src: NySak) -> Self {

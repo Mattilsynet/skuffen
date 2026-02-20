@@ -1,8 +1,8 @@
 use crate::nats::client::NatsClient;
 use application::command::ports::command_dispatcher_port::CommandDispatcher;
+use async_nats::jetstream::{self, message::PublishMessage};
 use async_trait::async_trait;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use async_nats::jetstream::{self, message::PublishMessage};
 
 #[derive(Clone)]
 pub struct NatsCommandDispatcher {
@@ -26,10 +26,7 @@ impl CommandDispatcher for NatsCommandDispatcher {
             Command::AvsluttSak(_) => "sak",
         };
 
-        let subject = format!(
-            "arkiv.command.inbox.{}.{}",
-            entity_type, command.command_id
-        );
+        let subject = format!("arkiv.command.inbox.{}.{}", entity_type, command.command_id);
         let payload = serde_json::to_vec(command)?;
 
         let jetstream = jetstream::new(self.client.inner().clone());

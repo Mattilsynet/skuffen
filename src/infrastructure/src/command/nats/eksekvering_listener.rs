@@ -1,10 +1,10 @@
-use async_nats::jetstream::{self, consumer, AckKind};
+use async_nats::jetstream::{self, AckKind, consumer};
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use tracing::{error, info};
 
-use application::command::ports::eksekvering_state_port::EksekveringStateRepository;
 use crate::nats::client::NatsClient;
+use application::command::ports::eksekvering_state_port::EksekveringStateRepository;
 
 pub struct KommandoEksekveringListener {
     client: NatsClient,
@@ -60,7 +60,8 @@ impl KommandoEksekveringListener {
                 }
             };
 
-            let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&message.payload) {
+            let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&message.payload)
+            {
                 Ok(cmd) => cmd,
                 Err(err) => {
                     error!("Failed to deserialize command: {err}");

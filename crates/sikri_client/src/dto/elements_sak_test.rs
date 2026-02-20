@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use crate::dto::elements_sak::{ElementsSak, JOURNALENHET, DEFAULT_SAKSSTATUS};
     use crate::domain::ny_sak::Arkivdel;
+    use crate::dto::elements_sak::{DEFAULT_SAKSSTATUS, ElementsSak, JOURNALENHET};
 
     #[test]
     fn validate_ok() {

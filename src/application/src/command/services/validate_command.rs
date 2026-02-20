@@ -1,10 +1,11 @@
 use anyhow::Result;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandStatus, CommandStatusEvent};
+use lib_schemas::skuffen::command::commands::{
+    Command, CommandEnvelope, CommandStatus, CommandStatusEvent,
+};
 use lib_schemas::skuffen::query::queries::SakKey;
 
 use crate::command::ports::{
-    command_state_port::CommandStateRepository,
-    id_mapping_port::IdMappingRepository,
+    command_state_port::CommandStateRepository, id_mapping_port::IdMappingRepository,
     status_publisher_port::CommandStatusPublisher,
     validated_command_dispatcher_port::ValidatedCommandDispatcher,
 };
@@ -18,7 +19,10 @@ pub enum ValidationOutcome {
 
 impl ValidationOutcome {
     pub fn is_retryable(&self) -> bool {
-        matches!(self, ValidationOutcome::Recoverable { .. } | ValidationOutcome::Blocked { .. })
+        matches!(
+            self,
+            ValidationOutcome::Recoverable { .. } | ValidationOutcome::Blocked { .. }
+        )
     }
 }
 
@@ -70,13 +74,23 @@ impl ValidateCommandService {
                 Ok(ValidationOutcome::Ok)
             }
             ValidationOutcome::Blocked { message } => {
-                self.emit_status(&envelope, CommandStatus::Blocked, Some(message.clone()), None)
-                    .await?;
+                self.emit_status(
+                    &envelope,
+                    CommandStatus::Blocked,
+                    Some(message.clone()),
+                    None,
+                )
+                .await?;
                 Ok(ValidationOutcome::Blocked { message })
             }
             ValidationOutcome::Recoverable { message } => {
-                self.emit_status(&envelope, CommandStatus::Retrying, Some(message.clone()), None)
-                    .await?;
+                self.emit_status(
+                    &envelope,
+                    CommandStatus::Retrying,
+                    Some(message.clone()),
+                    None,
+                )
+                .await?;
                 Ok(ValidationOutcome::Recoverable { message })
             }
             ValidationOutcome::Irrecoverable { message } => {
@@ -92,9 +106,7 @@ impl ValidateCommandService {
             SakKey::ClientReference(client_reference) => {
                 match self.id_mapping.get_skuffen_id(client_reference).await {
                     Ok(Some(skuffen_id)) => match self.id_mapping.get_arkiv_id(skuffen_id).await {
-                        Ok(Some(arkiv_id)) => {
-                            self.validate_sak_i_sikri(arkiv_id.as_str()).await
-                        }
+                        Ok(Some(arkiv_id)) => self.validate_sak_i_sikri(arkiv_id.as_str()).await,
                         Ok(None) => ValidationOutcome::Ok,
                         Err(err) => ValidationOutcome::Recoverable {
                             message: err.to_string(),
@@ -108,9 +120,7 @@ impl ValidateCommandService {
                     },
                 }
             }
-            SakKey::ArkivId(saksnummer) => {
-                self.validate_sak_i_sikri(saksnummer.as_str()).await
-            }
+            SakKey::ArkivId(saksnummer) => self.validate_sak_i_sikri(saksnummer.as_str()).await,
         }
     }
 

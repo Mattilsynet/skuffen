@@ -8,7 +8,7 @@ use lib_schemas::skuffen::command::journalpost::{
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::dokument::Dokument;
 use lib_schemas::skuffen::query::queries::SakKey;
-use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel, Saksnummer};
+use lib_schemas::skuffen::sak::{Ordningsverdi, Saksnummer, Sakstittel};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -419,7 +419,12 @@ async fn test_validate_journalpost_blocks_closed_sak() {
     assert!(dispatcher.dispatched.lock().unwrap().is_empty());
 
     let events = status_publisher.events.lock().unwrap();
-    assert_statuses(&events, command_id, CommandStatus::Error, Some("Sak er avsluttet"));
+    assert_statuses(
+        &events,
+        command_id,
+        CommandStatus::Error,
+        Some("Sak er avsluttet"),
+    );
 
     let calls = state_repo.calls.lock().unwrap();
     assert_eq!(calls.as_slice(), ["2025/1".to_string()]);
@@ -573,7 +578,12 @@ async fn test_validate_client_reference_lookup_error_is_retrying() {
     assert!(dispatcher.dispatched.lock().unwrap().is_empty());
 
     let events = status_publisher.events.lock().unwrap();
-    assert_statuses(&events, command_id, CommandStatus::Retrying, Some("db error"));
+    assert_statuses(
+        &events,
+        command_id,
+        CommandStatus::Retrying,
+        Some("db error"),
+    );
 }
 
 #[tokio::test]

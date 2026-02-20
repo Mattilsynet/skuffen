@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Arkivdel {
-    // Tilsynsdivisjonene må bli mappet om til SAK og 
-    // Hovedkontoret må bli mappet om til SAKHK 
+    // Tilsynsdivisjonene må bli mappet om til SAK og
+    // Hovedkontoret må bli mappet om til SAKHK
     Tilsynsdivisjonene,
     Hovedkontoret,
 }
@@ -19,16 +18,11 @@ impl Display for Arkivdel {
     }
 }
 
-
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Tilgang {
     pub tilgangskode: String,
     pub tilgangshjemmel: String,
 }
-
-
-
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NySak {
@@ -37,7 +31,7 @@ pub struct NySak {
     pub sakstittel: String,
 
     /// Arkivdel som saken skal opprettes i. Eks: MATS
-    pub arkivdel: Arkivdel  ,
+    pub arkivdel: Arkivdel,
 
     /// Saksbehandler
     pub saksbehandler_id: String,

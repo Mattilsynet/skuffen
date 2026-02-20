@@ -2,11 +2,11 @@ use application::command::ports::eksekvering_state_port::{
     DokumentState, EksekveringKommando, EksekveringStateRepository, EksekveringStatus,
     JournalpostState, SakState, SakStatus,
 };
-use sqlx::types::chrono;
 use async_trait::async_trait;
-use sqlx::postgres::PgPool;
-use uuid::Uuid;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+use sqlx::postgres::PgPool;
+use sqlx::types::chrono;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct PostgresEksekveringStateRepository {
@@ -99,10 +99,7 @@ impl EksekveringStateRepository for PostgresEksekveringStateRepository {
                 ekspedert,
                 har_feilede_dokumenter,
                 med_utsending,
-                journalposttype: journalposttype
-                    .chars()
-                    .next()
-                    .unwrap_or('I'),
+                journalposttype: journalposttype.chars().next().unwrap_or('I'),
                 journalpostnummer,
             },
         ))

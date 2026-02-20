@@ -1,7 +1,7 @@
 use async_trait::async_trait;
-use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EksekveringStatus {

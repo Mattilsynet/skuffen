@@ -47,9 +47,7 @@ fn from_domain_tilgang_to_dto(
     })
 }
 
-fn from_domain_saksstatus_to_dto(
-    domain_saksstaus: domain::model::sak::Saksstatus,
-) -> DtoSaksstaus {
+fn from_domain_saksstatus_to_dto(domain_saksstaus: domain::model::sak::Saksstatus) -> DtoSaksstaus {
     match domain_saksstaus {
         domain::model::sak::Saksstatus::UnderBehandling => DtoSaksstaus::UnderBehandling,
         domain::model::sak::Saksstatus::Ferdig => DtoSaksstaus::Ferdig,

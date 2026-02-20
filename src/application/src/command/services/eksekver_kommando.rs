@@ -7,11 +7,11 @@ use crate::command::ports::eksekvering_port::{
     ArkivGateway, EksekveringKvitteringPublisher, EksekveringStatusPublisher,
     OpprettJournalpostResultat, Utsendingsvalg,
 };
-use crate::command::ports::id_mapping_port::IdMappingRepository;
 use crate::command::ports::eksekvering_state_port::{
     DokumentState, EksekveringStateRepository, EksekveringStatus, JournalpostState, SakState,
     SakStatus,
 };
+use crate::command::ports::id_mapping_port::IdMappingRepository;
 use domain::eksekvering::plan::{EksekveringsPlan, JournalpostType, Steg, Utsending};
 use domain::eksekvering::typer::{status_event, EksekveringFeil, EksekveringFeiltype};
 
@@ -83,7 +83,10 @@ impl EksekverKommandoService {
         }
     }
 
-    pub async fn handle(&self, envelope: CommandEnvelope<Command>) -> Result<ExecutionOutcome, anyhow::Error> {
+    pub async fn handle(
+        &self,
+        envelope: CommandEnvelope<Command>,
+    ) -> Result<ExecutionOutcome, anyhow::Error> {
         self.status_publisher
             .publiser_status(status_event(&envelope, CommandStatus::Pending, None, None))
             .await?;
@@ -98,12 +101,7 @@ impl EksekverKommandoService {
         match self.execute_plan(&envelope, plan).await {
             Ok(()) => {
                 self.status_publisher
-                    .publiser_status(status_event(
-                        &envelope,
-                        CommandStatus::Ok,
-                        None,
-                        None,
-                    ))
+                    .publiser_status(status_event(&envelope, CommandStatus::Ok, None, None))
                     .await?;
                 let (subject, _) = domain::eksekvering::typer::done_subject(&envelope);
                 self.done_publisher
@@ -140,7 +138,10 @@ impl EksekverKommandoService {
             Steg::LeggTilDokument {
                 journalpost_id,
                 dokument_id,
-            } => self.legg_til_dokument(envelope, journalpost_id, dokument_id).await,
+            } => {
+                self.legg_til_dokument(envelope, journalpost_id, dokument_id)
+                    .await
+            }
             Steg::Journalfoer { journalpost_id } => {
                 self.journalfoer_journalpost(envelope, journalpost_id).await
             }
@@ -204,7 +205,10 @@ impl EksekverKommandoService {
             }
         };
 
-        let _ = match self.guard_journalpost_sak(plan.journalpost_id, sak_id).await? {
+        let _ = match self
+            .guard_journalpost_sak(plan.journalpost_id, sak_id)
+            .await?
+        {
             ExecutionGuard::Proceed(state) => state,
             ExecutionGuard::Skip(result) => return Ok(result),
         };
@@ -289,10 +293,7 @@ impl EksekverKommandoService {
 
         if let Some(Some(arkiv_id)) = resp.into_iter().next() {
             self.id_mapping
-                .oppdater_arkiv_id_for_client_reference(
-                    dokument_id,
-                    arkiv_id.to_string(),
-                )
+                .oppdater_arkiv_id_for_client_reference(dokument_id, arkiv_id.to_string())
                 .await
                 .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
         }
@@ -317,7 +318,10 @@ impl EksekverKommandoService {
         _envelope: &CommandEnvelope<Command>,
         journalpost_id: Uuid,
     ) -> Result<ExecutionStepResult, EksekveringFeil> {
-        let state = match self.guard_journalpost_kan_journalfores(journalpost_id).await? {
+        let state = match self
+            .guard_journalpost_kan_journalfores(journalpost_id)
+            .await?
+        {
             ExecutionGuard::Proceed(state) => state,
             ExecutionGuard::Skip(result) => return Ok(result),
         };
@@ -461,9 +465,8 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
-        let sak_state = sak_state.ok_or_else(|| {
-            EksekveringFeil::blocked("Sak finnes ikke i skuffen-state")
-        })?;
+        let sak_state =
+            sak_state.ok_or_else(|| EksekveringFeil::blocked("Sak finnes ikke i skuffen-state"))?;
 
         if sak_state.status == SakStatus::Avsluttet {
             return Err(EksekveringFeil::irrecoverable(
@@ -531,9 +534,7 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
         let Some(state) = journalpost_state else {
-            return Err(EksekveringFeil::blocked(
-                "Journalpost finnes ikke i state",
-            ));
+            return Err(EksekveringFeil::blocked("Journalpost finnes ikke i state"));
         };
 
         if state.har_feilede_dokumenter {
@@ -555,15 +556,11 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
         let Some(state) = journalpost_state else {
-            return Err(EksekveringFeil::blocked(
-                "Journalpost finnes ikke i state",
-            ));
+            return Err(EksekveringFeil::blocked("Journalpost finnes ikke i state"));
         };
 
         if !state.journalfoert {
-            return Err(EksekveringFeil::blocked(
-                "Journalpost er ikke journalført",
-            ));
+            return Err(EksekveringFeil::blocked("Journalpost er ikke journalført"));
         }
 
         Ok(ExecutionGuard::proceed(state))
@@ -615,15 +612,11 @@ impl EksekverKommandoService {
                 }
                 'X' => {
                     if !journalpost.journalfoert {
-                        return Err(EksekveringFeil::blocked(
-                            "Internt notat er ikke komplett",
-                        ));
+                        return Err(EksekveringFeil::blocked("Internt notat er ikke komplett"));
                     }
                 }
                 _ => {
-                    return Err(EksekveringFeil::blocked(
-                        "Ukjent journalposttype i state",
-                    ));
+                    return Err(EksekveringFeil::blocked("Ukjent journalposttype i state"));
                 }
             }
         }
@@ -680,8 +673,12 @@ impl EksekverKommandoService {
         };
 
         let status_for_event = status.clone();
-        let is_terminal = matches!(&status_for_event, CommandStatus::Error | CommandStatus::Blocked);
-        let status_event_value = status_event(envelope, status_for_event, Some(err.melding.clone()), None);
+        let is_terminal = matches!(
+            &status_for_event,
+            CommandStatus::Error | CommandStatus::Blocked
+        );
+        let status_event_value =
+            status_event(envelope, status_for_event, Some(err.melding.clone()), None);
         self.status_publisher
             .publiser_status(status_event_value)
             .await?;

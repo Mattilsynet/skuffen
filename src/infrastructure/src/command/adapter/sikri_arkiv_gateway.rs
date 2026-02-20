@@ -7,10 +7,10 @@ use lib_schemas::skuffen::command::journalpost::{
     OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost, OpprettUgåendeJournalpost,
 };
 use lib_schemas::skuffen::dokument::Dokument;
+use sikri_client::domain::ny_sak::NySak;
 use sikri_client::dto::elements_avsender_mottaker::ElementsAvsenderMottaker;
 use sikri_client::dto::elements_dokument::ElementsDokument;
 use sikri_client::dto::elements_journalpost::ElementsJournalpost;
-use sikri_client::domain::ny_sak::NySak;
 
 #[derive(Clone)]
 pub struct SikriArkivGateway;
@@ -23,7 +23,10 @@ impl SikriArkivGateway {
 
 #[async_trait]
 impl ArkivGateway for SikriArkivGateway {
-    async fn opprett_sak(&self, command: &CommandEnvelope<Command>) -> Result<String, anyhow::Error> {
+    async fn opprett_sak(
+        &self,
+        command: &CommandEnvelope<Command>,
+    ) -> Result<String, anyhow::Error> {
         let Command::OpprettSak(data) = &command.payload else {
             return Err(anyhow::anyhow!("Ugyldig kommando for opprett_sak"));
         };
@@ -44,10 +47,13 @@ impl ArkivGateway for SikriArkivGateway {
                 .trim_start_matches("Ordningsverdi(\"")
                 .trim_end_matches("\")")
                 .to_string(),
-            tilgang: data.tilgang.as_ref().map(|t| sikri_client::domain::ny_sak::Tilgang {
-                tilgangskode: t.tilgangskode.clone(),
-                tilgangshjemmel: t.tilgangshjemmel.clone(),
-            }),
+            tilgang: data
+                .tilgang
+                .as_ref()
+                .map(|t| sikri_client::domain::ny_sak::Tilgang {
+                    tilgangskode: t.tilgangskode.clone(),
+                    tilgangshjemmel: t.tilgangshjemmel.clone(),
+                }),
             virksomhetsmappe_id: None,
         };
 
@@ -65,15 +71,9 @@ impl ArkivGateway for SikriArkivGateway {
         utsending: Option<Utsendingsvalg>,
     ) -> Result<OpprettJournalpostResultat, anyhow::Error> {
         let journalpost = match &command.payload {
-            Command::OpprettInngåendeJournalpost(data) => {
-                self.opprett_inngaende(data)
-            }
-            Command::OpprettUtgåendeJournalpost(data) => {
-                self.opprett_utgaaende(data, utsending)
-            }
-            Command::OpprettInterntNotatJournalpost(data) => {
-                self.opprett_internt_notat(data)
-            }
+            Command::OpprettInngåendeJournalpost(data) => self.opprett_inngaende(data),
+            Command::OpprettUtgåendeJournalpost(data) => self.opprett_utgaaende(data, utsending),
+            Command::OpprettInterntNotatJournalpost(data) => self.opprett_internt_notat(data),
             _ => return Err(anyhow::anyhow!("Ugyldig kommando for opprett_journalpost")),
         };
 
@@ -134,7 +134,11 @@ impl SikriArkivGateway {
             avskriv_direkte: Some(true),
             avskrivningsmaate: Some("TE".to_string()),
             tilgangskode: data.felles.tilgang.as_ref().map(|t| t.tilgangskode.clone()),
-            tilgangshjemmel: data.felles.tilgang.as_ref().map(|t| t.tilgangshjemmel.clone()),
+            tilgangshjemmel: data
+                .felles
+                .tilgang
+                .as_ref()
+                .map(|t| t.tilgangshjemmel.clone()),
             saksbehandler: Some(data.felles.saksbehandler.clone()),
             saksbehandler_enhet: Some(data.felles.saksbehandler_enhet.clone()),
             avsendere_mottakere: Some(vec![ElementsAvsenderMottaker {
@@ -179,7 +183,11 @@ impl SikriArkivGateway {
             avskriv_direkte: None,
             avskrivningsmaate: None,
             tilgangskode: data.felles.tilgang.as_ref().map(|t| t.tilgangskode.clone()),
-            tilgangshjemmel: data.felles.tilgang.as_ref().map(|t| t.tilgangshjemmel.clone()),
+            tilgangshjemmel: data
+                .felles
+                .tilgang
+                .as_ref()
+                .map(|t| t.tilgangshjemmel.clone()),
             saksbehandler: Some(data.felles.saksbehandler.clone()),
             saksbehandler_enhet: Some(data.felles.saksbehandler_enhet.clone()),
             avsendere_mottakere: Some(vec![ElementsAvsenderMottaker {
@@ -205,10 +213,7 @@ impl SikriArkivGateway {
         }
     }
 
-    fn opprett_internt_notat(
-        &self,
-        data: &OpprettInterntNotatJournalpost,
-    ) -> ElementsJournalpost {
+    fn opprett_internt_notat(&self, data: &OpprettInterntNotatJournalpost) -> ElementsJournalpost {
         let dokumenter = self.map_dokumenter(&data.felles.dokumenter);
         ElementsJournalpost {
             tittel: Some(data.felles.tittel.clone()),
@@ -217,7 +222,11 @@ impl SikriArkivGateway {
             avskriv_direkte: None,
             avskrivningsmaate: None,
             tilgangskode: data.felles.tilgang.as_ref().map(|t| t.tilgangskode.clone()),
-            tilgangshjemmel: data.felles.tilgang.as_ref().map(|t| t.tilgangshjemmel.clone()),
+            tilgangshjemmel: data
+                .felles
+                .tilgang
+                .as_ref()
+                .map(|t| t.tilgangshjemmel.clone()),
             saksbehandler: Some(data.felles.saksbehandler.clone()),
             saksbehandler_enhet: Some(data.felles.saksbehandler_enhet.clone()),
             avsendere_mottakere: None,

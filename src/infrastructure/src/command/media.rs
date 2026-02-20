@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use async_nats::jetstream::object_store::{InfoErrorKind, ObjectStore};
+use async_trait::async_trait;
 use uuid::Uuid;
 
 use bytes::Bytes;
@@ -42,9 +42,7 @@ impl MediaStore for ObjectStoreMediaStore {
         let object_name = id.to_string();
         match self.store.info(object_name.as_str()).await {
             Ok(_) => Ok(true),
-            Err(err) if matches!(err.kind(), InfoErrorKind::NotFound) => {
-                Ok(false)
-            }
+            Err(err) if matches!(err.kind(), InfoErrorKind::NotFound) => Ok(false),
             Err(err) => Err(anyhow::anyhow!(err)),
         }
     }

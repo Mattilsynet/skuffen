@@ -1,10 +1,10 @@
+use crate::command::media::MediaStore;
 use crate::nats::client::NatsClient;
 use crate::nats::nats_response::NatsResponse;
 use application::command::services::ingest_command::IngestCommandService;
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
 use tracing::{error, info};
-use crate::command::media::MediaStore;
 
 pub struct CommandListener {
     client: NatsClient,
@@ -48,24 +48,24 @@ impl CommandListener {
             };
 
             // Deserialize Vec<CommandEnvelope<Command>>
-            let commands: Vec<CommandEnvelope<Command>> =
-                match serde_json::from_slice(&msg.payload) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        error!("Failed to deserialize commands: {e}");
-                        // Reply error
-                        let response = NatsResponse::<()>::Error {
-                            message: format!("Invalid payload: {e}"),
-                        };
-                        let payload = serde_json::to_vec(&response).unwrap_or_default();
-                        let _ = self
-                            .client
-                            .inner()
-                            .publish(reply_subject, payload.into())
-                            .await;
-                        continue;
-                    }
-                };
+            let commands: Vec<CommandEnvelope<Command>> = match serde_json::from_slice(&msg.payload)
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    error!("Failed to deserialize commands: {e}");
+                    // Reply error
+                    let response = NatsResponse::<()>::Error {
+                        message: format!("Invalid payload: {e}"),
+                    };
+                    let payload = serde_json::to_vec(&response).unwrap_or_default();
+                    let _ = self
+                        .client
+                        .inner()
+                        .publish(reply_subject, payload.into())
+                        .await;
+                    continue;
+                }
+            };
 
             if let Err(err) = self.validate_media(&commands).await {
                 error!("Media validation failed: {err}");
@@ -128,10 +128,7 @@ impl CommandListener {
         Ok(())
     }
 
-    async fn validate_media(
-        &self,
-        commands: &[CommandEnvelope<Command>],
-    ) -> Result<(), String> {
+    async fn validate_media(&self, commands: &[CommandEnvelope<Command>]) -> Result<(), String> {
         let mut missing: Vec<String> = Vec::new();
 
         for envelope in commands {

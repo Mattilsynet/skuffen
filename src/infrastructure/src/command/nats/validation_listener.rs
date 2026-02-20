@@ -1,10 +1,10 @@
-use async_nats::jetstream::{self, consumer, AckKind};
+use async_nats::jetstream::{self, AckKind, consumer};
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use tracing::{error, info};
 
-use application::command::services::validate_command::{ValidationOutcome, ValidateCommandService};
 use crate::nats::client::NatsClient;
+use application::command::services::validate_command::{ValidateCommandService, ValidationOutcome};
 
 pub struct CommandValidationListener {
     client: NatsClient,
@@ -72,7 +72,8 @@ impl CommandValidationListener {
                 }
             };
 
-            let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&message.payload) {
+            let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&message.payload)
+            {
                 Ok(cmd) => cmd,
                 Err(err) => {
                     error!("Failed to deserialize command: {err}");

@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Utsendingsvalg {
     MedUtsending,
@@ -15,7 +14,10 @@ pub struct OpprettJournalpostResultat {
 
 #[async_trait]
 pub trait ArkivGateway: Send + Sync {
-    async fn opprett_sak(&self, command: &CommandEnvelope<Command>) -> Result<String, anyhow::Error>;
+    async fn opprett_sak(
+        &self,
+        command: &CommandEnvelope<Command>,
+    ) -> Result<String, anyhow::Error>;
 
     async fn opprett_journalpost(
         &self,

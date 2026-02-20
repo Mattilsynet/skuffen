@@ -59,12 +59,7 @@ impl EksekveringWorker {
             }
             ExecutionOutcome::Error => {
                 self.state_repo
-                    .oppdater_eksekvering(
-                        command.command_id,
-                        EksekveringStatus::Error,
-                        None,
-                        None,
-                    )
+                    .oppdater_eksekvering(command.command_id, EksekveringStatus::Error, None, None)
                     .await?;
             }
             ExecutionOutcome::Blocked => {
