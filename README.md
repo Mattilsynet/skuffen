@@ -5,8 +5,38 @@
      "value": "2025/513910"
   },
   "inkluderJournalposter": true
-}
+ }
 '
+
+## Manuell E2E test via lokal NATS
+
+Dette setter opp lokal Postgres + NATS, starter Skuffen lokalt og sender en request over NATS som treffer Skuffen og kaller Sikri.
+
+Krever:
+- docker
+- cargo
+- nats (CLI)
+- nats-server (anbefalt) eller Docker image for NATS
+
+Miljøvariabler som må settes (bruk faktisk verdier):
+- BASE_URL_SIKRI
+- APP_APPLICATION__PROJECT_ID
+
+Kjør:
+
+```bash
+export BASE_URL_SIKRI=""
+export APP_APPLICATION__PROJECT_ID=""
+
+./scripts/local-sikri-e2e.sh
+```
+
+Valgfrie overrides:
+- SIKRI_SAKSNR (default 2026/501415, må finnes i Sikri)
+- NATS_URL (default nats://127.0.0.1:4222)
+- DATABASE_URL eller DATABASE_* (default skuffen/skuffen/skuffen på 127.0.0.1:5433)
+- KEEP_DB=1 (behold db etter kjøring)
+- KEEP_RUNNING=1 (behold tjenester kjørende og hopp over cleanup)
 # skuffen
 
 `skuffen` er en arkiveringstjeneste som ligger mellom interne systemer i Mattilsynet og Sikri sitt arkivsystem.
@@ -63,6 +93,35 @@ All integrasjon skjer over **NATS**.
 - Andre tjenester kan ligge i andre accounts
 - Ingen JWT over NATS
 - Klienter publiserer meldinger og lytter på svar
+
+### NATS subjects og streams
+
+Request-reply:
+- `arkiv.arkiver` (kommandoer). Request: `Vec<CommandEnvelope<Command>>`. Reply: JSON-status (forelopig `NatsResponse<()>`).
+- `arkiv.admin` (administrative funksjoner).
+
+JetStream (til klienter):
+- Stream: `arkiv_status` (subject: `arkiv.status`). Payload: `CommandStatusEvent`. Retention: 180 dager.
+
+Interne JetStreams (med `commandId` i subject for enklere debugging, retention 180 dager):
+- Stream: `arkiv_command_inbox` (subject: `arkiv.command.inbox.<entity>.<commandId>`)
+- Stream: `arkiv_command_ready` (subject: `arkiv.command.ready.<entity>.<commandId>`)
+- Stream: `arkiv_command_done` (subject: `arkiv.command.done.<entity>.<commandId>`)
+
+`<entity>` er `sak` eller `journalpost`.
+
+---
+
+## Eksekvering av kommandoer
+
+Se design og domenelogikk i `docs/command_executor.md`.
+
+## Retry- og eksekveringsmodell
+
+- NATS `arkiv.command.ready.*` brukes kun til innlesing. Meldingen ACKes når kommandoen er lagret i `command_execution`.
+- Eksekvering og retries styres av en intern worker som poller DB etter `pending/retrying/blocked` hvor `next_retry_at <= now()`.
+- Worker tar lås med `FOR UPDATE SKIP LOCKED` slik at flere workere ikke tar samme kommando.
+- `command_execution.payload` er den varige kilden; planen bygges på nytt for hvert forsøk.
 
 ---
 
@@ -158,11 +217,8 @@ Avslutting kan ikke skje før alle journalposter er ferdig behandlet; avsrevet o
 Inngående / interne:
 Opprettet → Journalført → Avskrevet
 
-Utgående med utsending:
-Opprettet → Ferdigstilt → Sendt → Journalført → Avskrevet
-
 Utgående uten utsending:
-Opprettet → Ferdigstilt → Journalført → Avskrevet
+Opprettet → Journalført
 
 
 

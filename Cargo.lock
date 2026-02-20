@@ -48,6 +48,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "domain",
  "lib-schemas",
  "thiserror 2.0.18",
@@ -429,6 +430,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "lib-schemas",
  "uuid",
 ]
 
@@ -1129,15 +1131,18 @@ dependencies = [
  "async-nats",
  "async-trait",
  "axum",
+ "bytes",
  "domain",
  "dotenvy",
  "futures",
+ "lib-nats",
  "lib-schemas",
  "lib-sql",
  "opentelemetry",
  "opentelemetry-http",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "reqwest",
  "serde",
  "serde_json",
  "sikri_client",
@@ -1209,9 +1214,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
+name = "lib-nats"
+version = "0.1.0"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#7977948d6931c34a94e26f5ab6d544a87dc4aa0c"
+dependencies = [
+ "async-nats",
+ "bytes",
+ "futures",
+ "secrecy",
+ "uuid",
+]
+
+[[package]]
 name = "lib-schemas"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#062e9ddf15dfc276cf295ad29a4d2c8b45732202"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#7977948d6931c34a94e26f5ab6d544a87dc4aa0c"
 dependencies = [
  "chrono",
  "serde",
@@ -2296,6 +2313,7 @@ dependencies = [
  "domain",
  "dotenvy",
  "infrastructure",
+ "lib-nats",
  "lib-schemas",
  "serde",
  "thiserror 2.0.18",
@@ -2625,7 +2643,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0136791f7c95b1f6dd99f9cc786b91bb81c3800b639b3478e561ddb7be95e5f1"
 dependencies = [
  "fastrand",
- "getrandom 0.4.1",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -3112,11 +3130,11 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "uuid"
-version = "1.20.0"
+version = "1.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee48d38b119b0cd71fe4141b30f5ba9c7c5d9f4e7a3a8b4a674e4b6ef789976f"
+checksum = "b672338555252d43fd2240c714dc444b8c6fb0a5c5335e65a07bba7742735ddb"
 dependencies = [
- "getrandom 0.3.4",
+ "getrandom 0.4.1",
  "js-sys",
  "serde_core",
  "wasm-bindgen",

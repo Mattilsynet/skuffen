@@ -23,6 +23,10 @@ Detaljert dokumentasjon for domenereglene ligger i `resources/`-mappen. Du skal 
 *   **[Personvern og Skjerming](resources/merke_personnavn.md)**
     *   **Viktig**: Inneholder syntaksreglene for merking av personnavn (`|Navn|`) og skjerming av taushetsbelagt informasjon (`[Info]`).
 
+## Diagram-tekster
+
+Se `.agent/assets/diagram_text/INDEX.md` for tekstlige tolkninger av flow- og state machine-diagrammer.
+
 ## Instruksjoner for bruk
 
 Når du skriver kode eller planlegger funksjonalitet i Skuffen:

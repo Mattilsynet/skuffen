@@ -5,6 +5,35 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct ElementsJournalpost {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tittel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub journalposttype: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub journalstatus: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avskriv_direkte: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avskrivningsmaate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tilgangskode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tilgangshjemmel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saksbehandler: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saksbehandler_enhet: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avsendere_mottakere: Option<Vec<ElementsAvsenderMottaker>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dokumenter: Option<Vec<ElementsDokument>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dokument_dato: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ElementsJournalpostRespons {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tittel: Option<String>,

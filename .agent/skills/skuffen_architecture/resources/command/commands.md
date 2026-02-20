@@ -1,16 +1,14 @@
 # Commands
 
-| Command | Operasjoner | Beskrivelse | Notater |
-| :--- | :--- | :--- | :--- |
-| Opprett sak | Opprett Sak. | Oppretter en sak. Får status "under behandling" | Planned: `src/domain/src/model/operasjon/opprett_sak.rs`, `SakPort::opprett` (Infra: `sikri_client::create_sak`) |
-| Avslutt sak | Avslutt sak | Avslutter en sak. | Kan IKKE journalfore og avsrive alle journalposter; dan kan uferdige ting ligge igjen, og det kan være at dokumenter har kommet inn til saken fra andre steder og har ikke blitt sett/behandlet av et menneske. Planned: `SakPort::avslutt` |
-| Opprett Journalpost Internt notat | Opprett Journalpost av type X, Journalfør, avskriv | | Planned: `src/domain/src/model/operasjon/journalfør.rs`, `avskriv.rs` |
-| Opprett Journalpost internt notat med vedlegg | Opprett Journalpost av type X, [for v in vedlegg: legg til vedlegg], Journalfør, avskriv | | Planned: `legg_til_vedlegg.rs` |
-| Opprett Journalpost Inngående | Opprett Journalpost av type I, Journalfør, avskriv | | |
-| Opprett Journalpost Inngående med vedlegg | Opprett Journalpost av type I, [for v in vedlegg: legg til vedlegg], Journalfør, avskriv | | |
-| Opprett Journalpost Utgående | Opprett Journalpost av type U, Journalfør, avskriv | | |
-| Opprett Journalpost Utgående med vedlegg | Opprett Journalpost av type U, [for v in vedlegg: legg til vedlegg], Journalfør, avskriv | | |
-| Opprett Journalpost Utgående med vedlegg og utsending | Opprett Journalpost av type U, [for v in vedlegg: legg til vedlegg], Send ut, avskriv | | |
-| Opprett Journalpost Utgående med utsending | Opprett Journalpost av type U, send ut, avskriv | | |
-
-
+| Command | Beskrivelse | Notater |
+| :--- | :--- | :--- |
+| Opprett sak | Oppretter en sak og starter saksbehandling. | Planned: `SakPort::opprett` (Infra: `sikri_client::create_sak`) |
+| Avslutt sak | Avslutter en sak. | Kan IKKE journalføre og avskrive alle journalposter; da kan uferdige ting ligge igjen, og det kan være at dokumenter har kommet inn til saken fra andre steder og har ikke blitt sett/behandlet av et menneske. Planned: `SakPort::avslutt` |
+| Opprett Journalpost Internt notat | Oppretter journalpost av type internt notat, journalfører og avskriver. | |
+| Opprett Journalpost internt notat med vedlegg | Oppretter journalpost av type internt notat med vedlegg, journalfører og avskriver. | |
+| Opprett Journalpost Inngående | Oppretter journalpost av type inngående, journalfører og avskriver. | |
+| Opprett Journalpost Inngående med vedlegg | Oppretter journalpost av type inngående med vedlegg, journalfører og avskriver. | |
+| Opprett Journalpost Utgående | Oppretter journalpost av type utgående, journalfører og avskriver. | |
+| Opprett Journalpost Utgående med vedlegg | Oppretter journalpost av type utgående med vedlegg, journalfører og avskriver. | |
+| Opprett Journalpost Utgående med vedlegg og utsending | Oppretter journalpost av type utgående med vedlegg, sender ut og avskriver. | |
+| Opprett Journalpost Utgående med utsending | Oppretter journalpost av type utgående, sender ut og avskriver. | |

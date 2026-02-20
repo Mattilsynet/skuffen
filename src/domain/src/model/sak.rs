@@ -25,7 +25,6 @@ pub struct Sak {
 */
 const SAKSTITTEL_MAX_LENGTH: usize = 256;
 
-
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Saksbehandler {
     pub saksbehandler_id: String,
@@ -46,8 +45,6 @@ impl Saksbehandler {
         })
     }
 }
-
-
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Sakstittel(pub String);
@@ -140,8 +137,8 @@ pub enum Saksstatus {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Arkivdel {
-    // Tilsynsdivisjonene må bli mappet om til SAK og 
-    // Hovedkontoret må bli mappet om til SAKHK 
+    // Tilsynsdivisjonene må bli mappet om til SAK og
+    // Hovedkontoret må bli mappet om til SAKHK
     Tilsynsdivisjonene,
     Hovedkontoret,
 }

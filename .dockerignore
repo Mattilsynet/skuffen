@@ -1,10 +1,17 @@
 # Byggartefakter
+.target
 target/
 **/target/
 
 # Git
+.agent
 .git
+.github
 .gitignore
+
+# Devcontainer
+.devcontainer
+.devcontianer
 
 # Docker
 Dockerfile
