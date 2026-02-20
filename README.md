@@ -18,25 +18,17 @@ Krever:
 - nats (CLI)
 - nats-server (anbefalt) eller Docker image for NATS
 
-Miljøvariabler som må settes:
-- BASE_URL_SIKRI
-- APP_APPLICATION__PROJECT_ID
-
-Kjør:
+Sikri E2E i integration-tests (optional):
 
 ```bash
+export SIKRI_E2E=1
 export BASE_URL_SIKRI="<sikri-base-url>"
 export APP_APPLICATION__PROJECT_ID="<project-id>"
+export SIKRI_SAKSBEHANDLER_ID="<saksbehandler-id>"
+export SIKRI_SAKSBEHANDLER_ENHET="<saksbehandler-enhet>"
 
-./scripts/local-sikri-e2e.sh
+cargo test -p skuffen-integration-tests
 ```
-
-Valgfrie overrides:
-- SIKRI_SAKSNR (default 2026/501415, må finnes i Sikri)
-- NATS_URL (default nats://127.0.0.1:4222)
-- DATABASE_URL eller DATABASE_* (default skuffen/skuffen/skuffen på 127.0.0.1:5433)
-- KEEP_DB=1 (behold db etter kjøring)
-- KEEP_RUNNING=1 (behold tjenester kjørende og hopp over cleanup)
 
 ## Git hooks (pre-push)
 
