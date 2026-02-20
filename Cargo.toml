@@ -10,7 +10,8 @@ members = [
   "src/domain",
   "src/application",
   "src/infrastructure",
-  "crates/sikri_client"
+  "crates/sikri_client",
+  "integration-tests"
 ]
 resolver = "2"
 
