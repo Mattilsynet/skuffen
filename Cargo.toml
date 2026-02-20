@@ -32,7 +32,7 @@ infrastructure = { path = "src/infrastructure" }
 lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", features = ["skuffen"] }
 lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats" }
 dotenvy = "0.15.7"
-anyhow = "1.0.100"
+anyhow = "1.0.102"
 tokio = { version = "1", features = ["full"] }
 
 serde = { version = "1", features = ["derive"] }

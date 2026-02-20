@@ -11,7 +11,7 @@ lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", f
 async-trait = "0.1.89"
 
 # Feilhåndtering
-anyhow = "1.0.99"
+anyhow = "1.0.102"
 thiserror = "2.0.16"
 uuid = { version = "1.18.1", features = ["v7", "v4"] }
 tokio = { version = "1", features = ["macros", "rt"] }
