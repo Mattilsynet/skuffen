@@ -29,7 +29,7 @@ uuid = { version = "1", features = ["serde", "v4", "v7"] }
 
 async-trait = "0.1"
 testcontainers = "0.16"
-testcontainers-modules = { version = "0.4", features = ["postgres"] }
+testcontainers-modules = { version = "0.8", features = ["postgres"] }
 
 [dev-dependencies]
 tracing = "0.1"
