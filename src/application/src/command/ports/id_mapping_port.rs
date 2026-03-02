@@ -41,4 +41,16 @@ pub trait IdMappingRepository: Send + Sync {
         &self,
         arkiv_id: &str,
     ) -> Result<Option<Uuid>, anyhow::Error>;
+
+    async fn ensure_arkiv_mapping(
+        &self,
+        entity_type: &str,
+        arkiv_id: &str,
+    ) -> Result<Uuid, anyhow::Error>;
+
+    async fn delete_arkiv_mapping(
+        &self,
+        entity_type: &str,
+        arkiv_id: &str,
+    ) -> Result<(), anyhow::Error>;
 }

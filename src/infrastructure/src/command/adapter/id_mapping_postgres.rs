@@ -44,6 +44,37 @@ impl IdMappingRepository for PostgresIdMappingRepository {
                     "client_reference is already mapped to a different skuffen_id"
                 ));
             }
+            let update_result = sqlx::query(
+                r#"
+                UPDATE id_mapping
+                SET command_id = $1
+                WHERE client_reference = $2 AND (command_id IS NULL OR command_id = $1)
+                "#,
+            )
+            .bind(command_id)
+            .bind(client_reference)
+            .execute(&self.pool)
+            .await?;
+            if update_result.rows_affected() == 0 {
+                let existing_command_id: Option<Option<Uuid>> = sqlx::query_scalar(
+                    r#"
+                    SELECT command_id
+                    FROM id_mapping
+                    WHERE client_reference = $1
+                    "#,
+                )
+                .bind(client_reference)
+                .fetch_optional(&self.pool)
+                .await?;
+                if existing_command_id.flatten().is_some() {
+                    return Err(anyhow::anyhow!(
+                        "client_reference is already registered for a different command_id"
+                    ));
+                }
+                return Err(anyhow::anyhow!(
+                    "Failed to update command_id for client_reference"
+                ));
+            }
             return Ok(());
         }
 
@@ -64,7 +95,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
             r#"
             INSERT INTO id_mapping (skuffen_id, entity_type, client_reference, arkiv_id, command_id)
             VALUES ($1, $2::entity_type, $3, $4, $5)
-            ON CONFLICT (client_reference) DO NOTHING
+            ON CONFLICT (client_reference) WHERE client_reference IS NOT NULL DO NOTHING
             "#,
         )
         .bind(skuffen_id)
@@ -91,6 +122,37 @@ impl IdMappingRepository for PostgresIdMappingRepository {
                     "client_reference is already mapped to a different skuffen_id"
                 ));
             }
+            let update_result = sqlx::query(
+                r#"
+                UPDATE id_mapping
+                SET command_id = $1
+                WHERE client_reference = $2 AND (command_id IS NULL OR command_id = $1)
+                "#,
+            )
+            .bind(command_id)
+            .bind(client_reference)
+            .execute(&self.pool)
+            .await?;
+            if update_result.rows_affected() == 0 {
+                let existing_command_id: Option<Option<Uuid>> = sqlx::query_scalar(
+                    r#"
+                    SELECT command_id
+                    FROM id_mapping
+                    WHERE client_reference = $1
+                    "#,
+                )
+                .bind(client_reference)
+                .fetch_optional(&self.pool)
+                .await?;
+                if existing_command_id.flatten().is_some() {
+                    return Err(anyhow::anyhow!(
+                        "client_reference is already registered for a different command_id"
+                    ));
+                }
+                return Err(anyhow::anyhow!(
+                    "Failed to update command_id for client_reference"
+                ));
+            }
             return Ok(());
         }
 
@@ -100,7 +162,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
             r#"
             INSERT INTO id_mapping (skuffen_id, entity_type, client_reference, arkiv_id, command_id)
             VALUES ($1, $2::entity_type, $3, $4, $5)
-            ON CONFLICT (client_reference) DO NOTHING
+            ON CONFLICT (client_reference) WHERE client_reference IS NOT NULL DO NOTHING
             "#,
         )
         .bind(skuffen_id)
@@ -142,7 +204,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
     }
 
     async fn get_arkiv_id(&self, skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
-        let arkiv_id: Option<String> = sqlx::query_scalar(
+        let arkiv_id: Option<(Option<String>,)> = sqlx::query_as(
             r#"
             SELECT arkiv_id
             FROM id_mapping
@@ -153,7 +215,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(arkiv_id)
+        Ok(arkiv_id.and_then(|(arkiv_id,)| arkiv_id))
     }
 
     async fn get_skuffen_id(&self, client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error> {
@@ -187,5 +249,80 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         .await?;
 
         Ok(skuffen_id)
+    }
+
+    async fn ensure_arkiv_mapping(
+        &self,
+        entity_type: &str,
+        arkiv_id: &str,
+    ) -> Result<Uuid, anyhow::Error> {
+        let existing: Option<Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT skuffen_id
+            FROM id_mapping
+            WHERE entity_type = $1::entity_type AND arkiv_id = $2
+            "#,
+        )
+        .bind(entity_type)
+        .bind(arkiv_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(skuffen_id) = existing {
+            return Ok(skuffen_id);
+        }
+
+        let skuffen_id = Uuid::now_v7();
+        sqlx::query(
+            r#"
+            INSERT INTO id_mapping (skuffen_id, entity_type, client_reference, arkiv_id)
+            VALUES ($1, $2::entity_type, NULL, $3)
+            ON CONFLICT (entity_type, arkiv_id) DO NOTHING
+            "#,
+        )
+        .bind(skuffen_id)
+        .bind(entity_type)
+        .bind(arkiv_id)
+        .execute(&self.pool)
+        .await?;
+
+        let skuffen_id: Option<Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT skuffen_id
+            FROM id_mapping
+            WHERE entity_type = $1::entity_type AND arkiv_id = $2
+            "#,
+        )
+        .bind(entity_type)
+        .bind(arkiv_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        skuffen_id.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Fant ikke id_mapping for entity_type {} arkiv_id {}",
+                entity_type,
+                arkiv_id
+            )
+        })
+    }
+
+    async fn delete_arkiv_mapping(
+        &self,
+        entity_type: &str,
+        arkiv_id: &str,
+    ) -> Result<(), anyhow::Error> {
+        sqlx::query(
+            r#"
+            DELETE FROM id_mapping
+            WHERE entity_type = $1::entity_type AND arkiv_id = $2
+            "#,
+        )
+        .bind(entity_type)
+        .bind(arkiv_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 }

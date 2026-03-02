@@ -8,9 +8,19 @@ pub struct NatsConfig {
 impl NatsConfig {
     pub fn from_env() -> Result<Self, std::env::VarError> {
         let require_tls = !is_local_env();
+        let credentials = std::env::var("APP_NATS_CREDENTIALS")
+            .ok()
+            .and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
         Ok(Self {
             server_url: std::env::var("NATS_URL")?,
-            credentials: std::env::var("APP_NATS_CREDENTIALS").ok(),
+            credentials,
             require_tls,
         })
     }

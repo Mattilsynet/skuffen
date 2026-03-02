@@ -35,6 +35,7 @@ lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", pack
 dotenvy = "0.15.7"
 anyhow = "1.0.100"
 tokio = { version = "1", features = ["full"] }
+async-trait = "0.1.89"
 
 serde = { version = "1", features = ["derive"] }
 thiserror = "2.0.16"

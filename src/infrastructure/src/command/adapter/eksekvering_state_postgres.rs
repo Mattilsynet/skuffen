@@ -252,19 +252,17 @@ impl EksekveringStateRepository for PostgresEksekveringStateRepository {
             EksekveringStatus::Retrying => "retrying",
         };
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"
-            INSERT INTO command_execution (command_id, status, last_error, next_retry_at)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (command_id)
-            DO UPDATE SET
-                status = $2,
+            UPDATE command_execution
+            SET status = $2,
                 last_error = $3,
                 next_retry_at = $4,
-                attempts = command_execution.attempts + 1,
+                attempts = attempts + 1,
                 locked_at = NULL,
                 locked_by = NULL,
                 updated_at = now()
+            WHERE command_id = $1
             "#,
         )
         .bind(command_id)
@@ -273,6 +271,13 @@ impl EksekveringStateRepository for PostgresEksekveringStateRepository {
         .bind(next_retry_at)
         .execute(&self.pool)
         .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(anyhow::anyhow!(
+                "Fant ikke command_execution for command_id {}",
+                command_id
+            ));
+        }
 
         Ok(())
     }

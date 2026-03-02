@@ -82,6 +82,13 @@ impl IngestCommandService {
             // This is acceptable as these operations are typically idempotent by nature.
         }
 
+        if let Some(arkiv_id) = self.extract_arkiv_id(&envelope.payload) {
+            let _ = self
+                .id_mapping
+                .ensure_arkiv_mapping("sak", arkiv_id.as_str())
+                .await;
+        }
+
         // 3. Dispatch
         self.dispatcher
             .dispatch(&envelope)
@@ -106,6 +113,23 @@ impl IngestCommandService {
             Command::OpprettInngåendeJournalpost(c) => Some(&c.felles.dokumenter),
             Command::OpprettUtgåendeJournalpost(c) => Some(&c.felles.dokumenter),
             Command::OpprettInterntNotatJournalpost(c) => Some(&c.felles.dokumenter),
+            _ => None,
+        }
+    }
+
+    fn extract_arkiv_id(&self, command: &Command) -> Option<String> {
+        let sak_key = match command {
+            Command::OpprettInngåendeJournalpost(c) => Some(&c.felles.sak_key),
+            Command::OpprettUtgåendeJournalpost(c) => Some(&c.felles.sak_key),
+            Command::OpprettInterntNotatJournalpost(c) => Some(&c.felles.sak_key),
+            Command::AvsluttSak(c) => Some(&c.sak_key),
+            Command::OpprettSak(_) => None,
+        }?;
+
+        match sak_key {
+            lib_schemas::skuffen::query::queries::SakKey::ArkivId(saksnummer) => {
+                Some(saksnummer.as_str().to_string())
+            }
             _ => None,
         }
     }

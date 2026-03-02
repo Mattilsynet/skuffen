@@ -120,7 +120,13 @@ impl ValidateCommandService {
                     },
                 }
             }
-            SakKey::ArkivId(saksnummer) => self.validate_sak_i_sikri(saksnummer.as_str()).await,
+            SakKey::ArkivId(saksnummer) => {
+                let outcome = self.validate_sak_i_sikri(saksnummer.as_str()).await;
+                if matches!(outcome, ValidationOutcome::Irrecoverable { .. }) {
+                    let _ = self.id_mapping.delete_arkiv_mapping("sak", saksnummer.as_str()).await;
+                }
+                outcome
+            }
         }
     }
 

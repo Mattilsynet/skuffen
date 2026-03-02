@@ -1,10 +1,11 @@
-use opentelemetry::global::{self};
+use opentelemetry::global;
+use opentelemetry::propagation::Injector;
 use opentelemetry::propagation::TextMapCompositePropagator;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::propagation::{BaggagePropagator, TraceContextPropagator};
-use tracing::{Subscriber, subscriber::set_global_default};
+use opentelemetry_sdk::Resource;
+use tracing::{subscriber::set_global_default, Subscriber};
 use tracing_log::LogTracer;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -15,15 +16,17 @@ pub fn get_subscriber() -> impl Subscriber + Sync + Send {
         .with_service_name(env!("CARGO_PKG_NAME"))
         .build();
 
+    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .unwrap_or_else(|_| "http://127.0.0.1:4317".to_string());
     let otlp_span_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
-        .with_endpoint("http://127.0.0.1:4317")
+        .with_endpoint(endpoint.clone())
         .build()
         .expect("otlp grpc span exporter");
 
     let otlp_metric_exporter = opentelemetry_otlp::MetricExporter::builder()
         .with_tonic()
-        .with_endpoint("http://127.0.0.1:4317")
+        .with_endpoint(endpoint)
         .build()
         .expect("otlp grpc metric exporter");
 
@@ -57,4 +60,24 @@ pub fn get_subscriber() -> impl Subscriber + Sync + Send {
 pub fn init_subscriber(subscriber: impl Subscriber + Send + Sync) {
     LogTracer::init().expect("Failed to set logger");
     set_global_default(subscriber).expect("Failed to set subscriber")
+}
+
+pub fn current_trace_parent() -> Option<String> {
+    struct HeaderInjector {
+        value: Option<String>,
+    }
+
+    impl Injector for HeaderInjector {
+        fn set(&mut self, key: &str, value: String) {
+            if key.eq_ignore_ascii_case("traceparent") {
+                self.value = Some(value);
+            }
+        }
+    }
+
+    let mut injector = HeaderInjector { value: None };
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject(&mut injector);
+    });
+    injector.value
 }

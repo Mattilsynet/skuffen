@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use lib_nats::chunked_upload::receiver::ChunkedUploadAssembler;
-use tracing::{error, info};
+use tracing::{error, info, Instrument};
 use uuid::Uuid;
 
 use crate::command::media::{MediaFile, MediaStore};
@@ -19,6 +19,7 @@ impl MediaListener {
         Self { client, store }
     }
 
+    #[tracing::instrument(skip_all, name = "nats.media_listener")]
     pub async fn run(&self) -> anyhow::Result<()> {
         let subject = "arkiv.arkiver.media";
         info!("Listening for media uploads on '{}'", subject);
@@ -40,20 +41,25 @@ impl MediaListener {
                 }
             };
 
-            let payload = match assembler.push(&message) {
+            let span = tracing::info_span!(
+                "media.assemble",
+                subject = %message.subject,
+                traceparent = tracing::field::Empty
+            );
+            if let Some(headers) = message.headers.as_ref() {
+                if let Some(parent) = headers.get("traceparent") {
+                    span.record(
+                        "traceparent",
+                        tracing::field::display(parent.as_str()),
+                    );
+                }
+            }
+            let payload = match async { assembler.push(&message) }.instrument(span).await {
                 Ok(Some(payload)) => payload,
                 Ok(None) => continue,
                 Err(err) => {
                     error!("Chunk assembly failed: {err}");
-                    let response = NatsResponse::<()>::Error {
-                        message: err.to_string(),
-                    };
-                    let payload = serde_json::to_vec(&response).unwrap_or_default();
-                    let _ = self
-                        .client
-                        .inner()
-                        .publish(reply_subject, payload.into())
-                        .await;
+                    self.publish_error(&reply_subject, err.to_string()).await;
                     continue;
                 }
             };
@@ -62,14 +68,7 @@ impl MediaListener {
                 Ok(id) => id,
                 Err(err) => {
                     error!("Invalid upload id: {err}");
-                    let response = NatsResponse::<()>::Error {
-                        message: "Invalid upload id".to_string(),
-                    };
-                    let payload = serde_json::to_vec(&response).unwrap_or_default();
-                    let _ = self
-                        .client
-                        .inner()
-                        .publish(reply_subject, payload.into())
+                    self.publish_error(&reply_subject, "Invalid upload id")
                         .await;
                     continue;
                 }
@@ -84,27 +83,37 @@ impl MediaListener {
 
             if let Err(err) = self.store.save(file).await {
                 error!("Failed to store media: {err}");
-                let response = NatsResponse::<()>::Error {
-                    message: err.to_string(),
-                };
-                let payload = serde_json::to_vec(&response).unwrap_or_default();
-                let _ = self
-                    .client
-                    .inner()
-                    .publish(reply_subject, payload.into())
-                    .await;
+                self.publish_error(&reply_subject, err.to_string()).await;
                 continue;
             }
 
-            let response = NatsResponse::Ok(file_id);
-            let response_payload = serde_json::to_vec(&response).unwrap_or_default();
-            let _ = self
-                .client
-                .inner()
-                .publish(reply_subject, response_payload.into())
-                .await;
+            self.publish_ok(&reply_subject, file_id).await;
         }
 
         Ok(())
+    }
+
+    async fn publish_error(&self, reply_subject: &str, message: impl Into<String>) {
+        let response = NatsResponse::<()>::Error {
+            message: message.into(),
+        };
+        let payload = serde_json::to_vec(&response).unwrap_or_default();
+        let subject = reply_subject.to_string();
+        let _ = self
+            .client
+            .inner()
+            .publish(subject, payload.into())
+            .await;
+    }
+
+    async fn publish_ok(&self, reply_subject: &str, file_id: Uuid) {
+        let response = NatsResponse::Ok(file_id);
+        let payload = serde_json::to_vec(&response).unwrap_or_default();
+        let subject = reply_subject.to_string();
+        let _ = self
+            .client
+            .inner()
+            .publish(subject, payload.into())
+            .await;
     }
 }

@@ -196,13 +196,13 @@ impl EksekverKommandoService {
         envelope: &CommandEnvelope<Command>,
         plan: domain::eksekvering::plan::JournalpostPlan,
     ) -> Result<ExecutionStepResult, EksekveringFeil> {
-        let sak_id = match plan.sak_key {
+        let sak_id = match plan.sak_key.clone() {
             SakKey::ClientReference(id) => id,
-            SakKey::ArkivId(_) => {
-                return Err(EksekveringFeil::blocked(
-                    "Journalpost krever skuffen-id for sak",
-                ));
-            }
+            SakKey::ArkivId(saksnummer) => self
+                .id_mapping
+                .ensure_arkiv_mapping("sak", saksnummer.as_str())
+                .await
+                .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?,
         };
 
         let _ = match self

@@ -3,6 +3,8 @@ use application::command::ports::eksekvering_port::EksekveringKvitteringPublishe
 use async_nats::jetstream::{self, message::PublishMessage};
 use async_trait::async_trait;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+use tracing::Instrument;
+use async_nats::HeaderMap;
 
 #[derive(Clone)]
 pub struct NatsDonePublisher {
@@ -24,24 +26,37 @@ impl EksekveringKvitteringPublisher for NatsDonePublisher {
     ) -> Result<(), anyhow::Error> {
         let payload = serde_json::to_vec(command)?;
         let jetstream = jetstream::new(self.client.inner().clone());
-        jetstream
-            .get_or_create_stream(jetstream::stream::Config {
-                name: "arkiv_command_done".to_string(),
-                subjects: vec!["arkiv.command.done.>".to_string()],
-                max_age: std::time::Duration::from_secs(60 * 60 * 24 * 180),
-                ..Default::default()
-            })
-            .await?;
-        let subject = subject.to_string();
-        jetstream
-            .send_publish(
-                subject,
-                PublishMessage::build()
-                    .payload(payload.into())
-                    .message_id(command.command_id.to_string()),
-            )
-            .await?
-            .await?;
-        Ok(())
+        let span = tracing::info_span!(
+            "nats.publish.done",
+            command_id = %command.command_id,
+            correlation_id = ?command.correlation_id,
+            subject = %subject
+        );
+        async move {
+            jetstream
+                .get_or_create_stream(jetstream::stream::Config {
+                    name: "arkiv_command_done".to_string(),
+                    subjects: vec!["arkiv.command.done.>".to_string()],
+                    max_age: std::time::Duration::from_secs(60 * 60 * 24 * 180),
+                    ..Default::default()
+                })
+                .await?;
+            let mut message = PublishMessage::build().payload(payload.into());
+            if let Some(trace_parent) = crate::telemetry::current_trace_parent() {
+                let mut headers = HeaderMap::new();
+                headers.insert("traceparent", trace_parent);
+                message = message.headers(headers);
+            }
+            jetstream
+                .send_publish(
+                    subject.to_string(),
+                    message.message_id(command.command_id.to_string()),
+                )
+                .await?
+                .await?;
+            Ok(())
+        }
+        .instrument(span)
+        .await
     }
 }

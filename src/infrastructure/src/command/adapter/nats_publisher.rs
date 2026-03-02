@@ -3,6 +3,8 @@ use application::command::ports::command_dispatcher_port::CommandDispatcher;
 use async_nats::jetstream::{self, message::PublishMessage};
 use async_trait::async_trait;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+use tracing::Instrument;
+use async_nats::HeaderMap;
 
 #[derive(Clone)]
 pub struct NatsCommandDispatcher {
@@ -30,15 +32,27 @@ impl CommandDispatcher for NatsCommandDispatcher {
         let payload = serde_json::to_vec(command)?;
 
         let jetstream = jetstream::new(self.client.inner().clone());
-        jetstream
-            .send_publish(
-                subject,
-                PublishMessage::build()
-                    .payload(payload.into())
-                    .message_id(command.command_id.to_string()),
-            )
-            .await?
-            .await?;
-        Ok(())
+        let span = tracing::info_span!(
+            "nats.publish.inbox",
+            command_id = %command.command_id,
+            correlation_id = ?command.correlation_id,
+            entity_type,
+            subject = %subject
+        );
+        async move {
+            let mut message = PublishMessage::build().payload(payload.into());
+            if let Some(trace_parent) = crate::telemetry::current_trace_parent() {
+                let mut headers = HeaderMap::new();
+                headers.insert("traceparent", trace_parent);
+                message = message.headers(headers);
+            }
+            jetstream
+                .send_publish(subject, message.message_id(command.command_id.to_string()))
+                .await?
+                .await?;
+            Ok(())
+        }
+        .instrument(span)
+        .await
     }
 }

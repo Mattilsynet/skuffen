@@ -4,7 +4,7 @@ use crate::nats::nats_response::NatsResponse;
 use application::command::services::ingest_command::IngestCommandService;
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
-use tracing::{error, info};
+use tracing::{error, info, Instrument};
 
 pub struct CommandListener {
     client: NatsClient,
@@ -25,6 +25,7 @@ impl CommandListener {
         }
     }
 
+    #[tracing::instrument(skip_all, name = "nats.command_listener")]
     pub async fn run(&self) -> anyhow::Result<()> {
         let subject = "arkiv.arkiver";
         info!("Listening for command batches on '{}'", subject);
@@ -37,6 +38,22 @@ impl CommandListener {
             .await?;
 
         while let Some(msg) = sub.next().await {
+            let span = tracing::info_span!(
+                "nats.command_batch",
+                subject = %msg.subject,
+                reply_subject = ?msg.reply,
+                command_count = tracing::field::Empty,
+                traceparent = tracing::field::Empty
+            );
+            if let Some(headers) = msg.headers.as_ref() {
+                if let Some(parent) = headers.get("traceparent") {
+                    span.record(
+                        "traceparent",
+                        tracing::field::display(parent.as_str()),
+                    );
+                }
+            }
+            let _guard = span.enter();
             info!("Received command batch");
 
             let reply_subject = match msg.reply.clone() {
@@ -82,6 +99,7 @@ impl CommandListener {
             }
 
             // Validate sequence (Infrastructure responsibility: Parse/Validate input structure)
+            let command_count = commands.len();
             let sequence = match CommandSequence::try_from(commands) {
                 Ok(seq) => seq,
                 Err(e) => {
@@ -99,8 +117,22 @@ impl CommandListener {
                 }
             };
 
+            span.record("command_count", tracing::field::display(command_count));
+
             // Ingest
-            match self.service.handle(sequence).await {
+            let handle_span = tracing::info_span!(
+                "command.ingest",
+                traceparent = tracing::field::Empty
+            );
+            if let Some(headers) = msg.headers.as_ref() {
+                if let Some(parent) = headers.get("traceparent") {
+                    handle_span.record(
+                        "traceparent",
+                        tracing::field::display(parent.as_str()),
+                    );
+                }
+            }
+            match self.service.handle(sequence).instrument(handle_span).await {
                 Ok(_) => {
                     // Reply OK
                     let response = NatsResponse::Ok(());

@@ -1531,7 +1531,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 [[package]]
 name = "lib-nats"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#6ccabaf0d9eaef785dea77c012e172a3e8414861"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#8e2ac27c520262d635318e2af072b04cc5626d21"
 dependencies = [
  "async-nats",
  "bytes",
@@ -1544,7 +1544,7 @@ dependencies = [
 [[package]]
 name = "lib-schemas"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#6ccabaf0d9eaef785dea77c012e172a3e8414861"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#8e2ac27c520262d635318e2af072b04cc5626d21"
 dependencies = [
  "chrono",
  "serde",
@@ -2906,6 +2906,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "application",
+ "async-trait",
  "domain",
  "dotenvy",
  "infrastructure",

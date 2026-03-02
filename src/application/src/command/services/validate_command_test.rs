@@ -200,6 +200,22 @@ impl IdMappingRepository for FakeIdMappingRepository {
     ) -> Result<Option<Uuid>, anyhow::Error> {
         Ok(None)
     }
+
+    async fn ensure_arkiv_mapping(
+        &self,
+        _entity_type: &str,
+        _arkiv_id: &str,
+    ) -> Result<Uuid, anyhow::Error> {
+        Ok(Uuid::new_v4())
+    }
+
+    async fn delete_arkiv_mapping(
+        &self,
+        _entity_type: &str,
+        _arkiv_id: &str,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
 }
 
 fn build_service(

@@ -9,22 +9,18 @@ pub trait JournalpostRepository {
     async fn hent_journalpost(&self, id: JournalpostKey) -> Result<Journalpost, anyhow::Error>;
 }
 
-#[derive(Debug)]
-pub struct HentJournalpostService<R> {
-    repo: R,
+pub struct HentJournalpostService {
+    repo: Box<dyn JournalpostRepository + Send + Sync>,
 }
 
-impl<R> HentJournalpostService<R> {
-    pub fn new(repo: R) -> Self {
+impl HentJournalpostService {
+    pub fn new(repo: Box<dyn JournalpostRepository + Send + Sync>) -> Self {
         Self { repo }
     }
 }
 
 #[async_trait]
-impl<R> HentJournalpostUseCase for HentJournalpostService<R>
-where
-    R: JournalpostRepository + Send + Sync,
-{
+impl HentJournalpostUseCase for HentJournalpostService {
     async fn handle(&self, req: JournalpostKey) -> Result<Journalpost, anyhow::Error> {
         self.repo.hent_journalpost(req).await
     }

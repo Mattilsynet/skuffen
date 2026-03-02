@@ -1,7 +1,7 @@
-use async_nats::jetstream::{self, AckKind, consumer};
+use async_nats::jetstream::{self, consumer};
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use tracing::{error, info};
+use tracing::{error, info, Instrument};
 
 use crate::nats::client::NatsClient;
 use application::command::services::validate_command::{ValidateCommandService, ValidationOutcome};
@@ -16,6 +16,7 @@ impl CommandValidationListener {
         Self { client, service }
     }
 
+    #[tracing::instrument(skip_all, name = "nats.validation_listener")]
     pub async fn run(&self) -> anyhow::Result<()> {
         let jetstream = jetstream::new(self.client.inner().clone());
         let stream = match jetstream
@@ -72,24 +73,40 @@ impl CommandValidationListener {
                 }
             };
 
-            let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&message.payload)
+            let (payload, acker) = message.split();
+            let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&payload.payload)
             {
                 Ok(cmd) => cmd,
                 Err(err) => {
                     error!("Failed to deserialize command: {err}");
-                    if let Err(err) = message.ack().await {
+                    if let Err(err) = acker.ack().await {
                         error!("Ack failed: {err}");
                     }
                     continue;
                 }
             };
 
-            let outcome = match self.service.handle(envelope).await {
+            let span = tracing::info_span!(
+                "command.validate",
+                command_id = %envelope.command_id,
+                correlation_id = ?envelope.correlation_id,
+                traceparent = tracing::field::Empty
+            );
+            if let Some(headers) = payload.headers.as_ref() {
+                if let Some(parent) = headers.get("traceparent") {
+                    span.record(
+                        "traceparent",
+                        tracing::field::display(parent.as_str()),
+                    );
+                }
+            }
+
+            let outcome = match self.service.handle(envelope).instrument(span).await {
                 Ok(outcome) => outcome,
                 Err(err) => {
                     error!("Validator failed: {err}");
-                    if let Err(err) = message.ack_with(AckKind::Nak(None)).await {
-                        error!("NAK failed: {err}");
+                    if let Err(err) = acker.ack().await {
+                        error!("Ack failed: {err}");
                     }
                     continue;
                 }
@@ -97,18 +114,25 @@ impl CommandValidationListener {
 
             match outcome {
                 ValidationOutcome::Ok => {
-                    if let Err(err) = message.ack().await {
+                    if let Err(err) = acker.ack().await {
                         error!("Ack failed: {err}");
                     }
                 }
-                ValidationOutcome::Recoverable { .. } | ValidationOutcome::Blocked { .. } => {
-                    info!("Command blocked or recoverable, retrying later");
-                    if let Err(err) = message.ack_with(AckKind::Nak(None)).await {
-                        error!("NAK failed: {err}");
+                ValidationOutcome::Recoverable { message: reason } => {
+                    info!("Command recoverable, retrying later: {reason}");
+                    if let Err(err) = acker.ack().await {
+                        error!("Ack failed: {err}");
                     }
                 }
-                ValidationOutcome::Irrecoverable { .. } => {
-                    if let Err(err) = message.ack().await {
+                ValidationOutcome::Blocked { message: reason } => {
+                    info!("Command blocked, retrying later: {reason}");
+                    if let Err(err) = acker.ack().await {
+                        error!("Ack failed: {err}");
+                    }
+                }
+                ValidationOutcome::Irrecoverable { message: reason } => {
+                    info!("Command irrecoverable: {reason}");
+                    if let Err(err) = acker.ack().await {
                         error!("Ack failed: {err}");
                     }
                 }
