@@ -93,10 +93,10 @@ impl KommandoEksekveringListener {
                 correlation_id = ?envelope.correlation_id,
                 traceparent = tracing::field::Empty
             );
-            if let Some(headers) = message.headers.as_ref() {
-                if let Some(parent) = headers.get("traceparent") {
-                    span.record("traceparent", tracing::field::display(parent.as_str()));
-                }
+            if let Some(headers) = message.headers.as_ref()
+                && let Some(parent) = headers.get("traceparent")
+            {
+                span.record("traceparent", tracing::field::display(parent.as_str()));
             }
             let result = async {
                 self.ensure_sak_state(&envelope).await?;

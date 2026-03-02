@@ -46,10 +46,10 @@ impl MediaListener {
                 subject = %message.subject,
                 traceparent = tracing::field::Empty
             );
-            if let Some(headers) = message.headers.as_ref() {
-                if let Some(parent) = headers.get("traceparent") {
-                    span.record("traceparent", tracing::field::display(parent.as_str()));
-                }
+            if let Some(headers) = message.headers.as_ref()
+                && let Some(parent) = headers.get("traceparent")
+            {
+                span.record("traceparent", tracing::field::display(parent.as_str()));
             }
             let payload = match async { assembler.push(&message) }.instrument(span).await {
                 Ok(Some(payload)) => payload,

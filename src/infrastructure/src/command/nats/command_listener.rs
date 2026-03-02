@@ -45,10 +45,10 @@ impl CommandListener {
                 command_count = tracing::field::Empty,
                 traceparent = tracing::field::Empty
             );
-            if let Some(headers) = msg.headers.as_ref() {
-                if let Some(parent) = headers.get("traceparent") {
-                    span.record("traceparent", tracing::field::display(parent.as_str()));
-                }
+            if let Some(headers) = msg.headers.as_ref()
+                && let Some(parent) = headers.get("traceparent")
+            {
+                span.record("traceparent", tracing::field::display(parent.as_str()));
             }
             let _guard = span.enter();
             info!("Received command batch");
@@ -119,10 +119,10 @@ impl CommandListener {
             // Ingest
             let handle_span =
                 tracing::info_span!("command.ingest", traceparent = tracing::field::Empty);
-            if let Some(headers) = msg.headers.as_ref() {
-                if let Some(parent) = headers.get("traceparent") {
-                    handle_span.record("traceparent", tracing::field::display(parent.as_str()));
-                }
+            if let Some(headers) = msg.headers.as_ref()
+                && let Some(parent) = headers.get("traceparent")
+            {
+                handle_span.record("traceparent", tracing::field::display(parent.as_str()));
             }
             match self.service.handle(sequence).instrument(handle_span).await {
                 Ok(_) => {

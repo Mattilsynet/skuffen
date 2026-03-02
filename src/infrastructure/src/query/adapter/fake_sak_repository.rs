@@ -8,7 +8,7 @@ pub struct FakeSakRepository;
 
 impl FakeSakRepository {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 

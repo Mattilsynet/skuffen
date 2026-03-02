@@ -92,10 +92,10 @@ impl CommandValidationListener {
                 correlation_id = ?envelope.correlation_id,
                 traceparent = tracing::field::Empty
             );
-            if let Some(headers) = payload.headers.as_ref() {
-                if let Some(parent) = headers.get("traceparent") {
-                    span.record("traceparent", tracing::field::display(parent.as_str()));
-                }
+            if let Some(headers) = payload.headers.as_ref()
+                && let Some(parent) = headers.get("traceparent")
+            {
+                span.record("traceparent", tracing::field::display(parent.as_str()));
             }
 
             let outcome = match self.service.handle(envelope).instrument(span).await {

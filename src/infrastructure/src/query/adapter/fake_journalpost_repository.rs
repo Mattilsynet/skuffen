@@ -9,7 +9,7 @@ pub struct FakeJournalpostRepository;
 
 impl FakeJournalpostRepository {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 

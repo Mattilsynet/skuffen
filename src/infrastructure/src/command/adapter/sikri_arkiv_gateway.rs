@@ -21,6 +21,12 @@ impl SikriArkivGateway {
     }
 }
 
+impl Default for SikriArkivGateway {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl ArkivGateway for SikriArkivGateway {
     async fn opprett_sak(
