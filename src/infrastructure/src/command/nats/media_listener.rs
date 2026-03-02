@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use lib_nats::chunked_upload::receiver::ChunkedUploadAssembler;
-use tracing::{error, info, Instrument};
+use tracing::{Instrument, error, info};
 use uuid::Uuid;
 
 use crate::command::media::{MediaFile, MediaStore};
@@ -48,10 +48,7 @@ impl MediaListener {
             );
             if let Some(headers) = message.headers.as_ref() {
                 if let Some(parent) = headers.get("traceparent") {
-                    span.record(
-                        "traceparent",
-                        tracing::field::display(parent.as_str()),
-                    );
+                    span.record("traceparent", tracing::field::display(parent.as_str()));
                 }
             }
             let payload = match async { assembler.push(&message) }.instrument(span).await {
@@ -99,21 +96,13 @@ impl MediaListener {
         };
         let payload = serde_json::to_vec(&response).unwrap_or_default();
         let subject = reply_subject.to_string();
-        let _ = self
-            .client
-            .inner()
-            .publish(subject, payload.into())
-            .await;
+        let _ = self.client.inner().publish(subject, payload.into()).await;
     }
 
     async fn publish_ok(&self, reply_subject: &str, file_id: Uuid) {
         let response = NatsResponse::Ok(file_id);
         let payload = serde_json::to_vec(&response).unwrap_or_default();
         let subject = reply_subject.to_string();
-        let _ = self
-            .client
-            .inner()
-            .publish(subject, payload.into())
-            .await;
+        let _ = self.client.inner().publish(subject, payload.into()).await;
     }
 }

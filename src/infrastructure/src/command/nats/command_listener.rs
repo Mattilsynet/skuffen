@@ -4,7 +4,7 @@ use crate::nats::nats_response::NatsResponse;
 use application::command::services::ingest_command::IngestCommandService;
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
-use tracing::{error, info, Instrument};
+use tracing::{Instrument, error, info};
 
 pub struct CommandListener {
     client: NatsClient,
@@ -47,10 +47,7 @@ impl CommandListener {
             );
             if let Some(headers) = msg.headers.as_ref() {
                 if let Some(parent) = headers.get("traceparent") {
-                    span.record(
-                        "traceparent",
-                        tracing::field::display(parent.as_str()),
-                    );
+                    span.record("traceparent", tracing::field::display(parent.as_str()));
                 }
             }
             let _guard = span.enter();
@@ -120,16 +117,11 @@ impl CommandListener {
             span.record("command_count", tracing::field::display(command_count));
 
             // Ingest
-            let handle_span = tracing::info_span!(
-                "command.ingest",
-                traceparent = tracing::field::Empty
-            );
+            let handle_span =
+                tracing::info_span!("command.ingest", traceparent = tracing::field::Empty);
             if let Some(headers) = msg.headers.as_ref() {
                 if let Some(parent) = headers.get("traceparent") {
-                    handle_span.record(
-                        "traceparent",
-                        tracing::field::display(parent.as_str()),
-                    );
+                    handle_span.record("traceparent", tracing::field::display(parent.as_str()));
                 }
             }
             match self.service.handle(sequence).instrument(handle_span).await {

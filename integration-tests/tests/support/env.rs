@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -47,9 +47,7 @@ fn nats_image() -> RunnableImage<GenericImage> {
 
 async fn setup_postgres() -> (ContainerAsync<Postgres>, PgConnectOptions) {
     let container = Postgres::default().start().await;
-    let port = container
-        .get_host_port_ipv4(5432)
-        .await;
+    let port = container.get_host_port_ipv4(5432).await;
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
         .port(port)
@@ -61,9 +59,7 @@ async fn setup_postgres() -> (ContainerAsync<Postgres>, PgConnectOptions) {
 
 async fn setup_nats() -> (ContainerAsync<GenericImage>, String) {
     let container = nats_image().start().await;
-    let port = container
-        .get_host_port_ipv4(NATS_PORT)
-        .await;
+    let port = container.get_host_port_ipv4(NATS_PORT).await;
     let nats_url = format!("nats://127.0.0.1:{port}");
     (container, nats_url)
 }
@@ -79,10 +75,10 @@ async fn start_skuffen_process(
             "1".to_string()
         }
     });
-    let base_url_sikri = std::env::var("BASE_URL_SIKRI")
-        .unwrap_or_else(|_| "http://127.0.0.1:1".to_string());
-    let project_id = std::env::var("APP_APPLICATION__PROJECT_ID")
-        .unwrap_or_else(|_| "local-test".to_string());
+    let base_url_sikri =
+        std::env::var("BASE_URL_SIKRI").unwrap_or_else(|_| "http://127.0.0.1:1".to_string());
+    let project_id =
+        std::env::var("APP_APPLICATION__PROJECT_ID").unwrap_or_else(|_| "local-test".to_string());
     let otel_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
         .unwrap_or_else(|_| "http://127.0.0.1:4317".to_string());
     let binary = resolve_binary_path();
@@ -95,7 +91,10 @@ async fn start_skuffen_process(
     cmd.env("DATABASE_PORT", db_options.get_port().to_string());
     cmd.env("DATABASE_USER", db_options.get_username());
     cmd.env("DATABASE_PASSWORD", "postgres");
-    cmd.env("DATABASE_NAME", db_options.get_database().unwrap_or("postgres"));
+    cmd.env(
+        "DATABASE_NAME",
+        db_options.get_database().unwrap_or("postgres"),
+    );
     cmd.env("NATS_URL", nats_url);
     cmd.env("APP_APPLICATION__HOST", "127.0.0.1");
     cmd.env("APP_APPLICATION__PORT", "0");
@@ -105,7 +104,9 @@ async fn start_skuffen_process(
     cmd.env_remove("APP_NATS_CREDENTIALS");
     cmd.env("APP_NATS_CREDENTIALS", " ");
     cmd.kill_on_drop(true);
-    let child = cmd.spawn().map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let child = cmd
+        .spawn()
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     Ok(child)
 }
 
@@ -114,8 +115,8 @@ pub async fn start_runtime(
     _arkiv_gateway: Box<dyn ArkivGateway>,
     _query_repos: Option<Arc<dyn std::any::Any + Send + Sync>>,
 ) -> Result<TestEnv> {
-    let _ = std::env::var("SKUFFEN_BIN")
-        .map(|path| tracing::info!("SKUFFEN_BIN override: {}", path));
+    let _ =
+        std::env::var("SKUFFEN_BIN").map(|path| tracing::info!("SKUFFEN_BIN override: {}", path));
     let binary_path = resolve_binary_path();
     eprintln!("start_runtime: skuffen binary at {}", binary_path.display());
     tracing::info!("Resolved skuffen binary: {}", binary_path.display());

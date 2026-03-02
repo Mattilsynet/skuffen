@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 use domain::model::dokument::Dokument as DomainDokument;
-use domain::model::journalpost::{
-    Journalpost, JournalpostKey, JournalpostType, Journalpoststatus,
-};
+use domain::model::journalpost::{Journalpost, JournalpostKey, JournalpostType, Journalpoststatus};
 
 use application::query::services::hent_journalpost::JournalpostRepository;
 

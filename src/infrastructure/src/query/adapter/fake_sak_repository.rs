@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use domain::model::sak::{
-    Ordningsverdi, Sak, SakKey, Saksbehandler, Saksstatus, Sakstittel,
-};
+use domain::model::sak::{Ordningsverdi, Sak, SakKey, Saksbehandler, Saksstatus, Sakstittel};
 
 use application::query::services::hent_sak::SakRepository;
 

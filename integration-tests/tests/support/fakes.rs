@@ -44,7 +44,6 @@ impl FakeArkivGatewayState {
         let seq = self.dokument_counter.fetch_add(1, Ordering::SeqCst) + 1;
         70_000 + seq
     }
-
 }
 
 #[derive(Clone)]

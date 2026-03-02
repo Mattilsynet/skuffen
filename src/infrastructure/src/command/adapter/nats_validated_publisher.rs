@@ -1,10 +1,10 @@
 use crate::nats::client::NatsClient;
 use application::command::ports::validated_command_dispatcher_port::ValidatedCommandDispatcher;
+use async_nats::HeaderMap;
 use async_nats::jetstream::{self, message::PublishMessage};
 use async_trait::async_trait;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use tracing::Instrument;
-use async_nats::HeaderMap;
 
 #[derive(Clone)]
 pub struct NatsValidatedCommandDispatcher {

@@ -1,7 +1,7 @@
 use async_nats::jetstream::{self, consumer};
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use tracing::{error, info, Instrument};
+use tracing::{Instrument, error, info};
 
 use crate::nats::client::NatsClient;
 use application::command::services::validate_command::{ValidateCommandService, ValidationOutcome};
@@ -94,10 +94,7 @@ impl CommandValidationListener {
             );
             if let Some(headers) = payload.headers.as_ref() {
                 if let Some(parent) = headers.get("traceparent") {
-                    span.record(
-                        "traceparent",
-                        tracing::field::display(parent.as_str()),
-                    );
+                    span.record("traceparent", tracing::field::display(parent.as_str()));
                 }
             }
 

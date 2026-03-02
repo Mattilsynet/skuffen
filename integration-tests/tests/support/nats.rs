@@ -9,9 +9,9 @@ use lib_nats::chunked_upload::protocol::{
     build_chunk_headers, split_payload, ChunkedUploadConfig, UploadMetadata,
 };
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandStatusEvent};
-use lib_schemas::skuffen::query::queries::{HentSakQuery, HentJournalpostQuery};
-use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::journalpost::JournalpostKey as DtoJournalpostKey;
+use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
+use lib_schemas::skuffen::query::queries::{HentJournalpostQuery, HentSakQuery};
 use tokio::time::Instant;
 
 pub async fn publish_media(nats_url: &str, dokument_id: uuid::Uuid) -> Result<()> {
@@ -151,8 +151,7 @@ pub async fn wait_for_ready(nats_url: &str) -> Result<()> {
         .await?;
     let response = tokio::time::timeout(Duration::from_secs(5), sub.next()).await?;
     let response = response.ok_or_else(|| anyhow::anyhow!("Missing ready response"))?;
-    if response.status == Some(async_nats::StatusCode::NO_RESPONDERS)
-        || response.payload.is_empty()
+    if response.status == Some(async_nats::StatusCode::NO_RESPONDERS) || response.payload.is_empty()
     {
         anyhow::bail!("No responders for skuffen.ready");
     }
@@ -210,7 +209,10 @@ async fn nats_server_ping(nats_url: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn hent_sak_via_nats(nats_url: &str, skuffen_id: uuid::Uuid) -> Result<serde_json::Value> {
+pub async fn hent_sak_via_nats(
+    nats_url: &str,
+    skuffen_id: uuid::Uuid,
+) -> Result<serde_json::Value> {
     let query = HentSakQuery {
         key: DtoSakKey::ClientReference(skuffen_id),
     };
@@ -241,8 +243,7 @@ async fn request_via_nats<T: serde::Serialize>(
         .await?;
     let response = tokio::time::timeout(Duration::from_secs(5), sub.next()).await?;
     let response = response.ok_or_else(|| anyhow::anyhow!("Missing NATS response"))?;
-    if response.status == Some(async_nats::StatusCode::NO_RESPONDERS)
-        || response.payload.is_empty()
+    if response.status == Some(async_nats::StatusCode::NO_RESPONDERS) || response.payload.is_empty()
     {
         anyhow::bail!("No responders for {subject}");
     }

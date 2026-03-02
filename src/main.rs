@@ -1,13 +1,14 @@
 use application::query::services::hent_journalpost::HentJournalpostService;
 use application::query::services::hent_sak::HentSakService;
+use async_trait::async_trait;
 use infrastructure::command::adapter::id_mapping_postgres::PostgresIdMappingRepository;
 use infrastructure::command::nats::media_listener::MediaListener;
 use infrastructure::query::mapping::lookup::key_mapping_queries;
+use infrastructure::query::nats::listener::UseCase;
 use infrastructure::{
     command::adapter::{
         eksekvering_state_postgres::PostgresEksekveringStateRepository,
-        fake_command_state_repo::FakeCommandStateRepository,
-        fake_arkiv_gateway::FakeArkivGateway,
+        fake_arkiv_gateway::FakeArkivGateway, fake_command_state_repo::FakeCommandStateRepository,
         nats_done_publisher::NatsDonePublisher,
         nats_eksekvering_status_publisher::NatsEksekveringStatusPublisher,
         nats_publisher::NatsCommandDispatcher, nats_status_publisher::NatsCommandStatusPublisher,
@@ -25,11 +26,9 @@ use infrastructure::{
     telemetry::{get_subscriber, init_subscriber},
 };
 use lib_nats::jetstream;
+use lib_schemas::skuffen::query::queries::HentJournalpostQuery;
 use lib_schemas::skuffen::query::queries::HentSakQuery;
 use lib_schemas::skuffen::query::responses::{JournalpostResponse, SakResponse};
-use lib_schemas::skuffen::query::queries::HentJournalpostQuery;
-use infrastructure::query::nats::listener::UseCase;
-use async_trait::async_trait;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -100,12 +99,13 @@ async fn main() -> anyhow::Result<()> {
         media_store,
     );
 
-    let command_state_repo: Box<dyn application::command::ports::command_state_port::CommandStateRepository>
-        = if use_fake_sikri {
-            Box::new(FakeCommandStateRepository)
-        } else {
-            Box::new(SikriCommandStateRepository)
-        };
+    let command_state_repo: Box<
+        dyn application::command::ports::command_state_port::CommandStateRepository,
+    > = if use_fake_sikri {
+        Box::new(FakeCommandStateRepository)
+    } else {
+        Box::new(SikriCommandStateRepository)
+    };
     let validator_service =
         application::command::services::validate_command::ValidateCommandService::new(
             command_state_repo,
@@ -153,11 +153,8 @@ async fn main() -> anyhow::Result<()> {
 
     // let receiver_handle =
     // let processor_handle =
-    let ready_replier = NatsReplier::<String, String>::new(
-        nats.clone(),
-        "skuffen.ready",
-        Box::new(ReadyUseCase),
-    );
+    let ready_replier =
+        NatsReplier::<String, String>::new(nats.clone(), "skuffen.ready", Box::new(ReadyUseCase));
 
     let _ = tokio::join!(
         health_check_handle,

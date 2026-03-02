@@ -10,9 +10,8 @@ use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
 use support::{
     fetch_dokument_state, fetch_journalpost_state, fetch_sak_state, hent_journalpost_via_nats,
     hent_sak_via_nats, insert_arkiv_id_mapping, insert_id_mapping, publish_media,
-    send_command_batch, wait_for_command_execution_all, wait_for_status_events, CommandScenario,
-    FakeArkivGateway, FakeArkivGatewayState, FakeCommandStateRepository, run_sikri_sequence,
-    TestEnv,
+    run_sikri_sequence, send_command_batch, wait_for_command_execution_all, wait_for_status_events,
+    CommandScenario, FakeArkivGateway, FakeArkivGatewayState, FakeCommandStateRepository, TestEnv,
 };
 
 mod support;
@@ -79,14 +78,12 @@ async fn command_sequence_inngaende_journalpost_flow() -> Result<()> {
     publish_media(&env.nats_url, scenario.dokument_referanse).await?;
 
     let saksnummer = "2026/100001";
-    let commands = vec![
-        scenario.opprett_inngaende(
-            "Z99999",
-            "42",
-            DtoSakKey::ArkivId(DtoSaksnummer::new(saksnummer)?),
-            "Inngaaende",
-        ),
-    ];
+    let commands = vec![scenario.opprett_inngaende(
+        "Z99999",
+        "42",
+        DtoSakKey::ArkivId(DtoSaksnummer::new(saksnummer)?),
+        "Inngaaende",
+    )];
     insert_arkiv_id_mapping(&env.pool, scenario.sak_skuffen_id, "sak", saksnummer).await?;
     send_command_batch(&env.nats_url, &commands).await?;
     let _ = wait_for_status_events(
@@ -103,8 +100,7 @@ async fn command_sequence_inngaende_journalpost_flow() -> Result<()> {
     .await?;
 
     let journalpost_state =
-        fetch_journalpost_state(&env.pool, scenario.journalpost_inngaende_client_reference)
-            .await?;
+        fetch_journalpost_state(&env.pool, scenario.journalpost_inngaende_client_reference).await?;
     let journalpost_state = journalpost_state.expect("journalpost state should exist");
     assert!(journalpost_state.journalfoert);
     assert!(journalpost_state.avskrevet);
@@ -126,14 +122,12 @@ async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
     publish_media(&env.nats_url, scenario.dokument_referanse).await?;
 
     let saksnummer = "2026/100002";
-    let commands = vec![
-        scenario.opprett_utgaaende(
-            "Z99999",
-            "42",
-            DtoSakKey::ArkivId(DtoSaksnummer::new(saksnummer)?),
-            "Utgaaende",
-        ),
-    ];
+    let commands = vec![scenario.opprett_utgaaende(
+        "Z99999",
+        "42",
+        DtoSakKey::ArkivId(DtoSaksnummer::new(saksnummer)?),
+        "Utgaaende",
+    )];
     insert_arkiv_id_mapping(&env.pool, scenario.sak_skuffen_id, "sak", saksnummer).await?;
     send_command_batch(&env.nats_url, &commands).await?;
     let _ = wait_for_status_events(
@@ -150,8 +144,7 @@ async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
     .await?;
 
     let journalpost_state =
-        fetch_journalpost_state(&env.pool, scenario.journalpost_utgaaende_client_reference)
-            .await?;
+        fetch_journalpost_state(&env.pool, scenario.journalpost_utgaaende_client_reference).await?;
     let journalpost_state = journalpost_state.expect("journalpost state should exist");
     assert!(journalpost_state.journalfoert);
     assert!(!journalpost_state.avskrevet);
@@ -184,7 +177,6 @@ async fn query_hent_sak_via_nats_uses_id_mapping() -> Result<()> {
     )
     .await?;
 
-
     let response = hent_sak_via_nats(&env.nats_url, skuffen_id).await?;
     assert_eq!(response.get("status").and_then(|s| s.as_str()), Some("Ok"));
     Ok(())
@@ -203,11 +195,9 @@ async fn query_hent_journalpost_via_nats() -> Result<()> {
     .await?;
 
     let scenario = CommandScenario::new();
-    let response = hent_journalpost_via_nats(
-        &env.nats_url,
-        scenario.journalpost_internt_client_reference,
-    )
-    .await?;
+    let response =
+        hent_journalpost_via_nats(&env.nats_url, scenario.journalpost_internt_client_reference)
+            .await?;
     assert_eq!(response.get("status").and_then(|s| s.as_str()), Some("Ok"));
     Ok(())
 }

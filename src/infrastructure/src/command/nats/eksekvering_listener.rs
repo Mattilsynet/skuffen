@@ -1,13 +1,13 @@
 use async_nats::jetstream::{self, AckKind, consumer};
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use tracing::{error, info, Instrument};
+use tracing::{Instrument, error, info};
 
 use crate::command::adapter::id_mapping_postgres::PostgresIdMappingRepository;
 use crate::nats::client::NatsClient;
 use application::command::ports::eksekvering_state_port::EksekveringStateRepository;
-use application::command::ports::id_mapping_port::IdMappingRepository;
 use application::command::ports::eksekvering_state_port::{SakState, SakStatus};
+use application::command::ports::id_mapping_port::IdMappingRepository;
 use domain::eksekvering::plan::{EksekveringsPlan, Steg};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 
@@ -95,10 +95,7 @@ impl KommandoEksekveringListener {
             );
             if let Some(headers) = message.headers.as_ref() {
                 if let Some(parent) = headers.get("traceparent") {
-                    span.record(
-                        "traceparent",
-                        tracing::field::display(parent.as_str()),
-                    );
+                    span.record("traceparent", tracing::field::display(parent.as_str()));
                 }
             }
             let result = async {
@@ -133,9 +130,7 @@ impl KommandoEksekveringListener {
             .map_err(|err| anyhow::anyhow!(err.melding))?;
         let saksnummer = match plan.steg.first() {
             Some(Steg::OpprettJournalpost { plan }) => match &plan.sak_key {
-                DtoSakKey::ArkivId(saksnummer) => {
-                    Some(saksnummer.as_str())
-                }
+                DtoSakKey::ArkivId(saksnummer) => Some(saksnummer.as_str()),
                 _ => None,
             },
             Some(Steg::AvsluttSak { .. }) | Some(Steg::OpprettSak { .. }) => None,
