@@ -49,11 +49,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         HentSakService::new(Box::new(SikriRepository))
     };
-    let hent_jp_uc = if use_fake_sikri {
-        HentJournalpostService::new(Box::new(FakeJournalpostRepository::new()))
-    } else {
-        HentJournalpostService::new(Box::new(FakeJournalpostRepository::new()))
-    };
+    let hent_jp_uc = HentJournalpostService::new(Box::new(FakeJournalpostRepository::new()));
     let hent_sak_replier = NatsReplier::<HentSakQuery, SakResponse>::new(
         nats.clone(),
         "sak.hent",
