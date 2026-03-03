@@ -2487,6 +2487,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c665f33d38cea657d9614f766881e4d510e0eda4239891eea56b4cadcf01801b"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -2912,6 +2913,7 @@ dependencies = [
  "infrastructure",
  "lib-nats",
  "lib-schemas",
+ "rustls 0.23.36",
  "serde",
  "thiserror 2.0.18",
  "tokio",

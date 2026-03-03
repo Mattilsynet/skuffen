@@ -30,8 +30,15 @@ use lib_schemas::skuffen::query::queries::HentJournalpostQuery;
 use lib_schemas::skuffen::query::queries::HentSakQuery;
 use lib_schemas::skuffen::query::responses::{JournalpostResponse, SakResponse};
 
+fn init_crypto() {
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("install aws-lc-rs provider");
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    init_crypto();
     dotenvy::dotenv().ok();
     let subscriber = get_subscriber();
     init_subscriber(subscriber);
