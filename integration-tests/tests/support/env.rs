@@ -68,17 +68,8 @@ async fn start_skuffen_process(
     nats_url: &str,
     db_options: &PgConnectOptions,
 ) -> Result<tokio::process::Child> {
-    let use_fake_sikri = std::env::var("SKUFFEN_FAKE_SIKRI").unwrap_or_else(|_| {
-        if std::env::var("SIKRI_E2E").ok().as_deref() == Some("1") {
-            "0".to_string()
-        } else {
-            "1".to_string()
-        }
-    });
-    let base_url_sikri =
-        std::env::var("BASE_URL_SIKRI").unwrap_or_else(|_| "http://127.0.0.1:1".to_string());
-    let project_id =
-        std::env::var("APP_APPLICATION__PROJECT_ID").unwrap_or_else(|_| "local-test".to_string());
+    let base_url_sikri = "http://127.0.0.1:1";
+    let project_id = "local-test";
     let otel_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
         .unwrap_or_else(|_| "http://127.0.0.1:4317".to_string());
     let binary = resolve_binary_path();
@@ -86,7 +77,7 @@ async fn start_skuffen_process(
     cmd.current_dir(workspace_root());
     cmd.env("APP_ENV", "local");
     cmd.env("APP_APPLICATION__ENVIRONMENT", "local");
-    cmd.env("SKUFFEN_FAKE_SIKRI", use_fake_sikri);
+    cmd.env("SKUFFEN_FAKE_SIKRI", "1");
     cmd.env("DATABASE_HOST", db_options.get_host());
     cmd.env("DATABASE_PORT", db_options.get_port().to_string());
     cmd.env("DATABASE_USER", db_options.get_username());

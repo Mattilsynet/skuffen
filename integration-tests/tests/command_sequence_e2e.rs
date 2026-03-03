@@ -10,7 +10,7 @@ use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
 use support::{
     fetch_dokument_state, fetch_journalpost_state, fetch_sak_state, hent_journalpost_via_nats,
     hent_sak_via_nats, insert_arkiv_id_mapping, insert_id_mapping, publish_media,
-    run_sikri_sequence, send_command_batch, wait_for_command_execution_all, wait_for_status_events,
+    send_command_batch, wait_for_command_execution_all, wait_for_status_events,
     CommandScenario, FakeArkivGateway, FakeArkivGatewayState, FakeCommandStateRepository, TestEnv,
 };
 
@@ -200,13 +200,4 @@ async fn query_hent_journalpost_via_nats() -> Result<()> {
             .await?;
     assert_eq!(response.get("status").and_then(|s| s.as_str()), Some("Ok"));
     Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn command_sequence_opprett_internt_notat_avslutt_sak_sikri() -> Result<()> {
-    if std::env::var("SIKRI_E2E").ok().as_deref() != Some("1") {
-        return Ok(());
-    }
-
-    run_sikri_sequence().await
 }

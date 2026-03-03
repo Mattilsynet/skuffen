@@ -25,8 +25,8 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features
 
-  tests:
-    name: Test
+  unit-tests:
+    name: Unit Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +36,20 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test
+      - run: cargo test --workspace --exclude skuffen-integration-tests
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p skuffen-integration-tests -- --nocapture
 
   audit:
     name: Audit Rust Dependencies
