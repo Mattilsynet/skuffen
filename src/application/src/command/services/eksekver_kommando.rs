@@ -103,7 +103,12 @@ impl EksekverKommandoService {
             Ok(()) => {
                 let refs_message = self.build_reference_message(&envelope).await;
                 self.status_publisher
-                    .publiser_status(status_event(&envelope, CommandStatus::Ok, refs_message, None))
+                    .publiser_status(status_event(
+                        &envelope,
+                        CommandStatus::Ok,
+                        refs_message,
+                        None,
+                    ))
                     .await?;
                 let (subject, _) = domain::eksekvering::typer::done_subject(&envelope);
                 self.done_publisher
@@ -685,8 +690,7 @@ impl EksekverKommandoService {
             Some(refs) => Some(refs),
             None => Some(err.melding.clone()),
         };
-        let status_event_value =
-            status_event(envelope, status_for_event, merged_message, None);
+        let status_event_value = status_event(envelope, status_for_event, merged_message, None);
         self.status_publisher
             .publiser_status(status_event_value)
             .await?;
@@ -709,7 +713,11 @@ impl EksekverKommandoService {
         &self,
         client_reference: Uuid,
     ) -> Option<String> {
-        let skuffen_id = self.id_mapping.get_skuffen_id(client_reference).await.ok()??;
+        let skuffen_id = self
+            .id_mapping
+            .get_skuffen_id(client_reference)
+            .await
+            .ok()??;
         self.id_mapping.get_arkiv_id(skuffen_id).await.ok()?
     }
 
@@ -737,7 +745,8 @@ impl EksekverKommandoService {
                 let saksnummer = match &cmd.sak_key {
                     SakKey::ArkivId(saksnummer) => Some(saksnummer.as_str().to_string()),
                     SakKey::ClientReference(client_ref) => {
-                        self.resolve_arkiv_id_from_client_reference(*client_ref).await
+                        self.resolve_arkiv_id_from_client_reference(*client_ref)
+                            .await
                     }
                 };
                 if let Some(saksnummer) = saksnummer {
@@ -762,7 +771,8 @@ impl EksekverKommandoService {
         let saksnummer = match &felles.sak_key {
             SakKey::ArkivId(saksnummer) => Some(saksnummer.as_str().to_string()),
             SakKey::ClientReference(client_ref) => {
-                self.resolve_arkiv_id_from_client_reference(*client_ref).await
+                self.resolve_arkiv_id_from_client_reference(*client_ref)
+                    .await
             }
         };
         if let Some(saksnummer) = saksnummer {
