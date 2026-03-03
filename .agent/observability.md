@@ -7,7 +7,7 @@ Subjects and flows:
 - `arkiv.command.inbox.<entity>.<command_id>` (JetStream): ingested commands
 - `arkiv.command.ready.<entity>.<command_id>` (JetStream): validated commands ready for execution
 - `arkiv.command.done.<entity>.<command_id>` (JetStream): terminal execution result
-- `arkiv.status` (JetStream): status events from validation + execution
+- `arkiv.status.<commandId>` (JetStream): status events from validation + execution
 
 Database state:
 - `id_mapping`: client_reference -> skuffen_id (+ optional arkiv_id)

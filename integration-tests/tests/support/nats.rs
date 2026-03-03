@@ -77,7 +77,7 @@ pub async fn wait_for_status_events(
     let stream = jetstream
         .get_or_create_stream(jetstream::stream::Config {
             name: "arkiv_status".to_string(),
-            subjects: vec!["arkiv.status".to_string()],
+            subjects: vec!["arkiv.status.*".to_string()],
             max_age: Duration::from_secs(60 * 60 * 24 * 180),
             ..Default::default()
         })

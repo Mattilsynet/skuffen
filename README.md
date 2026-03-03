@@ -195,8 +195,7 @@ Request-reply:
 - `arkiv.admin` (administrative funksjoner).
 
 JetStream (til klienter):
-- Stream: `arkiv_status` (subject: `arkiv.status`). Payload: `CommandStatusEvent`. Retention: 180 dager.
-- I tillegg publiseres status paa `arkiv.status.<commandId>` (core NATS) for enklere filtrering per kommando i klient/debugging.
+- Stream: `arkiv_status` (subject: `arkiv.status.<commandId>`). Payload: `CommandStatusEvent`. Retention: 180 dager.
 
 Interne JetStreams (med `commandId` i subject for enklere debugging, retention 180 dager):
 - Stream: `arkiv_command_inbox` (subject: `arkiv.command.inbox.<entity>.<commandId>`)

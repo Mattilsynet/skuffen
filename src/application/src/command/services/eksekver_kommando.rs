@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandStatus};
 use lib_schemas::skuffen::query::queries::SakKey;
+use std::fmt::Write;
 use uuid::Uuid;
 
 use crate::command::ports::eksekvering_port::{
@@ -100,8 +101,9 @@ impl EksekverKommandoService {
 
         match self.execute_plan(&envelope, plan).await {
             Ok(()) => {
+                let refs_message = self.build_reference_message(&envelope).await;
                 self.status_publisher
-                    .publiser_status(status_event(&envelope, CommandStatus::Ok, None, None))
+                    .publiser_status(status_event(&envelope, CommandStatus::Ok, refs_message, None))
                     .await?;
                 let (subject, _) = domain::eksekvering::typer::done_subject(&envelope);
                 self.done_publisher
@@ -677,8 +679,14 @@ impl EksekverKommandoService {
             &status_for_event,
             CommandStatus::Error | CommandStatus::Blocked
         );
+        let refs_message = self.build_reference_message(envelope).await;
+        let merged_message = match refs_message {
+            Some(refs) if !err.melding.is_empty() => Some(format!("{} | {}", err.melding, refs)),
+            Some(refs) => Some(refs),
+            None => Some(err.melding.clone()),
+        };
         let status_event_value =
-            status_event(envelope, status_for_event, Some(err.melding.clone()), None);
+            status_event(envelope, status_for_event, merged_message, None);
         self.status_publisher
             .publiser_status(status_event_value)
             .await?;
@@ -695,6 +703,93 @@ impl EksekverKommandoService {
 
     fn map_arkiv_feil(&self, err: anyhow::Error) -> EksekveringFeil {
         EksekveringFeil::recoverable(err.to_string())
+    }
+
+    async fn resolve_arkiv_id_from_client_reference(
+        &self,
+        client_reference: Uuid,
+    ) -> Option<String> {
+        let skuffen_id = self.id_mapping.get_skuffen_id(client_reference).await.ok()??;
+        self.id_mapping.get_arkiv_id(skuffen_id).await.ok()?
+    }
+
+    async fn build_reference_message(&self, envelope: &CommandEnvelope<Command>) -> Option<String> {
+        let mut message = String::new();
+        match &envelope.payload {
+            Command::OpprettSak(cmd) => {
+                if let Some(saksnummer) = self
+                    .resolve_arkiv_id_from_client_reference(cmd.client_reference)
+                    .await
+                {
+                    let _ = write!(message, "saksnummer={saksnummer}");
+                }
+            }
+            Command::OpprettInngåendeJournalpost(cmd) => {
+                message = self.build_journalpost_reference_message(&cmd.felles).await;
+            }
+            Command::OpprettUtgåendeJournalpost(cmd) => {
+                message = self.build_journalpost_reference_message(&cmd.felles).await;
+            }
+            Command::OpprettInterntNotatJournalpost(cmd) => {
+                message = self.build_journalpost_reference_message(&cmd.felles).await;
+            }
+            Command::AvsluttSak(cmd) => {
+                let saksnummer = match &cmd.sak_key {
+                    SakKey::ArkivId(saksnummer) => Some(saksnummer.as_str().to_string()),
+                    SakKey::ClientReference(client_ref) => {
+                        self.resolve_arkiv_id_from_client_reference(*client_ref).await
+                    }
+                };
+                if let Some(saksnummer) = saksnummer {
+                    let _ = write!(message, "saksnummer={saksnummer}");
+                }
+            }
+        }
+
+        if message.is_empty() {
+            None
+        } else {
+            Some(message)
+        }
+    }
+
+    async fn build_journalpost_reference_message(
+        &self,
+        felles: &lib_schemas::skuffen::command::journalpost::JournalpostCommon,
+    ) -> String {
+        let mut parts: Vec<String> = Vec::new();
+
+        let saksnummer = match &felles.sak_key {
+            SakKey::ArkivId(saksnummer) => Some(saksnummer.as_str().to_string()),
+            SakKey::ClientReference(client_ref) => {
+                self.resolve_arkiv_id_from_client_reference(*client_ref).await
+            }
+        };
+        if let Some(saksnummer) = saksnummer {
+            parts.push(format!("saksnummer={saksnummer}"));
+        }
+
+        if let Some(journalpost_id) = self
+            .resolve_arkiv_id_from_client_reference(felles.client_reference)
+            .await
+        {
+            parts.push(format!("journalpostId={journalpost_id}"));
+        }
+
+        let mut dokument_ids: Vec<String> = Vec::new();
+        for dokument in &felles.dokumenter {
+            if let Some(dokument_id) = self
+                .resolve_arkiv_id_from_client_reference(dokument.client_reference)
+                .await
+            {
+                dokument_ids.push(dokument_id);
+            }
+        }
+        if !dokument_ids.is_empty() {
+            parts.push(format!("dokumentIds={}", dokument_ids.join(",")));
+        }
+
+        parts.join(" ")
     }
 
     fn neste_retry_at(&self, attempt: u32) -> DateTime<Utc> {

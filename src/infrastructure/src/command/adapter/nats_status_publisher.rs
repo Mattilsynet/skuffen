@@ -20,10 +20,8 @@ impl NatsCommandStatusPublisher {
 #[async_trait]
 impl CommandStatusPublisher for NatsCommandStatusPublisher {
     async fn publish_status(&self, event: CommandStatusEvent) -> Result<(), anyhow::Error> {
-        let subject = "arkiv.status";
-        let by_command_subject = format!("arkiv.status.{}", event.command_id);
+        let subject = format!("arkiv.status.{}", event.command_id);
         let payload = serde_json::to_vec(&event)?;
-        let by_command_payload = payload.clone();
         let message_id = format!("{}:{}", event.command_id, uuid::Uuid::now_v7());
         let jetstream = jetstream::new(self.client.inner().clone());
         let span = tracing::info_span!(
@@ -35,7 +33,7 @@ impl CommandStatusPublisher for NatsCommandStatusPublisher {
             jetstream
                 .get_or_create_stream(jetstream::stream::Config {
                     name: "arkiv_status".to_string(),
-                    subjects: vec!["arkiv.status".to_string()],
+                    subjects: vec!["arkiv.status.*".to_string()],
                     max_age: std::time::Duration::from_secs(60 * 60 * 24 * 180),
                     ..Default::default()
                 })
@@ -49,13 +47,6 @@ impl CommandStatusPublisher for NatsCommandStatusPublisher {
             jetstream
                 .send_publish(subject, message.message_id(message_id))
                 .await?
-                .await?;
-
-            // Also publish on a command-scoped subject for easier debugging/filtering.
-            // We keep arkiv.status as the durable JetStream subject for backward compatibility.
-            self.client
-                .inner()
-                .publish(by_command_subject, by_command_payload.into())
                 .await?;
             Ok(())
         }

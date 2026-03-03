@@ -11,7 +11,7 @@ Dette dokumentet beskriver hvordan Skuffen eksekverer kommandoer mot Sikri. Foku
 5. Worker kjører planen steg for steg:
    - Hvert steg har en guard som leser DB‑state og avgjør om vi kan kjøre, skal skippe, eller må blokkere.
    - Når guard sier “kjør”: kall Sikri, oppdater state og id‑mapping.
-6. Emit `CommandStatusEvent` på `arkiv.status`.
+6. Emit `CommandStatusEvent` på `arkiv.status.<commandId>`.
 7. Når kommandoen er terminal: publiser `arkiv.command.done.<entity>.<commandId>`.
 
 ## Arkivfaglige regler (oppsummering)
@@ -162,7 +162,7 @@ Eksempel:
 ## NATS‑kanaler
 
 - Input: `arkiv.command.ready.<entity>.<commandId>`
-- Status: `arkiv.status` (stream `arkiv_status`)
+- Status: `arkiv.status.<commandId>` (stream `arkiv_status`)
 - Done: `arkiv.command.done.<entity>.<commandId>`
 
 `<entity>` er `sak` eller `journalpost`.
