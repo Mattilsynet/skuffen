@@ -1531,7 +1531,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 [[package]]
 name = "lib-nats"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#8e2ac27c520262d635318e2af072b04cc5626d21"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#ebab461f74c91980169121ddd918716cf79c100e"
 dependencies = [
  "async-nats",
  "bytes",
@@ -1544,7 +1544,7 @@ dependencies = [
 [[package]]
 name = "lib-schemas"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#8e2ac27c520262d635318e2af072b04cc5626d21"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#ebab461f74c91980169121ddd918716cf79c100e"
 dependencies = [
  "chrono",
  "serde",
@@ -4079,7 +4079,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
