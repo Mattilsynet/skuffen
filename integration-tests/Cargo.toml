@@ -26,6 +26,8 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 ] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
+rustls = { version = "0.23.36", features = ["aws_lc_rs"] }
+dotenvy = "0.15.7"
 
 async-trait = "0.1"
 testcontainers = "0.16"
