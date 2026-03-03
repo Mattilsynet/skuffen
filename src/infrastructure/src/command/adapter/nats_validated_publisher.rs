@@ -42,6 +42,14 @@ impl ValidatedCommandDispatcher for NatsValidatedCommandDispatcher {
             subject = %subject
         );
         async move {
+            jetstream
+                .get_or_create_stream(jetstream::stream::Config {
+                    name: "arkiv_command_ready".to_string(),
+                    subjects: vec!["arkiv.command.ready.>".to_string()],
+                    max_age: std::time::Duration::from_secs(60 * 60 * 24 * 180),
+                    ..Default::default()
+                })
+                .await?;
             let mut message = PublishMessage::build().payload(payload.into());
             if let Some(trace_parent) = crate::telemetry::current_trace_parent() {
                 let mut headers = HeaderMap::new();
