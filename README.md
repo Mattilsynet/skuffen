@@ -1,12 +1,96 @@
-## Eksempel
- nats request sak.hent '{
-  "key": {
-     "type": "arkivId",
-     "value": "2025/513910"
+## Eksempel-requests (kopier/lim inn)
+
+Sjekk at tjenesten svarer:
+
+```bash
+nats request skuffen.ready '"ping"'
+```
+
+Opprett sak (gyldig JSON for `arkiv.arkiver`):
+
+```bash
+nats request arkiv.arkiver '[
+  {
+    "command_id": "11111111-1111-4111-8111-111111111111",
+    "correlation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "payload": {
+      "OpprettSak": {
+        "client_reference": "22222222-2222-4222-8222-222222222222",
+        "sakstittel": "Manual test sak",
+        "arkivdel": "Tilsynsdivisjonene",
+        "saksbehandler_id": "Z12345",
+        "saksbehandler_enhet": "42",
+        "ordningsverdi": "123",
+        "tilgang": null
+      }
+    }
+  }
+]'
+```
+
+Sekvens: opprett sak -> opprett internt notat journalpost -> avslutt sak.
+
+```bash
+nats request arkiv.arkiver '[
+  {
+    "command_id": "11111111-1111-4111-8111-111111111111",
+    "correlation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "payload": {
+      "OpprettSak": {
+        "client_reference": "22222222-2222-4222-8222-222222222222",
+        "sakstittel": "Manual test sak",
+        "arkivdel": "Tilsynsdivisjonene",
+        "saksbehandler_id": "Z12345",
+        "saksbehandler_enhet": "42",
+        "ordningsverdi": "123",
+        "tilgang": null
+      }
+    }
   },
-  "inkluderJournalposter": true
- }
-'
+  {
+    "command_id": "33333333-3333-4333-8333-333333333333",
+    "correlation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "payload": {
+      "OpprettInterntNotatJournalpost": {
+        "felles": {
+          "client_reference": "44444444-4444-4444-8444-444444444444",
+          "tittel": "Manual test internt notat",
+          "dokument_dato": "2025-01-01",
+          "saksbehandler": "Z12345",
+          "saksbehandler_enhet": "42",
+          "tilgang": null,
+          "dokumenter": [
+            {
+              "client_reference": "55555555-5555-4555-8555-555555555555",
+              "tittel": "Vedlegg",
+              "filtype": "PDF",
+              "dokument_referanse": "66666666-6666-4666-8666-666666666666"
+            }
+          ],
+          "sak_key": {
+            "ClientReference": "22222222-2222-4222-8222-222222222222"
+          },
+          "kildesystem": null
+        }
+      }
+    }
+  },
+  {
+    "command_id": "77777777-7777-4777-8777-777777777777",
+    "correlation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "payload": {
+      "AvsluttSak": {
+        "sak_key": {
+          "ClientReference": "22222222-2222-4222-8222-222222222222"
+        }
+      }
+    }
+  }
+]'
+```
+
+Merk: for journalpost-kommandoer maa `dokument_referanse` vaere lastet opp paa
+`arkiv.arkiver.media` foer kommandoen sendes.
 
 ## Manuell E2E test via lokal NATS
 
@@ -112,6 +196,7 @@ Request-reply:
 
 JetStream (til klienter):
 - Stream: `arkiv_status` (subject: `arkiv.status`). Payload: `CommandStatusEvent`. Retention: 180 dager.
+- I tillegg publiseres status paa `arkiv.status.<commandId>` (core NATS) for enklere filtrering per kommando i klient/debugging.
 
 Interne JetStreams (med `commandId` i subject for enklere debugging, retention 180 dager):
 - Stream: `arkiv_command_inbox` (subject: `arkiv.command.inbox.<entity>.<commandId>`)

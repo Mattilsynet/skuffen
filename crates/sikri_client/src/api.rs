@@ -14,6 +14,34 @@ fn base_url() -> String {
     })
 }
 
+async fn ensure_success(
+    response: reqwest::Response,
+    method: &str,
+    url: &str,
+) -> Result<reqwest::Response> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|err| format!("<klarte ikke lese respons-body: {err}>"));
+    let body = body.trim();
+    let body = if body.len() > 2000 {
+        format!("{}...<truncated>", &body[..2000])
+    } else {
+        body.to_string()
+    };
+
+    anyhow::bail!(
+        "Server svarte med feil for {method} {url}: status={} body={}",
+        status,
+        body
+    );
+}
+
 async fn hent_brukernavn_passord_sikri() -> Result<(String, String)> {
     let project_id = env::var("APP_APPLICATION__PROJECT_ID")?;
 
@@ -95,9 +123,8 @@ pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposter
         .json(&data)
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?
-        .error_for_status()
-        .with_context(|| format!("Server svarte med feil for POST {url}"))?;
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+    let resp = ensure_success(resp, "POST", &url).await?;
 
     resp.json::<ElementsSakMedJournalposterResponse>()
         .await
@@ -117,9 +144,8 @@ pub async fn opprett_journalpost(
         .json(&journalpost)
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?
-        .error_for_status()
-        .with_context(|| format!("Server svarte med feil for POST {url}"))?;
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+    let resp = ensure_success(resp, "POST", &url).await?;
 
     resp.json::<ElementsJournalpostRespons>()
         .await
@@ -139,9 +165,8 @@ pub async fn legg_til_vedlegg(
         .json(&dokumenter)
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?
-        .error_for_status()
-        .with_context(|| format!("Server svarte med feil for POST {url}"))?;
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+    let resp = ensure_success(resp, "POST", &url).await?;
 
     resp.json::<Vec<ElementsDokumentRespons>>()
         .await
@@ -151,7 +176,7 @@ pub async fn legg_til_vedlegg(
 pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Result<()> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/SettJournalpostStatus", base_url());
-    Client::new()
+    let resp = Client::new()
         .post(&url)
         .basic_auth(username, Some(password))
         .query(&[
@@ -160,16 +185,15 @@ pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Resul
         ])
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?
-        .error_for_status()
-        .with_context(|| format!("Server svarte med feil for POST {url}"))?;
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+    let _ = ensure_success(resp, "POST", &url).await?;
     Ok(())
 }
 
 pub async fn avskriv_journalpost(journalpost_id: i32, avskrivingsmaate: &str) -> Result<()> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/AvskrivJournalpost", base_url());
-    Client::new()
+    let resp = Client::new()
         .post(&url)
         .basic_auth(username, Some(password))
         .query(&[
@@ -178,23 +202,21 @@ pub async fn avskriv_journalpost(journalpost_id: i32, avskrivingsmaate: &str) ->
         ])
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?
-        .error_for_status()
-        .with_context(|| format!("Server svarte med feil for POST {url}"))?;
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+    let _ = ensure_success(resp, "POST", &url).await?;
     Ok(())
 }
 
 pub async fn avslutt_sak(saksnummer: &str) -> Result<()> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/AvsluttArkivsak", base_url());
-    Client::new()
+    let resp = Client::new()
         .post(&url)
         .basic_auth(username, Some(password))
         .query(&[("saksnr", saksnummer)])
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?
-        .error_for_status()
-        .with_context(|| format!("Server svarte med feil for POST {url}"))?;
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+    let _ = ensure_success(resp, "POST", &url).await?;
     Ok(())
 }
