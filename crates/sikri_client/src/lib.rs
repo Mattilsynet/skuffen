@@ -1,6 +1,7 @@
 mod api;
 pub mod domain;
 pub mod dto;
+mod error_mapping;
 mod secret;
 
 use crate::domain::ny_sak::NySak;
@@ -9,6 +10,10 @@ use crate::dto::elements_dokument::ElementsDokument;
 use crate::dto::elements_dokument_response::ElementsDokumentRespons;
 use crate::dto::elements_journalpost::{ElementsJournalpost, ElementsJournalpostRespons};
 use crate::dto::elements_sak::ElementsSak;
+pub use error_mapping::{
+    IRRECOVERABLE_MARKER, RECOVERABLE_MARKER, Recoverability, classify_http_error,
+    user_message_for_http_error,
+};
 
 pub async fn alive() -> anyhow::Result<()> {
     api::alive().await

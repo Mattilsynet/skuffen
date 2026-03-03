@@ -706,7 +706,17 @@ impl EksekverKommandoService {
     }
 
     fn map_arkiv_feil(&self, err: anyhow::Error) -> EksekveringFeil {
-        EksekveringFeil::recoverable(err.to_string())
+        let original = err.to_string();
+        let message = original
+            .replace("sikri_recoverability=irrecoverable", "")
+            .replace("sikri_recoverability=recoverable", "")
+            .trim()
+            .to_string();
+
+        if original.contains("sikri_recoverability=irrecoverable") {
+            return EksekveringFeil::irrecoverable(message);
+        }
+        EksekveringFeil::recoverable(message)
     }
 
     async fn resolve_arkiv_id_from_client_reference(

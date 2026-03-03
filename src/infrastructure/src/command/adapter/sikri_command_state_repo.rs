@@ -2,6 +2,7 @@ use application::command::ports::command_state_port::{
     CommandStateError, CommandStateErrorKind, CommandStateRepository, SakState,
 };
 use async_trait::async_trait;
+use sikri_client::Recoverability;
 
 #[derive(Clone)]
 pub struct SikriCommandStateRepository;
@@ -22,19 +23,15 @@ impl CommandStateRepository for SikriCommandStateRepository {
             Err(err) => {
                 if let Some(req_err) = err.downcast_ref::<reqwest::Error>() {
                     let kind = match req_err.status() {
-                        Some(status) if status == reqwest::StatusCode::NOT_FOUND => {
-                            CommandStateErrorKind::Irrecoverable
+                        Some(status) => {
+                            match sikri_client::classify_http_error(status, None) {
+                                Recoverability::Recoverable => CommandStateErrorKind::Recoverable,
+                                Recoverability::Irrecoverable => {
+                                    CommandStateErrorKind::Irrecoverable
+                                }
+                            }
                         }
-                        Some(status) if status == reqwest::StatusCode::TOO_MANY_REQUESTS => {
-                            CommandStateErrorKind::Recoverable
-                        }
-                        Some(status) if status.is_server_error() => {
-                            CommandStateErrorKind::Recoverable
-                        }
-                        Some(status) if status.is_client_error() => {
-                            CommandStateErrorKind::Irrecoverable
-                        }
-                        _ => CommandStateErrorKind::Recoverable,
+                        None => CommandStateErrorKind::Recoverable,
                     };
                     let message = match req_err.status() {
                         Some(status) if status == reqwest::StatusCode::NOT_FOUND => {

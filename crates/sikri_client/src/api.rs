@@ -2,6 +2,7 @@ use crate::dto::elements_dokument::ElementsDokument;
 use crate::dto::elements_dokument_response::ElementsDokumentRespons;
 use crate::dto::elements_journalpost::{ElementsJournalpost, ElementsJournalpostRespons};
 use crate::dto::elements_sak::ElementsSak;
+use crate::error_mapping::{classify_http_error, marker_for, user_message_for_http_error};
 use crate::dto::elements_sak_response::ElementsSakMedJournalposterResponse;
 use crate::secret::get_secret;
 use anyhow::{Context, Result};
@@ -34,12 +35,11 @@ async fn ensure_success(
     } else {
         body.to_string()
     };
+    let recoverability = classify_http_error(status, Some(&body));
+    let marker = marker_for(recoverability);
+    let user_message = user_message_for_http_error(status, Some(&body));
 
-    anyhow::bail!(
-        "Server svarte med feil for {method} {url}: status={} body={}",
-        status,
-        body
-    );
+    anyhow::bail!("{marker} {user_message} (method={method}, url={url}, status={status})");
 }
 
 async fn hent_brukernavn_passord_sikri() -> Result<(String, String)> {
