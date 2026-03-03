@@ -1,13 +1,13 @@
+use opentelemetry::KeyValue;
 use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use opentelemetry::propagation::TextMapCompositePropagator;
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::propagation::{BaggagePropagator, TraceContextPropagator};
 use opentelemetry_sdk::trace::SdkTracerProvider;
-use opentelemetry_sdk::Resource;
-use tracing::{subscriber::set_global_default, Subscriber};
+use tracing::{Subscriber, subscriber::set_global_default};
 use tracing_log::LogTracer;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::layer::SubscriberExt;

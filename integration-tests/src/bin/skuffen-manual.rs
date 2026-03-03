@@ -12,7 +12,9 @@ use lib_nats::chunked_upload::protocol::{
 use lib_schemas::skuffen::command::commands::{
     Command, CommandEnvelope, CommandStatus, CommandStatusEvent,
 };
-use lib_schemas::skuffen::command::journalpost::{JournalpostCommon, OpprettInterntNotatJournalpost};
+use lib_schemas::skuffen::command::journalpost::{
+    JournalpostCommon, OpprettInterntNotatJournalpost,
+};
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::dokument::Dokument as DtoDokument;
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
@@ -121,10 +123,7 @@ fn parse_connection_args(raw_args: &[String]) -> Result<(ConnectionConfig, Vec<S
 fn resolve_connection_config(raw_args: &[String]) -> Result<ConnectionConfig> {
     let (config, positional) = parse_connection_args(raw_args)?;
     if !positional.is_empty() {
-        anyhow::bail!(
-            "Unexpected positional arguments: {}",
-            positional.join(" ")
-        );
+        anyhow::bail!("Unexpected positional arguments: {}", positional.join(" "));
     }
     Ok(config)
 }
