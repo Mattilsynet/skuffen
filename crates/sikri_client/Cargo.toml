@@ -20,6 +20,7 @@ chrono = { version = "0.4.42", features = ["serde"] }
 anyhow = { version = "1.0.100" }
 gcp_auth = { version = "0.12.6" }
 base64 = "0.22.1"
-
+serde_json = "1"
+tracing = "0.1"
 
 

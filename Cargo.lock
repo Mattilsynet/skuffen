@@ -2898,7 +2898,9 @@ dependencies = [
  "lib-schemas",
  "reqwest 0.13.2",
  "serde",
+ "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2929,10 +2931,12 @@ dependencies = [
  "async-trait",
  "bytes",
  "domain",
+ "dotenvy",
  "futures",
  "infrastructure",
  "lib-nats",
  "lib-schemas",
+ "rustls 0.23.36",
  "serde",
  "serde_json",
  "sqlx",

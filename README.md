@@ -102,16 +102,32 @@ Krever:
 - nats (CLI)
 - nats-server (anbefalt) eller Docker image for NATS
 
-Sikri E2E i integration-tests (optional):
+Integrasjonstester (alltid med mocket Sikri):
 
 ```bash
-export SIKRI_E2E=1
-export BASE_URL_SIKRI="<sikri-base-url>"
-export APP_APPLICATION__PROJECT_ID="<project-id>"
+cargo test -p skuffen-integration-tests -- --nocapture
+```
+
+Manuelle tester via egen kommando:
+
+```bash
+# kreves for send-sequence
 export SIKRI_SAKSBEHANDLER_ID="<saksbehandler-id>"
 export SIKRI_SAKSBEHANDLER_ENHET="<saksbehandler-enhet>"
 
-cargo test -p skuffen-integration-tests
+# ping klar-status
+cargo run -p skuffen-integration-tests --bin skuffen-manual -- ready
+
+# send en komplett sekvens (inkluderer media-upload)
+cargo run -p skuffen-integration-tests --bin skuffen-manual -- send-sequence
+
+# foelg status for kommandoer (henter historikk + live oppdateringer)
+cargo run -p skuffen-integration-tests --bin skuffen-manual -- watch-status <command-id-1> <command-id-2> <command-id-3>
+
+# bruk aktiv nats-cli context (eller spesifikk context)
+cargo run -p skuffen-integration-tests --bin skuffen-manual -- ready --context arkiv-test
+
+# send-sequence skriver ut en ferdig watch-status kommando du kan kopiere direkte
 ```
 
 ## Git hooks (pre-push)
@@ -131,6 +147,21 @@ chmod +x scripts/git-hooks/install.sh
 
 Hooken bruker `gitleaks` hvis den er installert, og i tillegg en felles liste over
 forbudte patterns fra `scripts/git-hooks/forbidden-patterns.txt` (i repoet).
+
+## Telemetry / tracing
+
+Skuffen logger requests/responses mot Sikri via `tracing` (`target="sikri.http"`).
+
+For aa faa spans i GCP Trace maa OTLP-export vaere satt opp i runtime:
+
+```bash
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=<otlp-grpc-endpoint>
+# evt fallback:
+OTEL_EXPORTER_OTLP_ENDPOINT=<otlp-grpc-endpoint>
+```
+
+Hvis OTLP-endpoint ikke er satt, logger tjenesten fortsatt structured logs, men spans eksporteres ikke til trace-backend.
+
 # skuffen
 
 `skuffen` er en arkiveringstjeneste som ligger mellom interne systemer i Mattilsynet og Sikri sitt arkivsystem.
