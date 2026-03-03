@@ -10,16 +10,15 @@ pub enum Recoverability {
 }
 
 pub fn user_message_for_http_error(status: StatusCode, body: Option<&str>) -> String {
-    if let Some(body_text) = body {
-        if classify_http_error(status, Some(body_text)) == Recoverability::Irrecoverable
-            && contains_missing_user_pattern(body_text)
-        {
-            let bruker = extract_user_from_identification_error(body_text)
-                .unwrap_or_else(|| "ukjent".to_string());
-            return format!(
-                "Ugyldig saksbehandler/systembruker ({bruker}): brukeren finnes ikke i ePhorte (PERSON.PE_BRUKERID)."
-            );
-        }
+    if let Some(body_text) = body
+        && classify_http_error(status, Some(body_text)) == Recoverability::Irrecoverable
+        && contains_missing_user_pattern(body_text)
+    {
+        let bruker = extract_user_from_identification_error(body_text)
+            .unwrap_or_else(|| "ukjent".to_string());
+        return format!(
+            "Ugyldig saksbehandler/systembruker ({bruker}): brukeren finnes ikke i ePhorte (PERSON.PE_BRUKERID)."
+        );
     }
 
     format!("Sikri svarte med HTTP-feil ({status}).")
