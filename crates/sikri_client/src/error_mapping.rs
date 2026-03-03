@@ -96,11 +96,7 @@ fn extract_user_from_identification_error(body: &str) -> Option<String> {
         .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
         .collect();
 
-    if user.is_empty() {
-        None
-    } else {
-        Some(user)
-    }
+    if user.is_empty() { None } else { Some(user) }
 }
 
 #[cfg(test)]

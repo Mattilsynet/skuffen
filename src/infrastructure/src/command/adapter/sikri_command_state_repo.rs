@@ -23,14 +23,10 @@ impl CommandStateRepository for SikriCommandStateRepository {
             Err(err) => {
                 if let Some(req_err) = err.downcast_ref::<reqwest::Error>() {
                     let kind = match req_err.status() {
-                        Some(status) => {
-                            match sikri_client::classify_http_error(status, None) {
-                                Recoverability::Recoverable => CommandStateErrorKind::Recoverable,
-                                Recoverability::Irrecoverable => {
-                                    CommandStateErrorKind::Irrecoverable
-                                }
-                            }
-                        }
+                        Some(status) => match sikri_client::classify_http_error(status, None) {
+                            Recoverability::Recoverable => CommandStateErrorKind::Recoverable,
+                            Recoverability::Irrecoverable => CommandStateErrorKind::Irrecoverable,
+                        },
                         None => CommandStateErrorKind::Recoverable,
                     };
                     let message = match req_err.status() {
