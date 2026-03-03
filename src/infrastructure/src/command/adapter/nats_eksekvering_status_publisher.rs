@@ -4,7 +4,15 @@ use async_nats::HeaderMap;
 use async_nats::jetstream::{self, message::PublishMessage};
 use async_trait::async_trait;
 use lib_schemas::skuffen::command::commands::CommandStatusEvent;
+use serde::Serialize;
 use tracing::Instrument;
+
+#[derive(Serialize)]
+struct StatusEventWithPhase<'a> {
+    #[serde(flatten)]
+    event: &'a CommandStatusEvent,
+    phase: &'static str,
+}
 
 #[derive(Clone)]
 pub struct NatsEksekveringStatusPublisher {
@@ -21,7 +29,10 @@ impl NatsEksekveringStatusPublisher {
 impl EksekveringStatusPublisher for NatsEksekveringStatusPublisher {
     async fn publiser_status(&self, event: CommandStatusEvent) -> Result<(), anyhow::Error> {
         let subject = format!("arkiv.status.{}", event.command_id);
-        let payload = serde_json::to_vec(&event)?;
+        let payload = serde_json::to_vec(&StatusEventWithPhase {
+            event: &event,
+            phase: "execution",
+        })?;
         let message_id = format!("{}:{}", event.command_id, uuid::Uuid::now_v7());
         let jetstream = jetstream::new(self.client.inner().clone());
         let span = tracing::info_span!(

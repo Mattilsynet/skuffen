@@ -196,6 +196,7 @@ Request-reply:
 
 JetStream (til klienter):
 - Stream: `arkiv_status` (subject: `arkiv.status.<commandId>`). Payload: `CommandStatusEvent`. Retention: 180 dager.
+- Payload inkluderer ogsaa `phase` med verdi `validation` eller `execution`.
 
 Interne JetStreams (med `commandId` i subject for enklere debugging, retention 180 dager):
 - Stream: `arkiv_command_inbox` (subject: `arkiv.command.inbox.<entity>.<commandId>`)
