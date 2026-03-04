@@ -92,6 +92,7 @@ if command -v cargo >/dev/null 2>&1; then
     if printf '%s\n' "${CHANGED_FILES[@]}" | grep -Eq '(^|/)(Cargo\.toml|Cargo\.lock)$|\.rs$|(^|/)rustfmt\.toml$'; then
       cargo fmt --check
       cargo check
+      cargo clippy --all-targets --all-features -- -D warnings
       cargo test
     else
       echo "pre-push: no Rust changes in push range; skipping fmt/check/test" >&2

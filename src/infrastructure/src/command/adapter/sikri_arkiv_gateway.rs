@@ -291,10 +291,10 @@ impl SikriArkivGateway {
         Ok(STANDARD.encode(media.data))
     }
 
-    fn dokument_for_client_reference<'a>(
-        command: &'a CommandEnvelope<Command>,
+    fn dokument_for_client_reference(
+        command: &CommandEnvelope<Command>,
         dokument_id: uuid::Uuid,
-    ) -> Result<&'a Dokument, anyhow::Error> {
+    ) -> Result<&Dokument, anyhow::Error> {
         let dokumenter = match &command.payload {
             Command::OpprettInngåendeJournalpost(data) => &data.felles.dokumenter,
             Command::OpprettUtgåendeJournalpost(data) => &data.felles.dokumenter,
