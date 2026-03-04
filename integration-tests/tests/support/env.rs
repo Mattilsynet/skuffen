@@ -5,7 +5,11 @@ use std::time::Duration;
 use anyhow::Result;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
-use testcontainers::{runners::AsyncRunner, ContainerAsync, GenericImage, RunnableImage};
+use testcontainers::{
+    core::ContainerPort,
+    runners::AsyncRunner,
+    ContainerAsync, ContainerRequest, GenericImage, ImageExt,
+};
 use testcontainers_modules::postgres::Postgres;
 
 use application::command::ports::command_state_port::CommandStateRepository;
@@ -36,32 +40,30 @@ fn default_nats_args() -> Vec<String> {
     ]
 }
 
-fn nats_image() -> RunnableImage<GenericImage> {
-    RunnableImage::from((
-        GenericImage::new(NATS_IMAGE, NATS_TAG)
-            .with_exposed_port(NATS_PORT)
-            .with_exposed_port(NATS_MONITOR_PORT),
-        default_nats_args(),
-    ))
+fn nats_image() -> ContainerRequest<GenericImage> {
+    GenericImage::new(NATS_IMAGE, NATS_TAG)
+        .with_exposed_port(ContainerPort::Tcp(NATS_PORT))
+        .with_exposed_port(ContainerPort::Tcp(NATS_MONITOR_PORT))
+        .with_cmd(default_nats_args())
 }
 
-async fn setup_postgres() -> (ContainerAsync<Postgres>, PgConnectOptions) {
-    let container = Postgres::default().start().await;
-    let port = container.get_host_port_ipv4(5432).await;
+async fn setup_postgres() -> Result<(ContainerAsync<Postgres>, PgConnectOptions)> {
+    let container = Postgres::default().start().await?;
+    let port = container.get_host_port_ipv4(5432).await?;
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
         .port(port)
         .username("postgres")
         .password("postgres")
         .database("postgres");
-    (container, options)
+    Ok((container, options))
 }
 
-async fn setup_nats() -> (ContainerAsync<GenericImage>, String) {
-    let container = nats_image().start().await;
-    let port = container.get_host_port_ipv4(NATS_PORT).await;
+async fn setup_nats() -> Result<(ContainerAsync<GenericImage>, String)> {
+    let container = nats_image().start().await?;
+    let port = container.get_host_port_ipv4(NATS_PORT).await?;
     let nats_url = format!("nats://127.0.0.1:{port}");
-    (container, nats_url)
+    Ok((container, nats_url))
 }
 
 async fn start_skuffen_process(
@@ -126,14 +128,14 @@ pub async fn start_runtime(
     }
 
     eprintln!("start_runtime: starting postgres container");
-    let (_postgres, db_options) = setup_postgres().await;
+    let (_postgres, db_options) = setup_postgres().await?;
     eprintln!(
         "start_runtime: postgres ready on {}:{}",
         db_options.get_host(),
         db_options.get_port()
     );
     eprintln!("start_runtime: starting nats container");
-    let (_nats, nats_url) = setup_nats().await;
+    let (_nats, nats_url) = setup_nats().await?;
     eprintln!("start_runtime: waiting for nats ready");
     wait_for_nats_ready(&nats_url, Duration::from_secs(15)).await?;
     eprintln!("start_runtime: nats ready at {}", nats_url);

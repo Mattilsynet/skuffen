@@ -94,6 +94,7 @@ if command -v cargo >/dev/null 2>&1; then
       cargo check
       cargo clippy --all-targets --all-features -- -D warnings
       cargo test
+      cargo test -p skuffen-integration-tests
     else
       echo "pre-push: no Rust changes in push range; skipping fmt/check/test" >&2
     fi
