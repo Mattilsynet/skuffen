@@ -12,12 +12,10 @@ async fn main() -> anyhow::Result<()> {
 
     let runtime = infrastructure::bootstrap::prepare_runtime().await?;
 
-    let hent_sak_replier = infrastructure::bootstrap::build_hent_sak_replier(
+    let query_listener = infrastructure::bootstrap::build_query_listener(
         runtime.nats.clone(),
         runtime.use_fake_sikri,
     );
-    let hent_journalpost_replier =
-        infrastructure::bootstrap::build_hent_journalpost_replier(runtime.nats.clone());
     let ready_replier = infrastructure::bootstrap::build_ready_replier(runtime.nats.clone());
 
     let media_listener = infrastructure::command::nats::media_listener::MediaListener::new(
@@ -45,8 +43,7 @@ async fn main() -> anyhow::Result<()> {
 
     let _ = tokio::join!(
         runtime.health_check_handle,
-        hent_sak_replier.run(),
-        hent_journalpost_replier.run(),
+        query_listener.run(),
         ready_replier.run(),
         media_listener.run(),
         command_listener.run(),

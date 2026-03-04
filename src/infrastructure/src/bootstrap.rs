@@ -4,8 +4,6 @@ use application::query::services::hent_journalpost::HentJournalpostService;
 use application::query::services::hent_sak::HentSakService;
 use async_trait::async_trait;
 use lib_nats::jetstream;
-use lib_schemas::skuffen::query::queries::{HentJournalpostQuery, HentSakQuery};
-use lib_schemas::skuffen::query::responses::{JournalpostResponse, SakResponse};
 use tokio::task::JoinHandle;
 
 use crate::command::adapter::eksekvering_state_postgres::PostgresEksekveringStateRepository;
@@ -31,6 +29,7 @@ use crate::query::adapter::fake_sak_repository::FakeSakRepository;
 use crate::query::adapter::hent_sak::SikriRepository;
 use crate::query::mapping::lookup::key_mapping_queries;
 use crate::query::nats::listener::{NatsReplier, UseCase};
+use crate::query::nats::query_listener::QueryListener;
 
 pub struct RuntimeDeps {
     pub nats: NatsClient,
@@ -65,29 +64,19 @@ pub async fn prepare_runtime() -> anyhow::Result<RuntimeDeps> {
     })
 }
 
-pub fn build_hent_sak_replier(
-    nats: NatsClient,
-    use_fake_sikri: bool,
-) -> NatsReplier<HentSakQuery, SakResponse> {
+pub fn build_query_listener(nats: NatsClient, use_fake_sikri: bool) -> QueryListener {
     let hent_sak_uc = if use_fake_sikri {
         HentSakService::new(Box::new(FakeSakRepository::new()))
     } else {
         HentSakService::new(Box::new(SikriRepository))
     };
-
-    NatsReplier::<HentSakQuery, SakResponse>::new(nats, "sak.hent", Box::new(hent_sak_uc))
-}
-
-pub fn build_hent_journalpost_replier(
-    nats: NatsClient,
-) -> NatsReplier<HentJournalpostQuery, JournalpostResponse> {
     let hent_journalpost_uc =
         HentJournalpostService::new(Box::new(FakeJournalpostRepository::new()));
-    NatsReplier::<HentJournalpostQuery, JournalpostResponse>::new(
-        nats,
-        "journalpost.hent",
-        Box::new(hent_journalpost_uc),
-    )
+    let hent_sak_replier = NatsReplier::new(nats.clone(), "sak.hent", Box::new(hent_sak_uc));
+    let hent_journalpost_replier =
+        NatsReplier::new(nats, "journalpost.hent", Box::new(hent_journalpost_uc));
+
+    QueryListener::new(hent_sak_replier, hent_journalpost_replier)
 }
 
 pub fn build_ready_replier(nats: NatsClient) -> NatsReplier<String, String> {
