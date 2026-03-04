@@ -30,14 +30,21 @@ struct ErrorRule {
     recoverability: Recoverability,
 }
 
-const ERROR_RULES: &[ErrorRule] = &[ErrorRule {
-    status: Some(StatusCode::INTERNAL_SERVER_ERROR),
-    body_contains_all: &[
-        "feil ved identifisering av bruker",
-        "ble ikke funnet i ephorte person-tabell",
-    ],
-    recoverability: Recoverability::Irrecoverable,
-}];
+const ERROR_RULES: &[ErrorRule] = &[
+    ErrorRule {
+        status: Some(StatusCode::INTERNAL_SERVER_ERROR),
+        body_contains_all: &[
+            "feil ved identifisering av bruker",
+            "ble ikke funnet i ephorte person-tabell",
+        ],
+        recoverability: Recoverability::Irrecoverable,
+    },
+    ErrorRule {
+        status: Some(StatusCode::INTERNAL_SERVER_ERROR),
+        body_contains_all: &["ny journalpost har dokument-filer som mangler innhold"],
+        recoverability: Recoverability::Irrecoverable,
+    },
+];
 
 pub fn classify_http_error(status: StatusCode, body: Option<&str>) -> Recoverability {
     if let Some(body_text) = body {
@@ -116,6 +123,13 @@ mod tests {
             Some("temporary backend issue"),
         );
         assert_eq!(result, Recoverability::Recoverable);
+    }
+
+    #[test]
+    fn marks_missing_document_content_error_as_irrecoverable() {
+        let body = "Ny journalpost har dokument-filer som mangler innhold";
+        let result = classify_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+        assert_eq!(result, Recoverability::Irrecoverable);
     }
 
     #[test]
