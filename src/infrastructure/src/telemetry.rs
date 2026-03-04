@@ -75,6 +75,11 @@ pub fn init_subscriber(subscriber: impl Subscriber + Send + Sync) {
     set_global_default(subscriber).expect("Failed to set subscriber")
 }
 
+pub fn init_observability() {
+    let subscriber = get_subscriber();
+    init_subscriber(subscriber);
+}
+
 pub fn current_trace_parent() -> Option<String> {
     struct HeaderInjector {
         value: Option<String>,
