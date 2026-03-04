@@ -6,9 +6,8 @@ use anyhow::Result;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use testcontainers::{
-    core::ContainerPort,
-    runners::AsyncRunner,
-    ContainerAsync, ContainerRequest, GenericImage, ImageExt,
+    core::ContainerPort, runners::AsyncRunner, ContainerAsync, ContainerRequest, GenericImage,
+    ImageExt,
 };
 use testcontainers_modules::postgres::Postgres;
 
