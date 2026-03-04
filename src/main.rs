@@ -99,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
     let command_listener = infrastructure::command::nats::command_listener::CommandListener::new(
         nats.clone(),
         command_service,
-        media_store,
+        media_store.clone(),
     );
 
     let command_state_repo: Box<
@@ -128,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
         if use_fake_sikri {
             Box::new(FakeArkivGateway::new())
         } else {
-            Box::new(SikriArkivGateway::new())
+            Box::new(SikriArkivGateway::new(media_store.clone()))
         };
     let eksekvering_service =
         application::command::services::eksekver_kommando::EksekverKommandoService::new(

@@ -1,7 +1,9 @@
+use crate::command::media::MediaStore;
 use application::command::ports::eksekvering_port::{
     ArkivGateway, OpprettJournalpostResultat, Utsendingsvalg,
 };
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::{
     OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost, OpprettUgåendeJournalpost,
@@ -13,17 +15,13 @@ use sikri_client::dto::elements_dokument::ElementsDokument;
 use sikri_client::dto::elements_journalpost::ElementsJournalpost;
 
 #[derive(Clone)]
-pub struct SikriArkivGateway;
-
-impl SikriArkivGateway {
-    pub fn new() -> Self {
-        Self
-    }
+pub struct SikriArkivGateway {
+    media_store: std::sync::Arc<dyn MediaStore>,
 }
 
-impl Default for SikriArkivGateway {
-    fn default() -> Self {
-        Self::new()
+impl SikriArkivGateway {
+    pub fn new(media_store: std::sync::Arc<dyn MediaStore>) -> Self {
+        Self { media_store }
     }
 }
 
@@ -77,9 +75,13 @@ impl ArkivGateway for SikriArkivGateway {
         utsending: Option<Utsendingsvalg>,
     ) -> Result<OpprettJournalpostResultat, anyhow::Error> {
         let journalpost = match &command.payload {
-            Command::OpprettInngåendeJournalpost(data) => self.opprett_inngaende(data),
-            Command::OpprettUtgåendeJournalpost(data) => self.opprett_utgaaende(data, utsending),
-            Command::OpprettInterntNotatJournalpost(data) => self.opprett_internt_notat(data),
+            Command::OpprettInngåendeJournalpost(data) => self.opprett_inngaende(data).await?,
+            Command::OpprettUtgåendeJournalpost(data) => {
+                self.opprett_utgaaende(data, utsending).await?
+            }
+            Command::OpprettInterntNotatJournalpost(data) => {
+                self.opprett_internt_notat(data).await?
+            }
             _ => return Err(anyhow::anyhow!("Ugyldig kommando for opprett_journalpost")),
         };
 
@@ -92,19 +94,14 @@ impl ArkivGateway for SikriArkivGateway {
 
     async fn legg_til_vedlegg(
         &self,
-        _command: &CommandEnvelope<Command>,
+        command: &CommandEnvelope<Command>,
         journalpost_id: i32,
         dokument_ids: Vec<uuid::Uuid>,
     ) -> Result<Vec<Option<i32>>, anyhow::Error> {
-        let vedlegg: Vec<ElementsDokument> = dokument_ids
-            .into_iter()
-            .map(|_| ElementsDokument {
-                tittel: None,
-                hoveddokument: false,
-                filtype: None,
-                innhold: None,
-            })
-            .collect();
+        let mut vedlegg: Vec<ElementsDokument> = Vec::with_capacity(dokument_ids.len());
+        for dokument_id in dokument_ids {
+            vedlegg.push(self.map_vedlegg_dokument(command, dokument_id).await?);
+        }
 
         let resp = sikri_client::legg_til_vedlegg(journalpost_id, vedlegg).await?;
         Ok(resp.into_iter().map(|d| d.dokument_id).collect())
@@ -132,9 +129,12 @@ impl ArkivGateway for SikriArkivGateway {
 }
 
 impl SikriArkivGateway {
-    fn opprett_inngaende(&self, data: &OpprettInngåendeJournalpost) -> ElementsJournalpost {
-        let dokumenter = self.map_dokumenter(&data.felles.dokumenter);
-        ElementsJournalpost {
+    async fn opprett_inngaende(
+        &self,
+        data: &OpprettInngåendeJournalpost,
+    ) -> Result<ElementsJournalpost, anyhow::Error> {
+        let dokumenter = self.map_dokumenter(&data.felles.dokumenter).await?;
+        Ok(ElementsJournalpost {
             tittel: Some(data.felles.tittel.clone()),
             journalposttype: Some("I".to_string()),
             journalstatus: Some("J".to_string()),
@@ -168,22 +168,22 @@ impl SikriArkivGateway {
             }]),
             dokumenter: Some(dokumenter),
             dokument_dato: Some(data.felles.dokument_dato.clone()),
-        }
+        })
     }
 
-    fn opprett_utgaaende(
+    async fn opprett_utgaaende(
         &self,
         data: &OpprettUgåendeJournalpost,
         utsending: Option<Utsendingsvalg>,
-    ) -> ElementsJournalpost {
-        let dokumenter = self.map_dokumenter(&data.felles.dokumenter);
+    ) -> Result<ElementsJournalpost, anyhow::Error> {
+        let dokumenter = self.map_dokumenter(&data.felles.dokumenter).await?;
         let forsendelsesmetode = match utsending {
             Some(Utsendingsvalg::MedUtsending) => Some("GENERELL".to_string()),
             Some(Utsendingsvalg::UtenUtsending) => Some("DIG".to_string()),
             None => None,
         };
 
-        ElementsJournalpost {
+        Ok(ElementsJournalpost {
             tittel: Some(data.felles.tittel.clone()),
             journalposttype: Some("U".to_string()),
             journalstatus: Some("R".to_string()),
@@ -217,12 +217,15 @@ impl SikriArkivGateway {
             }]),
             dokumenter: Some(dokumenter),
             dokument_dato: Some(data.felles.dokument_dato.clone()),
-        }
+        })
     }
 
-    fn opprett_internt_notat(&self, data: &OpprettInterntNotatJournalpost) -> ElementsJournalpost {
-        let dokumenter = self.map_dokumenter(&data.felles.dokumenter);
-        ElementsJournalpost {
+    async fn opprett_internt_notat(
+        &self,
+        data: &OpprettInterntNotatJournalpost,
+    ) -> Result<ElementsJournalpost, anyhow::Error> {
+        let dokumenter = self.map_dokumenter(&data.felles.dokumenter).await?;
+        Ok(ElementsJournalpost {
             tittel: Some(data.felles.tittel.clone()),
             journalposttype: Some("X".to_string()),
             journalstatus: Some("J".to_string()),
@@ -239,19 +242,71 @@ impl SikriArkivGateway {
             avsendere_mottakere: None,
             dokumenter: Some(dokumenter),
             dokument_dato: Some(data.felles.dokument_dato.clone()),
-        }
+        })
     }
 
-    fn map_dokumenter(&self, dokumenter: &[Dokument]) -> Vec<ElementsDokument> {
-        dokumenter
-            .iter()
-            .enumerate()
-            .map(|(index, d)| ElementsDokument {
+    async fn map_dokumenter(
+        &self,
+        dokumenter: &[Dokument],
+    ) -> Result<Vec<ElementsDokument>, anyhow::Error> {
+        let mut mapped = Vec::with_capacity(dokumenter.len());
+        for (index, d) in dokumenter.iter().enumerate() {
+            let innhold = self.hent_media_base64(d.dokument_referanse).await?;
+            mapped.push(ElementsDokument {
                 tittel: Some(d.tittel.clone()),
                 hoveddokument: index == 0,
                 filtype: Some(d.filtype.clone()),
-                innhold: None,
+                innhold: Some(innhold),
+            });
+        }
+        Ok(mapped)
+    }
+
+    async fn map_vedlegg_dokument(
+        &self,
+        command: &CommandEnvelope<Command>,
+        dokument_id: uuid::Uuid,
+    ) -> Result<ElementsDokument, anyhow::Error> {
+        let dokument = Self::dokument_for_client_reference(command, dokument_id)?;
+        let innhold = self.hent_media_base64(dokument.dokument_referanse).await?;
+        Ok(ElementsDokument {
+            tittel: Some(dokument.tittel.clone()),
+            hoveddokument: false,
+            filtype: Some(dokument.filtype.clone()),
+            innhold: Some(innhold),
+        })
+    }
+
+    async fn hent_media_base64(
+        &self,
+        dokument_referanse: uuid::Uuid,
+    ) -> Result<String, anyhow::Error> {
+        let media = self
+            .media_store
+            .get(dokument_referanse)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("Media mangler for dokument_referanse={dokument_referanse}")
+            })?;
+        Ok(STANDARD.encode(media.data))
+    }
+
+    fn dokument_for_client_reference<'a>(
+        command: &'a CommandEnvelope<Command>,
+        dokument_id: uuid::Uuid,
+    ) -> Result<&'a Dokument, anyhow::Error> {
+        let dokumenter = match &command.payload {
+            Command::OpprettInngåendeJournalpost(data) => &data.felles.dokumenter,
+            Command::OpprettUtgåendeJournalpost(data) => &data.felles.dokumenter,
+            Command::OpprettInterntNotatJournalpost(data) => &data.felles.dokumenter,
+            _ => return Err(anyhow::anyhow!("Ugyldig kommando for dokumentmapping")),
+        };
+
+        dokumenter
+            .iter()
+            .find(|d| d.client_reference == dokument_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("Dokument med client_reference={dokument_id} ble ikke funnet")
             })
-            .collect()
     }
 }

@@ -1,5 +1,6 @@
 use async_nats::jetstream::object_store::{InfoErrorKind, ObjectStore};
 use async_trait::async_trait;
+use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
 use bytes::Bytes;
@@ -16,6 +17,7 @@ pub struct MediaFile {
 pub trait MediaStore: Send + Sync {
     async fn save(&self, file: MediaFile) -> Result<(), anyhow::Error>;
     async fn exists(&self, id: Uuid) -> Result<bool, anyhow::Error>;
+    async fn get(&self, id: Uuid) -> Result<Option<MediaFile>, anyhow::Error>;
 }
 
 #[derive(Clone)]
@@ -45,5 +47,32 @@ impl MediaStore for ObjectStoreMediaStore {
             Err(err) if matches!(err.kind(), InfoErrorKind::NotFound) => Ok(false),
             Err(err) => Err(anyhow::anyhow!(err)),
         }
+    }
+
+    async fn get(&self, id: Uuid) -> Result<Option<MediaFile>, anyhow::Error> {
+        let object_name = id.to_string();
+        let mut object = match self.store.get(object_name.as_str()).await {
+            Ok(object) => object,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    async_nats::jetstream::object_store::GetErrorKind::NotFound
+                ) =>
+            {
+                return Ok(None);
+            }
+            Err(err) => return Err(anyhow::anyhow!(err)),
+        };
+
+        let mut data = Vec::new();
+        object.read_to_end(&mut data).await?;
+        let info = object.info;
+
+        Ok(Some(MediaFile {
+            id,
+            data,
+            filename: Some(info.name),
+            content_type: None,
+        }))
     }
 }
