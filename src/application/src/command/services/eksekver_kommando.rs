@@ -671,7 +671,8 @@ impl EksekverKommandoService {
             Some(refs) => Some(refs),
             None => Some(err.melding.clone()),
         };
-        let status_event_value = status_event(envelope, status_for_event, merged_message.clone(), None);
+        let status_event_value =
+            status_event(envelope, status_for_event, merged_message.clone(), None);
         self.status_publisher
             .publiser_status(status_event_value)
             .await?;
