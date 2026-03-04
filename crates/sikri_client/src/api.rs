@@ -322,21 +322,22 @@ pub async fn avskriv_journalpost(journalpost_id: i32, avskrivingsmaate: &str) ->
 
 pub async fn avslutt_sak(saksnummer: &str) -> Result<()> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
-    let url = format!("{}/api/Archive/AvsluttArkivsak", base_url());
+    let url = format!("{}/api/Archive/SetStatusForArkivSak", base_url());
     info!(
         target: "sikri.http",
-        method = "POST",
+        method = "PUT",
         url = %url,
         saksnr = saksnummer,
+        ny_saksstatus = "A",
         "Sending request to Sikri"
     );
     let resp = Client::new()
-        .post(&url)
+        .put(&url)
         .basic_auth(username, Some(password))
-        .query(&[("saksnr", saksnummer)])
+        .query(&[("saksnr", saksnummer), ("nySaksstatus", "A")])
         .send()
         .await
         .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
-    let _ = ensure_success(resp, "POST", &url).await?;
+    let _ = ensure_success(resp, "PUT", &url).await?;
     Ok(())
 }

@@ -9,6 +9,11 @@ pub struct ElementsDokument {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filtype: Option<String>,
     // Base64
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "dokumentBase64",
+        alias = "filInnhold",
+        alias = "innhold",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub innhold: Option<String>,
 }
