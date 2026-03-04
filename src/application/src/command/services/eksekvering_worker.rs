@@ -57,29 +57,34 @@ impl EksekveringWorker {
                     .oppdater_eksekvering(command.command_id, EksekveringStatus::Ok, None, None)
                     .await?;
             }
-            ExecutionOutcome::Error => {
+            ExecutionOutcome::Error { last_error } => {
                 self.state_repo
-                    .oppdater_eksekvering(command.command_id, EksekveringStatus::Error, None, None)
+                    .oppdater_eksekvering(
+                        command.command_id,
+                        EksekveringStatus::Error,
+                        last_error,
+                        None,
+                    )
                     .await?;
             }
-            ExecutionOutcome::Blocked => {
+            ExecutionOutcome::Blocked { last_error } => {
                 let next_retry = self.neste_retry_at(command.attempts);
                 self.state_repo
                     .oppdater_eksekvering(
                         command.command_id,
                         EksekveringStatus::Blocked,
-                        None,
+                        last_error,
                         Some(next_retry),
                     )
                     .await?;
             }
-            ExecutionOutcome::Retrying => {
+            ExecutionOutcome::Retrying { last_error } => {
                 let next_retry = self.neste_retry_at(command.attempts);
                 self.state_repo
                     .oppdater_eksekvering(
                         command.command_id,
                         EksekveringStatus::Retrying,
-                        None,
+                        last_error,
                         Some(next_retry),
                     )
                     .await?;

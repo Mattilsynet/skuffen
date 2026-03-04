@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandStatus};
 use lib_schemas::skuffen::query::queries::SakKey;
 use std::fmt::Write;
@@ -9,14 +8,11 @@ use crate::command::ports::eksekvering_port::{
     OpprettJournalpostResultat, Utsendingsvalg,
 };
 use crate::command::ports::eksekvering_state_port::{
-    DokumentState, EksekveringStateRepository, EksekveringStatus, JournalpostState, SakState,
-    SakStatus,
+    DokumentState, EksekveringStateRepository, JournalpostState, SakState, SakStatus,
 };
 use crate::command::ports::id_mapping_port::IdMappingRepository;
 use domain::eksekvering::plan::{EksekveringsPlan, JournalpostType, Steg, Utsending};
 use domain::eksekvering::typer::{status_event, EksekveringFeil, EksekveringFeiltype};
-
-use crate::command::services::eksekvering_backoff::neste_backoff;
 
 pub struct EksekverKommandoService {
     state_repo: Box<dyn EksekveringStateRepository>,
@@ -26,12 +22,12 @@ pub struct EksekverKommandoService {
     id_mapping: Box<dyn IdMappingRepository>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionOutcome {
     Ok,
-    Blocked,
-    Retrying,
-    Error,
+    Blocked { last_error: Option<String> },
+    Retrying { last_error: Option<String> },
+    Error { last_error: Option<String> },
 }
 
 #[derive(Debug, Clone)]
@@ -658,25 +654,10 @@ impl EksekverKommandoService {
         envelope: &CommandEnvelope<Command>,
         err: EksekveringFeil,
     ) -> Result<ExecutionOutcome, anyhow::Error> {
-        let (status, outcome, _eksekvering_status, _next_retry) = match err.feiltype {
-            EksekveringFeiltype::Recoverable => (
-                CommandStatus::Retrying,
-                ExecutionOutcome::Retrying,
-                EksekveringStatus::Retrying,
-                Some(self.neste_retry_at(0)),
-            ),
-            EksekveringFeiltype::Irrecoverable => (
-                CommandStatus::Error,
-                ExecutionOutcome::Error,
-                EksekveringStatus::Error,
-                None,
-            ),
-            EksekveringFeiltype::Blocked => (
-                CommandStatus::Blocked,
-                ExecutionOutcome::Blocked,
-                EksekveringStatus::Blocked,
-                Some(self.neste_retry_at(0)),
-            ),
+        let status = match err.feiltype {
+            EksekveringFeiltype::Recoverable => CommandStatus::Retrying,
+            EksekveringFeiltype::Irrecoverable => CommandStatus::Error,
+            EksekveringFeiltype::Blocked => CommandStatus::Blocked,
         };
 
         let status_for_event = status.clone();
@@ -690,7 +671,7 @@ impl EksekverKommandoService {
             Some(refs) => Some(refs),
             None => Some(err.melding.clone()),
         };
-        let status_event_value = status_event(envelope, status_for_event, merged_message, None);
+        let status_event_value = status_event(envelope, status_for_event, merged_message.clone(), None);
         self.status_publisher
             .publiser_status(status_event_value)
             .await?;
@@ -701,6 +682,18 @@ impl EksekverKommandoService {
                 .publiser_done(&subject, envelope)
                 .await?;
         }
+
+        let outcome = match err.feiltype {
+            EksekveringFeiltype::Recoverable => ExecutionOutcome::Retrying {
+                last_error: merged_message,
+            },
+            EksekveringFeiltype::Irrecoverable => ExecutionOutcome::Error {
+                last_error: merged_message,
+            },
+            EksekveringFeiltype::Blocked => ExecutionOutcome::Blocked {
+                last_error: merged_message,
+            },
+        };
 
         Ok(outcome)
     }
@@ -810,9 +803,5 @@ impl EksekverKommandoService {
         }
 
         parts.join(" ")
-    }
-
-    fn neste_retry_at(&self, attempt: u32) -> DateTime<Utc> {
-        neste_backoff(attempt)
     }
 }
