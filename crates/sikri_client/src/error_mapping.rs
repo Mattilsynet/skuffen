@@ -11,6 +11,12 @@ pub enum Recoverability {
 
 pub fn user_message_for_http_error(status: StatusCode, body: Option<&str>) -> String {
     if let Some(body_text) = body
+        && contains_upstream_bad_gateway_pattern(body_text)
+    {
+        return "Sikri/Elements er midlertidig utilgjengelig (upstream 502 Bad Gateway). Prøv igjen senere.".to_string();
+    }
+
+    if let Some(body_text) = body
         && classify_http_error(status, Some(body_text)) == Recoverability::Irrecoverable
         && contains_missing_user_pattern(body_text)
     {
@@ -31,6 +37,11 @@ struct ErrorRule {
 }
 
 const ERROR_RULES: &[ErrorRule] = &[
+    ErrorRule {
+        status: Some(StatusCode::INTERNAL_SERVER_ERROR),
+        body_contains_all: &["feil ved identifisering av bruker", "502", "bad gateway"],
+        recoverability: Recoverability::Recoverable,
+    },
     ErrorRule {
         status: Some(StatusCode::INTERNAL_SERVER_ERROR),
         body_contains_all: &[
@@ -92,6 +103,13 @@ fn contains_missing_user_pattern(body: &str) -> bool {
         && normalized.contains("ble ikke funnet i ephorte person-tabell")
 }
 
+fn contains_upstream_bad_gateway_pattern(body: &str) -> bool {
+    let normalized = body.to_lowercase();
+    normalized.contains("feil ved identifisering av bruker")
+        && normalized.contains("502")
+        && normalized.contains("bad gateway")
+}
+
 fn extract_user_from_identification_error(body: &str) -> Option<String> {
     let normalized = body.to_lowercase();
     let needle = "identifisering av bruker ";
@@ -133,6 +151,13 @@ mod tests {
     }
 
     #[test]
+    fn marks_identification_error_with_upstream_bad_gateway_as_recoverable() {
+        let body = "Feil ved identifisering av bruker SikriArkivApi. Detaljer: The remote server returned an unexpected response: (502) Bad Gateway.";
+        let result = classify_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+        assert_eq!(result, Recoverability::Recoverable);
+    }
+
+    #[test]
     fn keeps_client_errors_irrecoverable_by_default() {
         let result = classify_http_error(StatusCode::BAD_REQUEST, Some("invalid request"));
         assert_eq!(result, Recoverability::Irrecoverable);
@@ -145,6 +170,16 @@ mod tests {
         assert_eq!(
             message,
             "Ugyldig saksbehandler/systembruker (Z12345): brukeren finnes ikke i ePhorte (PERSON.PE_BRUKERID)."
+        );
+    }
+
+    #[test]
+    fn maps_upstream_bad_gateway_to_friendly_message() {
+        let body = "Feil ved identifisering av bruker SikriArkivApi. Detaljer: The remote server returned an unexpected response: (502) Bad Gateway.";
+        let message = user_message_for_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+        assert_eq!(
+            message,
+            "Sikri/Elements er midlertidig utilgjengelig (upstream 502 Bad Gateway). Prøv igjen senere."
         );
     }
 }
