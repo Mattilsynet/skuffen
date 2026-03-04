@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct ElementsDokument {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tittel: Option<String>,
+    pub hoveddokument: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filtype: Option<String>,
     // Base64

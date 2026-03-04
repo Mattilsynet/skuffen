@@ -100,6 +100,7 @@ impl ArkivGateway for SikriArkivGateway {
             .into_iter()
             .map(|_| ElementsDokument {
                 tittel: None,
+                hoveddokument: false,
                 filtype: None,
                 innhold: None,
             })
@@ -244,8 +245,10 @@ impl SikriArkivGateway {
     fn map_dokumenter(&self, dokumenter: &[Dokument]) -> Vec<ElementsDokument> {
         dokumenter
             .iter()
-            .map(|d| ElementsDokument {
+            .enumerate()
+            .map(|(index, d)| ElementsDokument {
                 tittel: Some(d.tittel.clone()),
+                hoveddokument: index == 0,
                 filtype: Some(d.filtype.clone()),
                 innhold: None,
             })
