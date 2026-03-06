@@ -40,3 +40,7 @@ async-trait = "0.1.89"
 serde = { version = "1", features = ["derive"] }
 rustls = { version = "0.23.36", features = ["aws_lc_rs"] }
 thiserror = "2.0.16"
+
+# CVC
+aws-lc-sys = "0.38.0"
+aws-lc-rs = "1.16.1"
