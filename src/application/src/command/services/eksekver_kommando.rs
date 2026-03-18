@@ -482,7 +482,11 @@ impl EksekverKommandoService {
             .hent_journalpost_state(journalpost_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-        if journalpost_state.is_some() {
+        if journalpost_state
+            .as_ref()
+            .and_then(|state| state.journalpostnummer)
+            .is_some()
+        {
             return Ok(ExecutionGuard::skip("Journalpost finnes allerede i state"));
         }
 

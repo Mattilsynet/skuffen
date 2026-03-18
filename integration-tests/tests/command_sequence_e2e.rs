@@ -4,6 +4,8 @@ use anyhow::Result;
 use std::time::Duration;
 use uuid::Uuid;
 
+use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
 
@@ -199,5 +201,142 @@ async fn query_hent_journalpost_via_nats() -> Result<()> {
         hent_journalpost_via_nats(&env.nats_url, scenario.journalpost_internt_client_reference)
             .await?;
     assert_eq!(response.get("status").and_then(|s| s.as_str()), Some("Ok"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn avslutt_sak_uten_journalposter_er_tillatt() -> Result<()> {
+    let arkiv_gateway = FakeArkivGateway::new(Arc::new(FakeArkivGatewayState::new()));
+    let env = support::start_runtime(
+        Box::new(FakeCommandStateRepository),
+        Box::new(arkiv_gateway),
+        None,
+    )
+    .await?;
+
+    let sak_client_reference = Uuid::new_v4();
+    let commands = vec![
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id: Some(Uuid::new_v4()),
+            payload: Command::OpprettSak(OpprettSak {
+                client_reference: sak_client_reference,
+                sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+                    "Skuffen E2E avslutt uten journalposter {}",
+                    Uuid::new_v4()
+                )),
+                arkivdel: Arkivdel::Tilsynsdivisjonene,
+                saksbehandler_id: "Z12345".to_string(),
+                saksbehandler_enhet: "42".to_string(),
+                ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
+                tilgang: None,
+            }),
+        },
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id: Some(Uuid::new_v4()),
+            payload: Command::AvsluttSak(AvsluttSak {
+                sak_key: DtoSakKey::ClientReference(sak_client_reference),
+            }),
+        },
+    ];
+
+    send_command_batch(&env.nats_url, &commands).await?;
+    wait_for_command_execution_all(
+        &env.pool,
+        commands.iter().map(|command| command.command_id),
+        Duration::from_secs(20),
+    )
+    .await?;
+
+    let sak_state = fetch_sak_state(&env.pool, sak_client_reference)
+        .await?
+        .expect("sak state should exist");
+    assert_eq!(sak_state.status, "A");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn avslutt_sak_blokkeres_nar_journalpost_ikke_er_ok() -> Result<()> {
+    let arkiv_gateway = FakeArkivGateway::new(Arc::new(FakeArkivGatewayState::new()));
+    let env = support::start_runtime(
+        Box::new(FakeCommandStateRepository),
+        Box::new(arkiv_gateway),
+        None,
+    )
+    .await?;
+
+    let sak_client_reference = Uuid::new_v4();
+    let opprett_sak = CommandEnvelope {
+        command_id: Uuid::new_v4(),
+        correlation_id: Some(Uuid::new_v4()),
+        payload: Command::OpprettSak(OpprettSak {
+            client_reference: sak_client_reference,
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+                "Skuffen E2E blokkert med ventende journalpost {}",
+                Uuid::new_v4()
+            )),
+            arkivdel: Arkivdel::Tilsynsdivisjonene,
+            saksbehandler_id: "Z12345".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
+            tilgang: None,
+        }),
+    };
+
+    send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
+    wait_for_command_execution_all(&env.pool, [opprett_sak.command_id], Duration::from_secs(20))
+        .await?;
+
+    let journalpost_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO journalpost_state (
+            journalpost_id,
+            sak_id,
+            journalpostnummer,
+            journalposttype,
+            med_utsending,
+            journalfoert,
+            avskrevet,
+            ekspedert,
+            har_feilede_dokumenter
+        ) VALUES ($1, $2, NULL, 'X', false, false, false, false, false)
+        "#,
+    )
+    .bind(journalpost_id)
+    .bind(sak_client_reference)
+    .execute(&env.pool)
+    .await?;
+
+    let avslutt_sak = CommandEnvelope {
+        command_id: Uuid::new_v4(),
+        correlation_id: Some(Uuid::new_v4()),
+        payload: Command::AvsluttSak(AvsluttSak {
+            sak_key: DtoSakKey::ClientReference(sak_client_reference),
+        }),
+    };
+    send_command_batch(&env.nats_url, std::slice::from_ref(&avslutt_sak)).await?;
+    wait_for_command_execution_all(&env.pool, [avslutt_sak.command_id], Duration::from_secs(20))
+        .await?;
+
+    let avslutt_status: Option<(String,)> = sqlx::query_as(
+        r#"
+        SELECT status
+        FROM command_execution
+        WHERE command_id = $1
+        "#,
+    )
+    .bind(avslutt_sak.command_id)
+    .fetch_optional(&env.pool)
+    .await?;
+    assert_eq!(avslutt_status.map(|(s,)| s), Some("blocked".to_string()));
+
+    let sak_state = fetch_sak_state(&env.pool, sak_client_reference)
+        .await?
+        .expect("sak state should exist");
+    assert_eq!(sak_state.status, "B");
+
     Ok(())
 }

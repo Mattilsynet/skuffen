@@ -6,9 +6,9 @@ use tracing::{Instrument, error, info};
 use crate::command::adapter::id_mapping_postgres::PostgresIdMappingRepository;
 use crate::nats::client::NatsClient;
 use application::command::ports::eksekvering_state_port::EksekveringStateRepository;
-use application::command::ports::eksekvering_state_port::{SakState, SakStatus};
+use application::command::ports::eksekvering_state_port::{JournalpostState, SakState, SakStatus};
 use application::command::ports::id_mapping_port::IdMappingRepository;
-use domain::eksekvering::plan::{EksekveringsPlan, Steg};
+use domain::eksekvering::plan::{EksekveringsPlan, JournalpostType, Steg, Utsending};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 
 pub struct KommandoEksekveringListener {
@@ -128,32 +128,63 @@ impl KommandoEksekveringListener {
     ) -> Result<(), anyhow::Error> {
         let plan = EksekveringsPlan::fra_command(&envelope.payload)
             .map_err(|err| anyhow::anyhow!(err.melding))?;
-        let saksnummer = match plan.steg.first() {
-            Some(Steg::OpprettJournalpost { plan }) => match &plan.sak_key {
-                DtoSakKey::ArkivId(saksnummer) => Some(saksnummer.as_str()),
-                _ => None,
-            },
-            Some(Steg::AvsluttSak { .. }) | Some(Steg::OpprettSak { .. }) => None,
-            Some(Steg::LeggTilDokument { .. })
-            | Some(Steg::Journalfoer { .. })
-            | Some(Steg::Avskriv { .. })
-            | None => None,
-        };
-        if let Some(saksnummer) = saksnummer {
-            let sak_id = self
-                .id_mapping_repo
-                .ensure_arkiv_mapping("sak", saksnummer)
-                .await?;
-            let existing = self.state_repo.hent_sak_state(sak_id).await?;
-            if existing.is_none() {
-                let state = SakState {
-                    status: SakStatus::UnderBehandling,
-                    opprettet: true,
-                    saksnummer: Some(saksnummer.to_string()),
+
+        if let Some(Steg::OpprettJournalpost { plan }) = plan.steg.first() {
+            let (sak_id, sak_state) = match &plan.sak_key {
+                DtoSakKey::ClientReference(sak_id) => (
+                    *sak_id,
+                    SakState {
+                        status: SakStatus::UnderBehandling,
+                        opprettet: false,
+                        saksnummer: None,
+                    },
+                ),
+                DtoSakKey::ArkivId(saksnummer) => {
+                    let sak_id = self
+                        .id_mapping_repo
+                        .ensure_arkiv_mapping("sak", saksnummer.as_str())
+                        .await?;
+                    (
+                        sak_id,
+                        SakState {
+                            status: SakStatus::UnderBehandling,
+                            opprettet: true,
+                            saksnummer: Some(saksnummer.as_str().to_string()),
+                        },
+                    )
+                }
+            };
+
+            if self.state_repo.hent_sak_state(sak_id).await?.is_none() {
+                self.state_repo.lagre_sak_state(sak_id, sak_state).await?;
+            }
+
+            if self
+                .state_repo
+                .hent_journalpost_state(plan.journalpost_id)
+                .await?
+                .is_none()
+            {
+                let journalposttype = match plan.journalpost_type {
+                    JournalpostType::Inngaende => 'I',
+                    JournalpostType::Utgaaende => 'U',
+                    JournalpostType::InterntNotat => 'X',
                 };
-                self.state_repo.lagre_sak_state(sak_id, state).await?;
+                let journalpost_state = JournalpostState {
+                    journalfoert: false,
+                    avskrevet: false,
+                    ekspedert: false,
+                    har_feilede_dokumenter: false,
+                    med_utsending: matches!(plan.utsending, Some(Utsending::MedUtsending)),
+                    journalposttype,
+                    journalpostnummer: None,
+                };
+                self.state_repo
+                    .lagre_journalpost_state(plan.journalpost_id, sak_id, journalpost_state)
+                    .await?;
             }
         }
+
         Ok(())
     }
 }
