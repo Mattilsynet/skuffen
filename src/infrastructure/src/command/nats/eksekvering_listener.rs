@@ -3,31 +3,17 @@ use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use tracing::{Instrument, error, info};
 
-use crate::command::adapter::id_mapping_postgres::PostgresIdMappingRepository;
 use crate::nats::client::NatsClient;
-use application::command::ports::eksekvering_state_port::EksekveringStateRepository;
-use application::command::ports::eksekvering_state_port::{JournalpostState, SakState, SakStatus};
-use application::command::ports::id_mapping_port::IdMappingRepository;
-use domain::eksekvering::plan::{EksekveringsPlan, JournalpostType, Steg, Utsending};
-use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
+use application::command::ports::registrer_eksekvering_port::RegistrerEksekveringUseCase;
 
 pub struct KommandoEksekveringListener {
     client: NatsClient,
-    state_repo: Box<dyn EksekveringStateRepository>,
-    id_mapping_repo: PostgresIdMappingRepository,
+    use_case: Box<dyn RegistrerEksekveringUseCase>,
 }
 
 impl KommandoEksekveringListener {
-    pub fn new(
-        client: NatsClient,
-        state_repo: Box<dyn EksekveringStateRepository>,
-        id_mapping_repo: PostgresIdMappingRepository,
-    ) -> Self {
-        Self {
-            client,
-            state_repo,
-            id_mapping_repo,
-        }
+    pub fn new(client: NatsClient, use_case: Box<dyn RegistrerEksekveringUseCase>) -> Self {
+        Self { client, use_case }
     }
 
     #[tracing::instrument(skip_all, name = "nats.execution_listener")]
@@ -98,12 +84,9 @@ impl KommandoEksekveringListener {
             {
                 span.record("traceparent", tracing::field::display(parent.as_str()));
             }
-            let result = async {
-                self.ensure_sak_state(&envelope).await?;
-                self.state_repo.registrer_kommando(&envelope).await
-            }
-            .instrument(span)
-            .await;
+            let result = async { self.use_case.handle(&envelope).await }
+                .instrument(span)
+                .await;
             match result {
                 Ok(()) => {
                     if let Err(err) = message.ack().await {
@@ -116,72 +99,6 @@ impl KommandoEksekveringListener {
                         error!("NAK failed: {err}");
                     }
                 }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn ensure_sak_state(
-        &self,
-        envelope: &CommandEnvelope<Command>,
-    ) -> Result<(), anyhow::Error> {
-        let plan = EksekveringsPlan::fra_command(&envelope.payload)
-            .map_err(|err| anyhow::anyhow!(err.melding))?;
-
-        if let Some(Steg::OpprettJournalpost { plan }) = plan.steg.first() {
-            let (sak_id, sak_state) = match &plan.sak_key {
-                DtoSakKey::ClientReference(sak_id) => (
-                    *sak_id,
-                    SakState {
-                        status: SakStatus::UnderBehandling,
-                        opprettet: false,
-                        saksnummer: None,
-                    },
-                ),
-                DtoSakKey::ArkivId(saksnummer) => {
-                    let sak_id = self
-                        .id_mapping_repo
-                        .ensure_arkiv_mapping("sak", saksnummer.as_str())
-                        .await?;
-                    (
-                        sak_id,
-                        SakState {
-                            status: SakStatus::UnderBehandling,
-                            opprettet: true,
-                            saksnummer: Some(saksnummer.as_str().to_string()),
-                        },
-                    )
-                }
-            };
-
-            if self.state_repo.hent_sak_state(sak_id).await?.is_none() {
-                self.state_repo.lagre_sak_state(sak_id, sak_state).await?;
-            }
-
-            if self
-                .state_repo
-                .hent_journalpost_state(plan.journalpost_id)
-                .await?
-                .is_none()
-            {
-                let journalposttype = match plan.journalpost_type {
-                    JournalpostType::Inngaende => 'I',
-                    JournalpostType::Utgaaende => 'U',
-                    JournalpostType::InterntNotat => 'X',
-                };
-                let journalpost_state = JournalpostState {
-                    journalfoert: false,
-                    avskrevet: false,
-                    ekspedert: false,
-                    har_feilede_dokumenter: false,
-                    med_utsending: matches!(plan.utsending, Some(Utsending::MedUtsending)),
-                    journalposttype,
-                    journalpostnummer: None,
-                };
-                self.state_repo
-                    .lagre_journalpost_state(plan.journalpost_id, sak_id, journalpost_state)
-                    .await?;
             }
         }
 

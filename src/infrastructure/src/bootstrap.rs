@@ -123,6 +123,12 @@ pub fn build_eksekvering_components(
     KommandoEksekveringListener,
     application::command::services::eksekvering_worker::EksekveringWorker,
 ) {
+    let registrer_eksekvering_service =
+        application::command::services::registrer_eksekvering::RegistrerEksekveringService::new(
+            Box::new(eksekvering_state_repo.clone()),
+            Box::new(id_mapping_repo.clone()),
+        );
+
     let eksekvering_service =
         application::command::services::eksekver_kommando::EksekverKommandoService::new(
             Box::new(eksekvering_state_repo.clone()),
@@ -132,11 +138,8 @@ pub fn build_eksekvering_components(
             Box::new(id_mapping_repo.clone()),
         );
 
-    let eksekvering_listener = KommandoEksekveringListener::new(
-        nats,
-        Box::new(eksekvering_state_repo.clone()),
-        id_mapping_repo,
-    );
+    let eksekvering_listener =
+        KommandoEksekveringListener::new(nats, Box::new(registrer_eksekvering_service));
     let eksekvering_worker =
         application::command::services::eksekvering_worker::EksekveringWorker::new(
             Box::new(eksekvering_state_repo),
