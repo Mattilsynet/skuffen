@@ -286,6 +286,9 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         .execute(&self.pool)
         .await?;
 
+        // We must read the row back after the insert attempt. If another worker inserted the
+        // same (entity_type, arkiv_id) first, ON CONFLICT DO NOTHING discards our generated
+        // skuffen_id and the row already in the table becomes the canonical mapping.
         let skuffen_id: Option<Uuid> = sqlx::query_scalar(
             r#"
             SELECT skuffen_id
