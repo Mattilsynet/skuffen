@@ -70,6 +70,7 @@ pub fn build_query_listener(nats: NatsClient, use_fake_sikri: bool) -> QueryList
     } else {
         HentSakService::new(Box::new(SikriRepository))
     };
+    //TODO: Ikke implementert endepunkt enda.
     let hent_journalpost_uc =
         HentJournalpostService::new(Box::new(FakeJournalpostRepository::new()));
     let hent_sak_replier = NatsReplier::new(nats.clone(), "sak.hent", Box::new(hent_sak_uc));
