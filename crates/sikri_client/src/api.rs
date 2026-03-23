@@ -237,7 +237,7 @@ pub async fn legg_til_vedlegg(
     dokumenter: Vec<ElementsDokument>,
 ) -> Result<Vec<ElementsDokumentRespons>> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
-    let url = format!("{}/api/Archive/LeggTilVedlegg", base_url());
+    let url = format!("{}/api/Archive/LeggTilVedleggPaaJournalpost", base_url());
     info!(
         target: "sikri.http",
         method = "POST",
