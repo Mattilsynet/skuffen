@@ -38,7 +38,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         command: &Command,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
-        if let Some(existing_skuffen_id) = self.get_skuffen_id(client_reference).await? {
+        if let Some(existing_skuffen_id) = self.hent_skuffen_id_fra_mapping(client_reference).await? {
             if existing_skuffen_id != skuffen_id {
                 return Err(anyhow::anyhow!(
                     "client_reference is already mapped to a different skuffen_id"
@@ -116,7 +116,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         skuffen_id: Uuid,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
-        if let Some(existing_skuffen_id) = self.get_skuffen_id(client_reference).await? {
+        if let Some(existing_skuffen_id) = self.hent_skuffen_id_fra_mapping(client_reference).await? {
             if existing_skuffen_id != skuffen_id {
                 return Err(anyhow::anyhow!(
                     "client_reference is already mapped to a different skuffen_id"
@@ -203,7 +203,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         Ok(())
     }
 
-    async fn get_arkiv_id(&self, skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
+    async fn hent_arkiv_id_fra_mapping(&self, skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
         let arkiv_id: Option<(Option<String>,)> = sqlx::query_as(
             r#"
             SELECT arkiv_id
@@ -218,7 +218,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         Ok(arkiv_id.and_then(|(arkiv_id,)| arkiv_id))
     }
 
-    async fn get_skuffen_id(&self, client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error> {
+    async fn hent_skuffen_id_fra_mapping(&self, client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error> {
         let skuffen_id: Option<Uuid> = sqlx::query_scalar(
             r#"
             SELECT skuffen_id
@@ -233,7 +233,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         Ok(skuffen_id)
     }
 
-    async fn get_skuffen_id_from_arkiv_id(
+    async fn hent_skuffen_id_fra_arkiv_id_i_mapping(
         &self,
         arkiv_id: &str,
     ) -> Result<Option<Uuid>, anyhow::Error> {
@@ -251,7 +251,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         Ok(skuffen_id)
     }
 
-    async fn ensure_arkiv_mapping(
+    async fn hent_eller_opprett_skuffen_id_for_arkiv_id(
         &self,
         entity_type: &str,
         arkiv_id: &str,

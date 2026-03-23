@@ -1,5 +1,5 @@
 use application::command::ports::command_state_port::{
-    CommandStateError, CommandStateErrorKind, CommandStateRepository, SakState,
+    ArkivSakTilstandError, ArkivSakTilstandErrorKind, ArkivSakTilstandRepository, ArkivSakTilstand,
 };
 use async_trait::async_trait;
 use sikri_client::Recoverability;
@@ -8,8 +8,8 @@ use sikri_client::Recoverability;
 pub struct SikriCommandStateRepository;
 
 #[async_trait]
-impl CommandStateRepository for SikriCommandStateRepository {
-    async fn hent_sak_state(&self, saksnummer: &str) -> Result<SakState, CommandStateError> {
+impl ArkivSakTilstandRepository for SikriCommandStateRepository {
+    async fn hent_sak_tilstand_fra_arkivet(&self, saksnummer: &str) -> Result<ArkivSakTilstand, ArkivSakTilstandError> {
         match sikri_client::hent_sak(saksnummer, "SKUFFEN", false).await {
             Ok(sak) => {
                 let avsluttet = sak.lukket
@@ -18,28 +18,28 @@ impl CommandStateRepository for SikriCommandStateRepository {
                         .as_deref()
                         .and_then(|status| status.chars().next())
                         == Some('A');
-                Ok(SakState { avsluttet })
+                Ok(ArkivSakTilstand { avsluttet })
             }
             Err(err) => {
                 if let Some(req_err) = err.downcast_ref::<reqwest::Error>() {
                     let kind = match req_err.status() {
                         Some(status) => match sikri_client::classify_http_error(status, None) {
-                            Recoverability::Recoverable => CommandStateErrorKind::Recoverable,
-                            Recoverability::Irrecoverable => CommandStateErrorKind::Irrecoverable,
+                            Recoverability::Recoverable => ArkivSakTilstandErrorKind::Recoverable,
+                            Recoverability::Irrecoverable => ArkivSakTilstandErrorKind::Irrecoverable,
                         },
-                        None => CommandStateErrorKind::Recoverable,
+                        None => ArkivSakTilstandErrorKind::Recoverable,
                     };
                     let message = match req_err.status() {
                         Some(status) if status == reqwest::StatusCode::NOT_FOUND => {
-                            format!("Sak finnes ikke i Sikri ({})", saksnummer)
+                            format!("Sak finnes ikke i arkivet ({})", saksnummer)
                         }
                         _ => req_err.to_string(),
                     };
-                    return Err(CommandStateError::new(kind, message));
+                    return Err(ArkivSakTilstandError::new(kind, message));
                 }
 
-                Err(CommandStateError::new(
-                    CommandStateErrorKind::Recoverable,
+                Err(ArkivSakTilstandError::new(
+                    ArkivSakTilstandErrorKind::Recoverable,
                     err.to_string(),
                 ))
             }

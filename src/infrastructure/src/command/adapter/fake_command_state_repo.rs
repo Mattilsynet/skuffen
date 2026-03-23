@@ -1,15 +1,15 @@
 use async_trait::async_trait;
 
 use application::command::ports::command_state_port::{
-    CommandStateError, CommandStateRepository, SakState,
+    ArkivSakTilstandError, ArkivSakTilstandRepository, ArkivSakTilstand,
 };
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct FakeCommandStateRepository;
+pub struct FakeArkivSakTilstandRepository;
 
 #[async_trait]
-impl CommandStateRepository for FakeCommandStateRepository {
-    async fn hent_sak_state(&self, _saksnummer: &str) -> Result<SakState, CommandStateError> {
-        Ok(SakState { avsluttet: false })
+impl ArkivSakTilstandRepository for FakeArkivSakTilstandRepository {
+    async fn hent_sak_tilstand_fra_arkivet(&self, _saksnummer: &str) -> Result<ArkivSakTilstand, ArkivSakTilstandError> {
+        Ok(ArkivSakTilstand { avsluttet: false })
     }
 }

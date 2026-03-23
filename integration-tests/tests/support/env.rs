@@ -11,7 +11,7 @@ use testcontainers::{
 };
 use testcontainers_modules::postgres::Postgres;
 
-use application::command::ports::command_state_port::CommandStateRepository;
+use application::command::ports::command_state_port::ArkivSakTilstandRepository;
 use application::command::ports::eksekvering_port::ArkivGateway;
 
 use crate::support::nats::{wait_for_nats_ready, wait_for_ready};
@@ -103,7 +103,7 @@ async fn start_skuffen_process(
 }
 
 pub async fn start_runtime(
-    _command_state_repo: Box<dyn CommandStateRepository>,
+    _command_state_repo: Box<dyn ArkivSakTilstandRepository>,
     _arkiv_gateway: Box<dyn ArkivGateway>,
     _query_repos: Option<Arc<dyn std::any::Any + Send + Sync>>,
 ) -> Result<TestEnv> {

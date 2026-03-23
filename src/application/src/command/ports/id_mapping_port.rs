@@ -33,16 +33,16 @@ pub trait IdMappingRepository: Send + Sync {
         arkiv_id: String,
     ) -> Result<(), anyhow::Error>;
 
-    async fn get_arkiv_id(&self, skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error>;
+    async fn hent_arkiv_id_fra_mapping(&self, skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error>;
 
-    async fn get_skuffen_id(&self, client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error>;
+    async fn hent_skuffen_id_fra_mapping(&self, client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error>;
 
-    async fn get_skuffen_id_from_arkiv_id(
+    async fn hent_skuffen_id_fra_arkiv_id_i_mapping(
         &self,
         arkiv_id: &str,
     ) -> Result<Option<Uuid>, anyhow::Error>;
 
-    async fn ensure_arkiv_mapping(
+    async fn hent_eller_opprett_skuffen_id_for_arkiv_id(
         &self,
         entity_type: &str,
         arkiv_id: &str,

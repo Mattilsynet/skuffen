@@ -32,7 +32,7 @@ struct FakeStateData {
 
 #[async_trait]
 impl EksekveringStateRepository for FakeEksekveringStateRepository {
-    async fn hent_sak_state(&self, _sak_id: Uuid) -> Result<Option<SakState>, anyhow::Error> {
+    async fn hent_sak_state_fra_state(&self, _sak_id: Uuid) -> Result<Option<SakState>, anyhow::Error> {
         Ok(self.data.lock().unwrap().existing_sak.clone())
     }
 
@@ -41,7 +41,7 @@ impl EksekveringStateRepository for FakeEksekveringStateRepository {
         Ok(())
     }
 
-    async fn hent_journalpost_state(
+    async fn hent_journalpost_state_fra_state(
         &self,
         _journalpost_id: Uuid,
     ) -> Result<Option<JournalpostState>, anyhow::Error> {
@@ -58,14 +58,14 @@ impl EksekveringStateRepository for FakeEksekveringStateRepository {
         Ok(())
     }
 
-    async fn hent_journalposter_for_sak(
+    async fn hent_journalposter_for_sak_fra_state(
         &self,
         _sak_id: Uuid,
     ) -> Result<Vec<JournalpostState>, anyhow::Error> {
         Ok(Vec::new())
     }
 
-    async fn hent_dokument_state(
+    async fn hent_dokument_state_fra_state(
         &self,
         _dokument_id: Uuid,
     ) -> Result<Option<DokumentState>, anyhow::Error> {
@@ -158,22 +158,22 @@ impl IdMappingRepository for FakeIdMappingRepository {
         Ok(())
     }
 
-    async fn get_arkiv_id(&self, _skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
+    async fn hent_arkiv_id_fra_mapping(&self, _skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
         Ok(None)
     }
 
-    async fn get_skuffen_id(&self, _client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error> {
+    async fn hent_skuffen_id_fra_mapping(&self, _client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error> {
         Ok(None)
     }
 
-    async fn get_skuffen_id_from_arkiv_id(
+    async fn hent_skuffen_id_fra_arkiv_id_i_mapping(
         &self,
         _arkiv_id: &str,
     ) -> Result<Option<Uuid>, anyhow::Error> {
         Ok(None)
     }
 
-    async fn ensure_arkiv_mapping(
+    async fn hent_eller_opprett_skuffen_id_for_arkiv_id(
         &self,
         entity_type: &str,
         arkiv_id: &str,

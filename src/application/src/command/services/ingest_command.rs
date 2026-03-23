@@ -85,7 +85,7 @@ impl IngestCommandService {
         if let Some(arkiv_id) = self.extract_arkiv_id(&envelope.payload) {
             let _ = self
                 .id_mapping
-                .ensure_arkiv_mapping("sak", arkiv_id.as_str())
+                .hent_eller_opprett_skuffen_id_for_arkiv_id("sak", arkiv_id.as_str())
                 .await;
         }
 

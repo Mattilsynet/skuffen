@@ -23,7 +23,7 @@ fn get_repo() -> &'static Arc<dyn IdMappingRepository + Send + Sync> {
 pub async fn lookup_skuffen_id_fra_arkiv_id(saksnummer: Saksnummer) -> Result<Uuid> {
     let repo = get_repo();
     let maybe_skuffen_id = repo
-        .get_skuffen_id_from_arkiv_id(saksnummer.as_str())
+        .hent_skuffen_id_fra_arkiv_id_i_mapping(saksnummer.as_str())
         .await?;
 
     match maybe_skuffen_id {
@@ -37,7 +37,7 @@ pub async fn lookup_skuffen_id_fra_arkiv_id(saksnummer: Saksnummer) -> Result<Uu
 
 pub async fn lookup_arkiv_id_fra_skuffen_id(skuffen_id: Uuid) -> Result<Saksnummer> {
     let repo = get_repo();
-    let maybe_arkiv_id = repo.get_arkiv_id(skuffen_id).await?;
+    let maybe_arkiv_id = repo.hent_arkiv_id_fra_mapping(skuffen_id).await?;
 
     match maybe_arkiv_id {
         Some(s) => Saksnummer::new(s),

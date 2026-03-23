@@ -43,7 +43,7 @@ impl RegistrerEksekveringService {
                 DtoSakKey::ArkivId(saksnummer) => {
                     let sak_id = self
                         .id_mapping_repo
-                        .ensure_arkiv_mapping("sak", saksnummer.as_str())
+                        .hent_eller_opprett_skuffen_id_for_arkiv_id("sak", saksnummer.as_str())
                         .await?;
                     (
                         sak_id,
@@ -56,13 +56,13 @@ impl RegistrerEksekveringService {
                 }
             };
 
-            if self.state_repo.hent_sak_state(sak_id).await?.is_none() {
+            if self.state_repo.hent_sak_state_fra_state(sak_id).await?.is_none() {
                 self.state_repo.lagre_sak_state(sak_id, sak_state).await?;
             }
 
             if self
                 .state_repo
-                .hent_journalpost_state(plan.journalpost_id)
+                .hent_journalpost_state_fra_state(plan.journalpost_id)
                 .await?
                 .is_none()
             {

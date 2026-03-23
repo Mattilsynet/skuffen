@@ -1,4 +1,4 @@
-use application::command::ports::command_state_port::CommandStateRepository;
+use application::command::ports::command_state_port::ArkivSakTilstandRepository;
 use application::command::ports::eksekvering_port::ArkivGateway;
 use application::query::services::hent_journalpost::HentJournalpostService;
 use application::query::services::hent_sak::HentSakService;
@@ -8,7 +8,7 @@ use tokio::task::JoinHandle;
 
 use crate::command::adapter::eksekvering_state_postgres::PostgresEksekveringStateRepository;
 use crate::command::adapter::fake_arkiv_gateway::FakeArkivGateway;
-use crate::command::adapter::fake_command_state_repo::FakeCommandStateRepository;
+use crate::command::adapter::fake_command_state_repo::FakeArkivSakTilstandRepository;
 use crate::command::adapter::id_mapping_postgres::PostgresIdMappingRepository;
 use crate::command::adapter::nats_done_publisher::NatsDonePublisher;
 use crate::command::adapter::nats_eksekvering_status_publisher::NatsEksekveringStatusPublisher;
@@ -176,9 +176,9 @@ async fn setup_media_store(
     Ok(std::sync::Arc::new(ObjectStoreMediaStore::new(store)))
 }
 
-fn command_state_repository(use_fake_sikri: bool) -> Box<dyn CommandStateRepository> {
+fn command_state_repository(use_fake_sikri: bool) -> Box<dyn ArkivSakTilstandRepository> {
     if use_fake_sikri {
-        Box::new(FakeCommandStateRepository)
+        Box::new(FakeArkivSakTilstandRepository)
     } else {
         Box::new(SikriCommandStateRepository)
     }

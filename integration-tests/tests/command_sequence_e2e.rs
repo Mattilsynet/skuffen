@@ -13,7 +13,7 @@ use support::{
     fetch_dokument_state, fetch_journalpost_state, fetch_sak_state, hent_journalpost_via_nats,
     hent_sak_via_nats, insert_arkiv_id_mapping, insert_id_mapping, publish_media,
     send_command_batch, wait_for_command_execution_all, wait_for_status_events, CommandScenario,
-    FakeArkivGateway, FakeArkivGatewayState, FakeCommandStateRepository, TestEnv,
+    FakeArkivGateway, FakeArkivGatewayState, FakeArkivSakTilstandRepository, TestEnv,
 };
 
 mod support;
@@ -23,7 +23,7 @@ async fn command_sequence_opprett_internt_notat_avslutt_sak() -> Result<()> {
     let arkiv_state = Arc::new(FakeArkivGatewayState::new());
     let arkiv_gateway = FakeArkivGateway::new(arkiv_state.clone());
     let env = support::start_runtime(
-        Box::new(FakeCommandStateRepository),
+        Box::new(FakeArkivSakTilstandRepository),
         Box::new(arkiv_gateway),
         None,
     )
@@ -70,7 +70,7 @@ async fn command_sequence_opprett_internt_notat_avslutt_sak() -> Result<()> {
 async fn command_sequence_inngaende_journalpost_flow() -> Result<()> {
     let arkiv_gateway = FakeArkivGateway::new(Arc::new(FakeArkivGatewayState::new()));
     let env = support::start_runtime(
-        Box::new(FakeCommandStateRepository),
+        Box::new(FakeArkivSakTilstandRepository),
         Box::new(arkiv_gateway),
         None,
     )
@@ -114,7 +114,7 @@ async fn command_sequence_inngaende_journalpost_flow() -> Result<()> {
 async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
     let arkiv_gateway = FakeArkivGateway::new(Arc::new(FakeArkivGatewayState::new()));
     let env = support::start_runtime(
-        Box::new(FakeCommandStateRepository),
+        Box::new(FakeArkivSakTilstandRepository),
         Box::new(arkiv_gateway),
         None,
     )
@@ -160,7 +160,7 @@ async fn query_hent_sak_via_nats_uses_id_mapping() -> Result<()> {
     let arkiv_gateway = FakeArkivGateway::new(arkiv_state);
 
     let env = support::start_runtime(
-        Box::new(FakeCommandStateRepository),
+        Box::new(FakeArkivSakTilstandRepository),
         Box::new(arkiv_gateway),
         None,
     )
@@ -190,7 +190,7 @@ async fn query_hent_journalpost_via_nats() -> Result<()> {
     let arkiv_gateway = FakeArkivGateway::new(arkiv_state);
 
     let env: TestEnv = support::start_runtime(
-        Box::new(FakeCommandStateRepository),
+        Box::new(FakeArkivSakTilstandRepository),
         Box::new(arkiv_gateway),
         None,
     )
@@ -208,7 +208,7 @@ async fn query_hent_journalpost_via_nats() -> Result<()> {
 async fn avslutt_sak_uten_journalposter_er_tillatt() -> Result<()> {
     let arkiv_gateway = FakeArkivGateway::new(Arc::new(FakeArkivGatewayState::new()));
     let env = support::start_runtime(
-        Box::new(FakeCommandStateRepository),
+        Box::new(FakeArkivSakTilstandRepository),
         Box::new(arkiv_gateway),
         None,
     )
@@ -261,7 +261,7 @@ async fn avslutt_sak_uten_journalposter_er_tillatt() -> Result<()> {
 async fn avslutt_sak_blokkeres_nar_journalpost_ikke_er_ok() -> Result<()> {
     let arkiv_gateway = FakeArkivGateway::new(Arc::new(FakeArkivGatewayState::new()));
     let env = support::start_runtime(
-        Box::new(FakeCommandStateRepository),
+        Box::new(FakeArkivSakTilstandRepository),
         Box::new(arkiv_gateway),
         None,
     )

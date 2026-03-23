@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use application::command::ports::command_state_port::{
-    CommandStateError, CommandStateRepository, SakState as CommandSakState,
+    ArkivSakTilstandError, ArkivSakTilstandRepository, ArkivSakTilstand as ArkivSakTilstand,
 };
 use application::command::ports::eksekvering_port::{
     ArkivGateway, OpprettJournalpostResultat, Utsendingsvalg,
@@ -116,14 +116,14 @@ impl ArkivGateway for FakeArkivGateway {
     }
 }
 
-pub struct FakeCommandStateRepository;
+pub struct FakeArkivSakTilstandRepository;
 
 #[async_trait]
-impl CommandStateRepository for FakeCommandStateRepository {
-    async fn hent_sak_state(
+impl ArkivSakTilstandRepository for FakeArkivSakTilstandRepository {
+    async fn hent_sak_tilstand_fra_arkivet(
         &self,
         _saksnummer: &str,
-    ) -> Result<CommandSakState, CommandStateError> {
-        Ok(CommandSakState { avsluttet: false })
+    ) -> Result<ArkivSakTilstand, ArkivSakTilstandError> {
+        Ok(ArkivSakTilstand { avsluttet: false })
     }
 }

@@ -21,7 +21,7 @@ impl PostgresEksekveringStateRepository {
 
 #[async_trait]
 impl EksekveringStateRepository for PostgresEksekveringStateRepository {
-    async fn hent_sak_state(&self, sak_id: Uuid) -> Result<Option<SakState>, anyhow::Error> {
+    async fn hent_sak_state_fra_state(&self, sak_id: Uuid) -> Result<Option<SakState>, anyhow::Error> {
         let row: Option<(String, bool, Option<String>)> = sqlx::query_as(
             r#"
             SELECT status, opprettet, saksnummer
@@ -69,7 +69,7 @@ impl EksekveringStateRepository for PostgresEksekveringStateRepository {
         Ok(())
     }
 
-    async fn hent_journalpost_state(
+    async fn hent_journalpost_state_fra_state(
         &self,
         journalpost_id: Uuid,
     ) -> Result<Option<JournalpostState>, anyhow::Error> {
@@ -152,7 +152,7 @@ impl EksekveringStateRepository for PostgresEksekveringStateRepository {
         Ok(())
     }
 
-    async fn hent_journalposter_for_sak(
+    async fn hent_journalposter_for_sak_fra_state(
         &self,
         sak_id: Uuid,
     ) -> Result<Vec<JournalpostState>, anyhow::Error> {
@@ -191,7 +191,7 @@ impl EksekveringStateRepository for PostgresEksekveringStateRepository {
             .collect())
     }
 
-    async fn hent_dokument_state(
+    async fn hent_dokument_state_fra_state(
         &self,
         dokument_id: Uuid,
     ) -> Result<Option<DokumentState>, anyhow::Error> {

@@ -53,10 +53,10 @@ pub struct DokumentState {
 
 #[async_trait]
 pub trait EksekveringStateRepository: Send + Sync {
-    async fn hent_sak_state(&self, sak_id: Uuid) -> Result<Option<SakState>, anyhow::Error>;
+    async fn hent_sak_state_fra_state(&self, sak_id: Uuid) -> Result<Option<SakState>, anyhow::Error>;
     async fn lagre_sak_state(&self, sak_id: Uuid, state: SakState) -> Result<(), anyhow::Error>;
 
-    async fn hent_journalpost_state(
+    async fn hent_journalpost_state_fra_state(
         &self,
         journalpost_id: Uuid,
     ) -> Result<Option<JournalpostState>, anyhow::Error>;
@@ -67,12 +67,12 @@ pub trait EksekveringStateRepository: Send + Sync {
         state: JournalpostState,
     ) -> Result<(), anyhow::Error>;
 
-    async fn hent_journalposter_for_sak(
+    async fn hent_journalposter_for_sak_fra_state(
         &self,
         sak_id: Uuid,
     ) -> Result<Vec<JournalpostState>, anyhow::Error>;
 
-    async fn hent_dokument_state(
+    async fn hent_dokument_state_fra_state(
         &self,
         dokument_id: Uuid,
     ) -> Result<Option<DokumentState>, anyhow::Error>;

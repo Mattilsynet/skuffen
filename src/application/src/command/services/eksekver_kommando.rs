@@ -203,7 +203,7 @@ impl EksekverKommandoService {
             SakKey::ClientReference(id) => id,
             SakKey::ArkivId(saksnummer) => self
                 .id_mapping
-                .ensure_arkiv_mapping("sak", saksnummer.as_str())
+                .hent_eller_opprett_skuffen_id_for_arkiv_id("sak", saksnummer.as_str())
                 .await
                 .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?,
         };
@@ -444,7 +444,7 @@ impl EksekverKommandoService {
     ) -> Result<ExecutionGuard<Option<SakState>>, EksekveringFeil> {
         let state = self
             .state_repo
-            .hent_sak_state(sak_id)
+            .hent_sak_state_fra_state(sak_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
@@ -464,7 +464,7 @@ impl EksekverKommandoService {
     ) -> Result<ExecutionGuard<SakState>, EksekveringFeil> {
         let sak_state = self
             .state_repo
-            .hent_sak_state(sak_id)
+            .hent_sak_state_fra_state(sak_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
@@ -479,7 +479,7 @@ impl EksekverKommandoService {
 
         let journalpost_state = self
             .state_repo
-            .hent_journalpost_state(journalpost_id)
+            .hent_journalpost_state_fra_state(journalpost_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
         if journalpost_state
@@ -499,7 +499,7 @@ impl EksekverKommandoService {
     ) -> Result<ExecutionGuard<JournalpostState>, EksekveringFeil> {
         let journalpost_state = self
             .state_repo
-            .hent_journalpost_state(journalpost_id)
+            .hent_journalpost_state_fra_state(journalpost_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
@@ -518,7 +518,7 @@ impl EksekverKommandoService {
     ) -> Result<ExecutionGuard<Option<DokumentState>>, EksekveringFeil> {
         let dokument_state = self
             .state_repo
-            .hent_dokument_state(dokument_id)
+            .hent_dokument_state_fra_state(dokument_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
@@ -537,7 +537,7 @@ impl EksekverKommandoService {
     ) -> Result<ExecutionGuard<JournalpostState>, EksekveringFeil> {
         let journalpost_state = self
             .state_repo
-            .hent_journalpost_state(journalpost_id)
+            .hent_journalpost_state_fra_state(journalpost_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
         let Some(state) = journalpost_state else {
@@ -559,7 +559,7 @@ impl EksekverKommandoService {
     ) -> Result<ExecutionGuard<JournalpostState>, EksekveringFeil> {
         let journalpost_state = self
             .state_repo
-            .hent_journalpost_state(journalpost_id)
+            .hent_journalpost_state_fra_state(journalpost_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
         let Some(state) = journalpost_state else {
@@ -579,7 +579,7 @@ impl EksekverKommandoService {
     ) -> Result<ExecutionGuard<SakState>, EksekveringFeil> {
         let sak_state = self
             .state_repo
-            .hent_sak_state(sak_id)
+            .hent_sak_state_fra_state(sak_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
         let Some(state) = sak_state else {
@@ -592,7 +592,7 @@ impl EksekverKommandoService {
 
         let journalposter = self
             .state_repo
-            .hent_journalposter_for_sak(sak_id)
+            .hent_journalposter_for_sak_fra_state(sak_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
         for journalpost in journalposter {
@@ -635,7 +635,7 @@ impl EksekverKommandoService {
         match sak_key {
             SakKey::ClientReference(sak_id) => self
                 .state_repo
-                .hent_sak_state(sak_id)
+                .hent_sak_state_fra_state(sak_id)
                 .await
                 .ok()
                 .flatten()
@@ -646,7 +646,7 @@ impl EksekverKommandoService {
 
     async fn hent_journalpostnummer(&self, journalpost_id: Uuid) -> Option<i32> {
         self.state_repo
-            .hent_journalpost_state(journalpost_id)
+            .hent_journalpost_state_fra_state(journalpost_id)
             .await
             .ok()
             .flatten()
@@ -723,10 +723,10 @@ impl EksekverKommandoService {
     ) -> Option<String> {
         let skuffen_id = self
             .id_mapping
-            .get_skuffen_id(client_reference)
+            .hent_skuffen_id_fra_mapping(client_reference)
             .await
             .ok()??;
-        self.id_mapping.get_arkiv_id(skuffen_id).await.ok()?
+        self.id_mapping.hent_arkiv_id_fra_mapping(skuffen_id).await.ok()?
     }
 
     async fn build_reference_message(&self, envelope: &CommandEnvelope<Command>) -> Option<String> {

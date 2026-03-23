@@ -5,7 +5,7 @@ use lib_schemas::skuffen::command::commands::{
 use lib_schemas::skuffen::query::queries::SakKey;
 
 use crate::command::ports::{
-    command_state_port::CommandStateRepository, id_mapping_port::IdMappingRepository,
+    command_state_port::ArkivSakTilstandRepository, id_mapping_port::IdMappingRepository,
     status_publisher_port::CommandStatusPublisher,
     validated_command_dispatcher_port::ValidatedCommandDispatcher,
 };
@@ -27,7 +27,7 @@ impl ValidationOutcome {
 }
 
 pub struct ValidateCommandService {
-    state_repo: Box<dyn CommandStateRepository>,
+    state_repo: Box<dyn ArkivSakTilstandRepository>,
     id_mapping: Box<dyn IdMappingRepository>,
     dispatcher: Box<dyn ValidatedCommandDispatcher>,
     status_publisher: Box<dyn CommandStatusPublisher>,
@@ -35,7 +35,7 @@ pub struct ValidateCommandService {
 
 impl ValidateCommandService {
     pub fn new(
-        state_repo: Box<dyn CommandStateRepository>,
+        state_repo: Box<dyn ArkivSakTilstandRepository>,
         id_mapping: Box<dyn IdMappingRepository>,
         dispatcher: Box<dyn ValidatedCommandDispatcher>,
         status_publisher: Box<dyn CommandStatusPublisher>,
@@ -104,9 +104,9 @@ impl ValidateCommandService {
     async fn validate_sak_ref(&self, sak_key: SakKey) -> ValidationOutcome {
         match sak_key {
             SakKey::ClientReference(client_reference) => {
-                match self.id_mapping.get_skuffen_id(client_reference).await {
-                    Ok(Some(skuffen_id)) => match self.id_mapping.get_arkiv_id(skuffen_id).await {
-                        Ok(Some(arkiv_id)) => self.validate_sak_i_sikri(arkiv_id.as_str()).await,
+                match self.id_mapping.hent_skuffen_id_fra_mapping(client_reference).await {
+                    Ok(Some(skuffen_id)) => match self.id_mapping.hent_arkiv_id_fra_mapping(skuffen_id).await {
+                        Ok(Some(arkiv_id)) => self.validate_sak_fra_arkivet(arkiv_id.as_str()).await,
                         Ok(None) => ValidationOutcome::Ok,
                         Err(err) => ValidationOutcome::Recoverable {
                             message: err.to_string(),
@@ -121,7 +121,7 @@ impl ValidateCommandService {
                 }
             }
             SakKey::ArkivId(saksnummer) => {
-                let outcome = self.validate_sak_i_sikri(saksnummer.as_str()).await;
+                let outcome = self.validate_sak_fra_arkivet(saksnummer.as_str()).await;
                 if matches!(outcome, ValidationOutcome::Irrecoverable { .. }) {
                     let _ = self
                         .id_mapping
@@ -133,8 +133,8 @@ impl ValidateCommandService {
         }
     }
 
-    async fn validate_sak_i_sikri(&self, saksnummer: &str) -> ValidationOutcome {
-        match self.state_repo.hent_sak_state(saksnummer).await {
+    async fn validate_sak_fra_arkivet(&self, saksnummer: &str) -> ValidationOutcome {
+        match self.state_repo.hent_sak_tilstand_fra_arkivet(saksnummer).await {
             Ok(state) => {
                 if state.avsluttet {
                     ValidationOutcome::Irrecoverable {
@@ -145,12 +145,12 @@ impl ValidateCommandService {
                 }
             }
             Err(err) => match err.kind {
-                crate::command::ports::command_state_port::CommandStateErrorKind::Irrecoverable => {
+                crate::command::ports::command_state_port::ArkivSakTilstandErrorKind::Irrecoverable => {
                     ValidationOutcome::Irrecoverable {
                         message: err.message,
                     }
                 }
-                crate::command::ports::command_state_port::CommandStateErrorKind::Recoverable => {
+                crate::command::ports::command_state_port::ArkivSakTilstandErrorKind::Recoverable => {
                     ValidationOutcome::Recoverable {
                         message: err.message,
                     }

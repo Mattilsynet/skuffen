@@ -10,7 +10,7 @@ pub use db::{
     insert_id_mapping, wait_for_command_execution_all,
 };
 pub use env::{start_runtime, TestEnv};
-pub use fakes::{FakeArkivGateway, FakeArkivGatewayState, FakeCommandStateRepository};
+pub use fakes::{FakeArkivGateway, FakeArkivGatewayState, FakeArkivSakTilstandRepository};
 pub use nats::{
     hent_journalpost_via_nats, hent_sak_via_nats, publish_media, send_command_batch,
     wait_for_status_events,
