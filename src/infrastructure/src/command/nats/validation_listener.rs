@@ -1,7 +1,7 @@
 use async_nats::jetstream::{self, consumer};
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use tracing::{Instrument, error, info};
+use tracing::{Span, error, info};
 
 use crate::nats::client::NatsClient;
 use application::command::services::validate_command::{ValidateCommandService, ValidationOutcome};
@@ -72,70 +72,77 @@ impl CommandValidationListener {
                     continue;
                 }
             };
-
-            let (payload, acker) = message.split();
-            let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&payload.payload)
-            {
-                Ok(cmd) => cmd,
-                Err(err) => {
-                    error!("Failed to deserialize command: {err}");
-                    if let Err(err) = acker.ack().await {
-                        error!("Ack failed: {err}");
-                    }
-                    continue;
-                }
-            };
-
-            let span = tracing::info_span!(
-                "command.validate",
-                command_id = %envelope.command_id,
-                correlation_id = ?envelope.correlation_id,
-                traceparent = tracing::field::Empty
-            );
-            if let Some(headers) = payload.headers.as_ref()
-                && let Some(parent) = headers.get("traceparent")
-            {
-                span.record("traceparent", tracing::field::display(parent.as_str()));
-            }
-
-            let outcome = match self.service.handle(envelope).instrument(span).await {
-                Ok(outcome) => outcome,
-                Err(err) => {
-                    error!("Validator failed: {err}");
-                    if let Err(err) = acker.ack().await {
-                        error!("Ack failed: {err}");
-                    }
-                    continue;
-                }
-            };
-
-            match outcome {
-                ValidationOutcome::Ok => {
-                    if let Err(err) = acker.ack().await {
-                        error!("Ack failed: {err}");
-                    }
-                }
-                ValidationOutcome::Recoverable { message: reason } => {
-                    info!("Command recoverable, retrying later: {reason}");
-                    if let Err(err) = acker.ack().await {
-                        error!("Ack failed: {err}");
-                    }
-                }
-                ValidationOutcome::Blocked { message: reason } => {
-                    info!("Command blocked, retrying later: {reason}");
-                    if let Err(err) = acker.ack().await {
-                        error!("Ack failed: {err}");
-                    }
-                }
-                ValidationOutcome::Irrecoverable { message: reason } => {
-                    info!("Command irrecoverable: {reason}");
-                    if let Err(err) = acker.ack().await {
-                        error!("Ack failed: {err}");
-                    }
-                }
-            }
+            self.process_message(message).await;
         }
 
         Ok(())
+    }
+
+    #[tracing::instrument(
+        skip_all,
+        name = "command.validate",
+        fields(
+            command_id = tracing::field::Empty,
+            correlation_id = tracing::field::Empty,
+            traceparent = tracing::field::Empty
+        )
+    )]
+    async fn process_message(&self, message: jetstream::Message) {
+        let (payload, acker) = message.split();
+        crate::telemetry::record_traceparent_from_headers(payload.headers.as_ref());
+
+        let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&payload.payload) {
+            Ok(cmd) => cmd,
+            Err(err) => {
+                error!("Failed to deserialize command: {err}");
+                if let Err(err) = acker.ack().await {
+                    error!("Ack failed: {err}");
+                }
+                return;
+            }
+        };
+
+        Span::current().record("command_id", tracing::field::display(envelope.command_id));
+        Span::current().record(
+            "correlation_id",
+            tracing::field::debug(envelope.correlation_id),
+        );
+
+        let outcome = match self.service.handle(envelope).await {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                error!("Validator failed: {err}");
+                if let Err(err) = acker.ack().await {
+                    error!("Ack failed: {err}");
+                }
+                return;
+            }
+        };
+
+        match outcome {
+            ValidationOutcome::Ok => {
+                if let Err(err) = acker.ack().await {
+                    error!("Ack failed: {err}");
+                }
+            }
+            ValidationOutcome::Recoverable { message: reason } => {
+                info!("Command recoverable, retrying later: {reason}");
+                if let Err(err) = acker.ack().await {
+                    error!("Ack failed: {err}");
+                }
+            }
+            ValidationOutcome::Blocked { message: reason } => {
+                info!("Command blocked, retrying later: {reason}");
+                if let Err(err) = acker.ack().await {
+                    error!("Ack failed: {err}");
+                }
+            }
+            ValidationOutcome::Irrecoverable { message: reason } => {
+                info!("Command irrecoverable: {reason}");
+                if let Err(err) = acker.ack().await {
+                    error!("Ack failed: {err}");
+                }
+            }
+        }
     }
 }

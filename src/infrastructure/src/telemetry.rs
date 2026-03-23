@@ -1,3 +1,4 @@
+use async_nats::HeaderMap;
 use opentelemetry::KeyValue;
 use opentelemetry::global;
 use opentelemetry::propagation::Injector;
@@ -7,7 +8,7 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::propagation::{BaggagePropagator, TraceContextPropagator};
 use opentelemetry_sdk::trace::SdkTracerProvider;
-use tracing::{Subscriber, subscriber::set_global_default};
+use tracing::{Span, Subscriber, field, subscriber::set_global_default};
 use tracing_log::LogTracer;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -98,4 +99,17 @@ pub fn current_trace_parent() -> Option<String> {
         propagator.inject(&mut injector);
     });
     injector.value
+}
+
+pub fn record_traceparent(traceparent: Option<&str>) {
+    if let Some(traceparent) = traceparent {
+        Span::current().record("traceparent", field::display(traceparent));
+    }
+}
+
+pub fn record_traceparent_from_headers(headers: Option<&HeaderMap>) {
+    let traceparent = headers
+        .and_then(|headers| headers.get("traceparent"))
+        .map(|traceparent| traceparent.as_str());
+    record_traceparent(traceparent);
 }

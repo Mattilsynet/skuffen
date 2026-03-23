@@ -4,7 +4,7 @@ use async_nats::HeaderMap;
 use async_nats::jetstream::{self, message::PublishMessage};
 use async_trait::async_trait;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use tracing::Instrument;
+use tracing::Span;
 
 #[derive(Clone)]
 pub struct NatsValidatedCommandDispatcher {
@@ -19,6 +19,16 @@ impl NatsValidatedCommandDispatcher {
 
 #[async_trait]
 impl ValidatedCommandDispatcher for NatsValidatedCommandDispatcher {
+    #[tracing::instrument(
+        skip_all,
+        name = "nats.publish.ready",
+        fields(
+            command_id = %command.command_id,
+            correlation_id = ?command.correlation_id,
+            entity_type = tracing::field::Empty,
+            subject = tracing::field::Empty
+        )
+    )]
     async fn dispatch_validated(
         &self,
         command: &CommandEnvelope<Command>,
@@ -32,37 +42,28 @@ impl ValidatedCommandDispatcher for NatsValidatedCommandDispatcher {
 
         let subject = format!("arkiv.command.ready.{}.{}", entity_type, command.command_id);
         let payload = serde_json::to_vec(command)?;
+        Span::current().record("entity_type", tracing::field::display(entity_type));
+        Span::current().record("subject", tracing::field::display(subject.as_str()));
 
         let jetstream = jetstream::new(self.client.inner().clone());
-        let span = tracing::info_span!(
-            "nats.publish.ready",
-            command_id = %command.command_id,
-            correlation_id = ?command.correlation_id,
-            entity_type,
-            subject = %subject
-        );
-        async move {
-            jetstream
-                .get_or_create_stream(jetstream::stream::Config {
-                    name: "arkiv_command_ready".to_string(),
-                    subjects: vec!["arkiv.command.ready.>".to_string()],
-                    max_age: std::time::Duration::from_secs(60 * 60 * 24 * 180),
-                    ..Default::default()
-                })
-                .await?;
-            let mut message = PublishMessage::build().payload(payload.into());
-            if let Some(trace_parent) = crate::telemetry::current_trace_parent() {
-                let mut headers = HeaderMap::new();
-                headers.insert("traceparent", trace_parent);
-                message = message.headers(headers);
-            }
-            jetstream
-                .send_publish(subject, message.message_id(command.command_id.to_string()))
-                .await?
-                .await?;
-            Ok(())
+        jetstream
+            .get_or_create_stream(jetstream::stream::Config {
+                name: "arkiv_command_ready".to_string(),
+                subjects: vec!["arkiv.command.ready.>".to_string()],
+                max_age: std::time::Duration::from_secs(60 * 60 * 24 * 180),
+                ..Default::default()
+            })
+            .await?;
+        let mut message = PublishMessage::build().payload(payload.into());
+        if let Some(trace_parent) = crate::telemetry::current_trace_parent() {
+            let mut headers = HeaderMap::new();
+            headers.insert("traceparent", trace_parent);
+            message = message.headers(headers);
         }
-        .instrument(span)
-        .await
+        jetstream
+            .send_publish(subject, message.message_id(command.command_id.to_string()))
+            .await?
+            .await?;
+        Ok(())
     }
 }

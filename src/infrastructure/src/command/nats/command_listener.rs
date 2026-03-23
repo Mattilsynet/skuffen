@@ -2,9 +2,10 @@ use crate::command::media::MediaStore;
 use crate::nats::client::NatsClient;
 use crate::nats::nats_response::NatsResponse;
 use application::command::services::ingest_command::IngestCommandService;
+use async_nats::Message;
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
-use tracing::{Instrument, error, info};
+use tracing::{Span, error, info};
 
 pub struct CommandListener {
     client: NatsClient,
@@ -38,53 +39,39 @@ impl CommandListener {
             .await?;
 
         while let Some(msg) = sub.next().await {
-            let span = tracing::info_span!(
-                "nats.command_batch",
-                subject = %msg.subject,
-                reply_subject = ?msg.reply,
-                command_count = tracing::field::Empty,
-                traceparent = tracing::field::Empty
-            );
-            if let Some(headers) = msg.headers.as_ref()
-                && let Some(parent) = headers.get("traceparent")
-            {
-                span.record("traceparent", tracing::field::display(parent.as_str()));
+            self.process_message(msg).await;
+        }
+        Ok(())
+    }
+
+    #[tracing::instrument(
+        skip_all,
+        name = "nats.command_batch",
+        fields(
+            subject = %msg.subject,
+            reply_subject = ?msg.reply,
+            command_count = tracing::field::Empty,
+            traceparent = tracing::field::Empty
+        )
+    )]
+    async fn process_message(&self, msg: Message) {
+        crate::telemetry::record_traceparent_from_headers(msg.headers.as_ref());
+        info!("Received command batch");
+
+        let reply_subject = match msg.reply.clone() {
+            Some(r) => r,
+            None => {
+                error!("Command batch has no reply subject. Ignoring.");
+                return;
             }
-            let _guard = span.enter();
-            info!("Received command batch");
+        };
 
-            let reply_subject = match msg.reply.clone() {
-                Some(r) => r,
-                None => {
-                    error!("Command batch has no reply subject. Ignoring.");
-                    continue;
-                }
-            };
-
-            // Deserialize Vec<CommandEnvelope<Command>>
-            let commands: Vec<CommandEnvelope<Command>> = match serde_json::from_slice(&msg.payload)
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("Failed to deserialize commands: {e}");
-                    // Reply error
-                    let response = NatsResponse::<()>::Error {
-                        message: format!("Invalid payload: {e}"),
-                    };
-                    let payload = serde_json::to_vec(&response).unwrap_or_default();
-                    let _ = self
-                        .client
-                        .inner()
-                        .publish(reply_subject, payload.into())
-                        .await;
-                    continue;
-                }
-            };
-
-            if let Err(err) = self.validate_media(&commands).await {
-                error!("Media validation failed: {err}");
+        let commands: Vec<CommandEnvelope<Command>> = match serde_json::from_slice(&msg.payload) {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to deserialize commands: {e}");
                 let response = NatsResponse::<()>::Error {
-                    message: format!("Media validation failed: {err}"),
+                    message: format!("Invalid payload: {e}"),
                 };
                 let payload = serde_json::to_vec(&response).unwrap_or_default();
                 let _ = self
@@ -92,64 +79,83 @@ impl CommandListener {
                     .inner()
                     .publish(reply_subject, payload.into())
                     .await;
-                continue;
+                return;
             }
+        };
 
-            // Validate sequence (Infrastructure responsibility: Parse/Validate input structure)
-            let command_count = commands.len();
-            let sequence = match CommandSequence::try_from(commands) {
-                Ok(seq) => seq,
-                Err(e) => {
-                    error!("Invalid command sequence: {e}");
-                    let response = NatsResponse::<()>::Error {
-                        message: format!("Invalid sequence: {e}"),
-                    };
-                    let payload = serde_json::to_vec(&response).unwrap_or_default();
-                    let _ = self
-                        .client
-                        .inner()
-                        .publish(reply_subject, payload.into())
-                        .await;
-                    continue;
-                }
+        if let Err(err) = self.validate_media(&commands).await {
+            error!("Media validation failed: {err}");
+            let response = NatsResponse::<()>::Error {
+                message: format!("Media validation failed: {err}"),
             };
+            let payload = serde_json::to_vec(&response).unwrap_or_default();
+            let _ = self
+                .client
+                .inner()
+                .publish(reply_subject, payload.into())
+                .await;
+            return;
+        }
 
-            span.record("command_count", tracing::field::display(command_count));
-
-            // Ingest
-            let handle_span =
-                tracing::info_span!("command.ingest", traceparent = tracing::field::Empty);
-            if let Some(headers) = msg.headers.as_ref()
-                && let Some(parent) = headers.get("traceparent")
-            {
-                handle_span.record("traceparent", tracing::field::display(parent.as_str()));
+        let command_count = commands.len();
+        let sequence = match CommandSequence::try_from(commands) {
+            Ok(seq) => seq,
+            Err(e) => {
+                error!("Invalid command sequence: {e}");
+                let response = NatsResponse::<()>::Error {
+                    message: format!("Invalid sequence: {e}"),
+                };
+                let payload = serde_json::to_vec(&response).unwrap_or_default();
+                let _ = self
+                    .client
+                    .inner()
+                    .publish(reply_subject, payload.into())
+                    .await;
+                return;
             }
-            match self.service.handle(sequence).instrument(handle_span).await {
-                Ok(_) => {
-                    // Reply OK
-                    let response = NatsResponse::Ok(());
-                    let payload = serde_json::to_vec(&response).unwrap_or_default();
-                    let _ = self
-                        .client
-                        .inner()
-                        .publish(reply_subject, payload.into())
-                        .await;
-                }
-                Err(e) => {
-                    error!("Failed to process commands: {e}");
-                    let response = NatsResponse::<()>::Error {
-                        message: e.to_string(),
-                    };
-                    let payload = serde_json::to_vec(&response).unwrap_or_default();
-                    let _ = self
-                        .client
-                        .inner()
-                        .publish(reply_subject, payload.into())
-                        .await;
-                }
+        };
+
+        Span::current().record("command_count", tracing::field::display(command_count));
+
+        let traceparent = msg
+            .headers
+            .as_ref()
+            .and_then(|headers| headers.get("traceparent"))
+            .map(|traceparent| traceparent.as_str().to_owned());
+
+        match self.ingest_sequence(sequence, traceparent).await {
+            Ok(()) => {
+                let response = NatsResponse::Ok(());
+                let payload = serde_json::to_vec(&response).unwrap_or_default();
+                let _ = self
+                    .client
+                    .inner()
+                    .publish(reply_subject, payload.into())
+                    .await;
+            }
+            Err(e) => {
+                error!("Failed to process commands: {e}");
+                let response = NatsResponse::<()>::Error {
+                    message: e.to_string(),
+                };
+                let payload = serde_json::to_vec(&response).unwrap_or_default();
+                let _ = self
+                    .client
+                    .inner()
+                    .publish(reply_subject, payload.into())
+                    .await;
             }
         }
-        Ok(())
+    }
+
+    #[tracing::instrument(skip_all, name = "command.ingest", fields(traceparent = tracing::field::Empty))]
+    async fn ingest_sequence(
+        &self,
+        sequence: CommandSequence,
+        traceparent: Option<String>,
+    ) -> anyhow::Result<()> {
+        crate::telemetry::record_traceparent(traceparent.as_deref());
+        self.service.handle(sequence).await
     }
 
     async fn validate_media(&self, commands: &[CommandEnvelope<Command>]) -> Result<(), String> {

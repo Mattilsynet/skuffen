@@ -1,7 +1,7 @@
 use async_nats::jetstream::{self, AckKind, consumer};
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use tracing::{Instrument, error, info};
+use tracing::{Span, error, info};
 
 use crate::nats::client::NatsClient;
 use application::command::ports::registrer_eksekvering_port::RegistrerEksekveringUseCase;
@@ -60,48 +60,53 @@ impl KommandoEksekveringListener {
                     continue;
                 }
             };
-
-            let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&message.payload)
-            {
-                Ok(cmd) => cmd,
-                Err(err) => {
-                    error!("Failed to deserialize command: {err}");
-                    if let Err(err) = message.ack().await {
-                        error!("Ack failed: {err}");
-                    }
-                    continue;
-                }
-            };
-
-            let span = tracing::info_span!(
-                "command.register_execution",
-                command_id = %envelope.command_id,
-                correlation_id = ?envelope.correlation_id,
-                traceparent = tracing::field::Empty
-            );
-            if let Some(headers) = message.headers.as_ref()
-                && let Some(parent) = headers.get("traceparent")
-            {
-                span.record("traceparent", tracing::field::display(parent.as_str()));
-            }
-            let result = async { self.use_case.handle(&envelope).await }
-                .instrument(span)
-                .await;
-            match result {
-                Ok(()) => {
-                    if let Err(err) = message.ack().await {
-                        error!("Ack failed: {err}");
-                    }
-                }
-                Err(err) => {
-                    info!("Kunne ikke lagre kommando: {err}");
-                    if let Err(err) = message.ack_with(AckKind::Nak(None)).await {
-                        error!("NAK failed: {err}");
-                    }
-                }
-            }
+            self.process_message(message).await;
         }
 
         Ok(())
+    }
+
+    #[tracing::instrument(
+        skip_all,
+        name = "command.register_execution",
+        fields(
+            command_id = tracing::field::Empty,
+            correlation_id = tracing::field::Empty,
+            traceparent = tracing::field::Empty
+        )
+    )]
+    async fn process_message(&self, message: jetstream::Message) {
+        crate::telemetry::record_traceparent_from_headers(message.headers.as_ref());
+
+        let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&message.payload) {
+            Ok(cmd) => cmd,
+            Err(err) => {
+                error!("Failed to deserialize command: {err}");
+                if let Err(err) = message.ack().await {
+                    error!("Ack failed: {err}");
+                }
+                return;
+            }
+        };
+
+        Span::current().record("command_id", tracing::field::display(envelope.command_id));
+        Span::current().record(
+            "correlation_id",
+            tracing::field::debug(envelope.correlation_id),
+        );
+
+        match self.use_case.handle(&envelope).await {
+            Ok(()) => {
+                if let Err(err) = message.ack().await {
+                    error!("Ack failed: {err}");
+                }
+            }
+            Err(err) => {
+                info!("Kunne ikke lagre kommando: {err}");
+                if let Err(err) = message.ack_with(AckKind::Nak(None)).await {
+                    error!("NAK failed: {err}");
+                }
+            }
+        }
     }
 }

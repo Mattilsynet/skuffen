@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use async_nats::Message;
 use futures::StreamExt;
 use lib_nats::chunked_upload::receiver::ChunkedUploadAssembler;
-use tracing::{Instrument, error, info};
+use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::command::media::{MediaFile, MediaStore};
@@ -33,61 +34,62 @@ impl MediaListener {
         let mut assembler = ChunkedUploadAssembler::default();
 
         while let Some(message) = sub.next().await {
-            let reply_subject = match message.reply.clone() {
-                Some(reply) => reply,
-                None => {
-                    error!("Media upload message has no reply subject. Ignoring.");
-                    continue;
-                }
-            };
-
-            let span = tracing::info_span!(
-                "media.assemble",
-                subject = %message.subject,
-                traceparent = tracing::field::Empty
-            );
-            if let Some(headers) = message.headers.as_ref()
-                && let Some(parent) = headers.get("traceparent")
-            {
-                span.record("traceparent", tracing::field::display(parent.as_str()));
-            }
-            let payload = match async { assembler.push(&message) }.instrument(span).await {
-                Ok(Some(payload)) => payload,
-                Ok(None) => continue,
-                Err(err) => {
-                    error!("Chunk assembly failed: {err}");
-                    self.publish_error(&reply_subject, err.to_string()).await;
-                    continue;
-                }
-            };
-
-            let file_id = match Uuid::parse_str(payload.upload_id.as_str()) {
-                Ok(id) => id,
-                Err(err) => {
-                    error!("Invalid upload id: {err}");
-                    self.publish_error(&reply_subject, "Invalid upload id")
-                        .await;
-                    continue;
-                }
-            };
-
-            let file = MediaFile {
-                id: file_id,
-                data: payload.data,
-                filename: payload.filename,
-                content_type: payload.content_type,
-            };
-
-            if let Err(err) = self.store.save(file).await {
-                error!("Failed to store media: {err}");
-                self.publish_error(&reply_subject, err.to_string()).await;
-                continue;
-            }
-
-            self.publish_ok(&reply_subject, file_id).await;
+            self.process_message(&mut assembler, message).await;
         }
 
         Ok(())
+    }
+
+    #[tracing::instrument(
+        skip_all,
+        name = "media.assemble",
+        fields(subject = %message.subject, traceparent = tracing::field::Empty)
+    )]
+    async fn process_message(&self, assembler: &mut ChunkedUploadAssembler, message: Message) {
+        let reply_subject = match message.reply.clone() {
+            Some(reply) => reply,
+            None => {
+                error!("Media upload message has no reply subject. Ignoring.");
+                return;
+            }
+        };
+
+        crate::telemetry::record_traceparent_from_headers(message.headers.as_ref());
+
+        let payload = match assembler.push(&message) {
+            Ok(Some(payload)) => payload,
+            Ok(None) => return,
+            Err(err) => {
+                error!("Chunk assembly failed: {err}");
+                self.publish_error(&reply_subject, err.to_string()).await;
+                return;
+            }
+        };
+
+        let file_id = match Uuid::parse_str(payload.upload_id.as_str()) {
+            Ok(id) => id,
+            Err(err) => {
+                error!("Invalid upload id: {err}");
+                self.publish_error(&reply_subject, "Invalid upload id")
+                    .await;
+                return;
+            }
+        };
+
+        let file = MediaFile {
+            id: file_id,
+            data: payload.data,
+            filename: payload.filename,
+            content_type: payload.content_type,
+        };
+
+        if let Err(err) = self.store.save(file).await {
+            error!("Failed to store media: {err}");
+            self.publish_error(&reply_subject, err.to_string()).await;
+            return;
+        }
+
+        self.publish_ok(&reply_subject, file_id).await;
     }
 
     async fn publish_error(&self, reply_subject: &str, message: impl Into<String>) {
