@@ -36,5 +36,8 @@ pub struct ArkivSakTilstand {
 
 #[async_trait]
 pub trait ArkivSakTilstandRepository: Send + Sync {
-    async fn hent_sak_tilstand_fra_arkivet(&self, saksnummer: &str) -> Result<ArkivSakTilstand, ArkivSakTilstandError>;
+    async fn hent_sak_tilstand_fra_arkivet(
+        &self,
+        saksnummer: &str,
+    ) -> Result<ArkivSakTilstand, ArkivSakTilstandError>;
 }

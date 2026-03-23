@@ -104,14 +104,22 @@ impl ValidateCommandService {
     async fn validate_sak_ref(&self, sak_key: SakKey) -> ValidationOutcome {
         match sak_key {
             SakKey::ClientReference(client_reference) => {
-                match self.id_mapping.hent_skuffen_id_fra_mapping(client_reference).await {
-                    Ok(Some(skuffen_id)) => match self.id_mapping.hent_arkiv_id_fra_mapping(skuffen_id).await {
-                        Ok(Some(arkiv_id)) => self.validate_sak_fra_arkivet(arkiv_id.as_str()).await,
-                        Ok(None) => ValidationOutcome::Ok,
-                        Err(err) => ValidationOutcome::Recoverable {
-                            message: err.to_string(),
-                        },
-                    },
+                match self
+                    .id_mapping
+                    .hent_skuffen_id_fra_mapping(client_reference)
+                    .await
+                {
+                    Ok(Some(skuffen_id)) => {
+                        match self.id_mapping.hent_arkiv_id_fra_mapping(skuffen_id).await {
+                            Ok(Some(arkiv_id)) => {
+                                self.validate_sak_fra_arkivet(arkiv_id.as_str()).await
+                            }
+                            Ok(None) => ValidationOutcome::Ok,
+                            Err(err) => ValidationOutcome::Recoverable {
+                                message: err.to_string(),
+                            },
+                        }
+                    }
                     Ok(None) => ValidationOutcome::Irrecoverable {
                         message: "Sak finnes ikke i Skuffen".to_string(),
                     },

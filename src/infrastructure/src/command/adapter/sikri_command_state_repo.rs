@@ -1,5 +1,5 @@
 use application::command::ports::command_state_port::{
-    ArkivSakTilstandError, ArkivSakTilstandErrorKind, ArkivSakTilstandRepository, ArkivSakTilstand,
+    ArkivSakTilstand, ArkivSakTilstandError, ArkivSakTilstandErrorKind, ArkivSakTilstandRepository,
 };
 use async_trait::async_trait;
 use sikri_client::Recoverability;
@@ -9,7 +9,10 @@ pub struct SikriCommandStateRepository;
 
 #[async_trait]
 impl ArkivSakTilstandRepository for SikriCommandStateRepository {
-    async fn hent_sak_tilstand_fra_arkivet(&self, saksnummer: &str) -> Result<ArkivSakTilstand, ArkivSakTilstandError> {
+    async fn hent_sak_tilstand_fra_arkivet(
+        &self,
+        saksnummer: &str,
+    ) -> Result<ArkivSakTilstand, ArkivSakTilstandError> {
         match sikri_client::hent_sak(saksnummer, "SKUFFEN", false).await {
             Ok(sak) => {
                 let avsluttet = sak.lukket
@@ -25,7 +28,9 @@ impl ArkivSakTilstandRepository for SikriCommandStateRepository {
                     let kind = match req_err.status() {
                         Some(status) => match sikri_client::classify_http_error(status, None) {
                             Recoverability::Recoverable => ArkivSakTilstandErrorKind::Recoverable,
-                            Recoverability::Irrecoverable => ArkivSakTilstandErrorKind::Irrecoverable,
+                            Recoverability::Irrecoverable => {
+                                ArkivSakTilstandErrorKind::Irrecoverable
+                            }
                         },
                         None => ArkivSakTilstandErrorKind::Recoverable,
                     };

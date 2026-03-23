@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use crate::command::ports::command_state_port::{
-    ArkivSakTilstandError, ArkivSakTilstandErrorKind, ArkivSakTilstandRepository, ArkivSakTilstand,
+    ArkivSakTilstand, ArkivSakTilstandError, ArkivSakTilstandErrorKind, ArkivSakTilstandRepository,
 };
 use crate::command::ports::id_mapping_port::IdMappingRepository;
 use crate::command::ports::status_publisher_port::CommandStatusPublisher;
@@ -75,11 +75,16 @@ impl FakeArkivSakTilstandRepository {
 
 #[async_trait]
 impl ArkivSakTilstandRepository for FakeArkivSakTilstandRepository {
-    async fn hent_sak_tilstand_fra_arkivet(&self, saksnummer: &str) -> Result<ArkivSakTilstand, ArkivSakTilstandError> {
+    async fn hent_sak_tilstand_fra_arkivet(
+        &self,
+        saksnummer: &str,
+    ) -> Result<ArkivSakTilstand, ArkivSakTilstandError> {
         self.calls.lock().unwrap().push(saksnummer.to_string());
         match self.response.lock().unwrap().clone() {
             ArkivSakTilstandResponse::Ok(state) => Ok(state),
-            ArkivSakTilstandResponse::Err(kind, message) => Err(ArkivSakTilstandError::new(kind, message)),
+            ArkivSakTilstandResponse::Err(kind, message) => {
+                Err(ArkivSakTilstandError::new(kind, message))
+            }
         }
     }
 }
@@ -170,7 +175,10 @@ impl IdMappingRepository for FakeIdMappingRepository {
         Ok(())
     }
 
-    async fn hent_arkiv_id_fra_mapping(&self, skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
+    async fn hent_arkiv_id_fra_mapping(
+        &self,
+        skuffen_id: Uuid,
+    ) -> Result<Option<String>, anyhow::Error> {
         let mut calls = self.calls.lock().unwrap();
         calls.hent_arkiv_id_fra_mapping += 1;
         calls.last_skuffen_id = Some(skuffen_id);
@@ -182,7 +190,10 @@ impl IdMappingRepository for FakeIdMappingRepository {
         }
     }
 
-    async fn hent_skuffen_id_fra_mapping(&self, client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error> {
+    async fn hent_skuffen_id_fra_mapping(
+        &self,
+        client_reference: Uuid,
+    ) -> Result<Option<Uuid>, anyhow::Error> {
         let mut calls = self.calls.lock().unwrap();
         calls.hent_skuffen_id_fra_mapping += 1;
         calls.last_client_reference = Some(client_reference);
@@ -410,7 +421,9 @@ async fn test_validate_journalpost_blocks_closed_sak() {
     let skuffen_id = Uuid::new_v4();
     id_mapping.set_skuffen_id_response(SkuffenIdResponse::Ok(Some(skuffen_id)));
     id_mapping.set_arkiv_id_response(ArkivIdResponse::Ok(Some("2025/1".to_string())));
-    state_repo.set_response(ArkivSakTilstandResponse::Ok(ArkivSakTilstand { avsluttet: true }));
+    state_repo.set_response(ArkivSakTilstandResponse::Ok(ArkivSakTilstand {
+        avsluttet: true,
+    }));
 
     let service = build_service(
         state_repo.clone(),

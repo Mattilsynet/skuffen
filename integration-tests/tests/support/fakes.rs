@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use application::command::ports::command_state_port::{
-    ArkivSakTilstandError, ArkivSakTilstandRepository, ArkivSakTilstand as ArkivSakTilstand,
+    ArkivSakTilstand, ArkivSakTilstandError, ArkivSakTilstandRepository,
 };
 use application::command::ports::eksekvering_port::{
     ArkivGateway, OpprettJournalpostResultat, Utsendingsvalg,

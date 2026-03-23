@@ -111,11 +111,17 @@ impl IdMappingRepository for FakeIdMappingRepository {
         Ok(())
     }
 
-    async fn hent_arkiv_id_fra_mapping(&self, _skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
+    async fn hent_arkiv_id_fra_mapping(
+        &self,
+        _skuffen_id: Uuid,
+    ) -> Result<Option<String>, anyhow::Error> {
         Ok(None)
     }
 
-    async fn hent_skuffen_id_fra_mapping(&self, _client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error> {
+    async fn hent_skuffen_id_fra_mapping(
+        &self,
+        _client_reference: Uuid,
+    ) -> Result<Option<Uuid>, anyhow::Error> {
         Ok(None)
     }
 

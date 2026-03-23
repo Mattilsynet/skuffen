@@ -32,7 +32,10 @@ struct FakeStateData {
 
 #[async_trait]
 impl EksekveringStateRepository for FakeEksekveringStateRepository {
-    async fn hent_sak_state_fra_state(&self, _sak_id: Uuid) -> Result<Option<SakState>, anyhow::Error> {
+    async fn hent_sak_state_fra_state(
+        &self,
+        _sak_id: Uuid,
+    ) -> Result<Option<SakState>, anyhow::Error> {
         Ok(self.data.lock().unwrap().existing_sak.clone())
     }
 
@@ -158,11 +161,17 @@ impl IdMappingRepository for FakeIdMappingRepository {
         Ok(())
     }
 
-    async fn hent_arkiv_id_fra_mapping(&self, _skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
+    async fn hent_arkiv_id_fra_mapping(
+        &self,
+        _skuffen_id: Uuid,
+    ) -> Result<Option<String>, anyhow::Error> {
         Ok(None)
     }
 
-    async fn hent_skuffen_id_fra_mapping(&self, _client_reference: Uuid) -> Result<Option<Uuid>, anyhow::Error> {
+    async fn hent_skuffen_id_fra_mapping(
+        &self,
+        _client_reference: Uuid,
+    ) -> Result<Option<Uuid>, anyhow::Error> {
         Ok(None)
     }
 

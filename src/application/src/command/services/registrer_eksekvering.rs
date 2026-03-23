@@ -56,7 +56,12 @@ impl RegistrerEksekveringService {
                 }
             };
 
-            if self.state_repo.hent_sak_state_fra_state(sak_id).await?.is_none() {
+            if self
+                .state_repo
+                .hent_sak_state_fra_state(sak_id)
+                .await?
+                .is_none()
+            {
                 self.state_repo.lagre_sak_state(sak_id, sak_state).await?;
             }
 

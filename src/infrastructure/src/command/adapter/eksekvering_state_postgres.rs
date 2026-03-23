@@ -21,7 +21,10 @@ impl PostgresEksekveringStateRepository {
 
 #[async_trait]
 impl EksekveringStateRepository for PostgresEksekveringStateRepository {
-    async fn hent_sak_state_fra_state(&self, sak_id: Uuid) -> Result<Option<SakState>, anyhow::Error> {
+    async fn hent_sak_state_fra_state(
+        &self,
+        sak_id: Uuid,
+    ) -> Result<Option<SakState>, anyhow::Error> {
         let row: Option<(String, bool, Option<String>)> = sqlx::query_as(
             r#"
             SELECT status, opprettet, saksnummer

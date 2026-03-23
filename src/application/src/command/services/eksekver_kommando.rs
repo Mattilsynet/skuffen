@@ -726,7 +726,10 @@ impl EksekverKommandoService {
             .hent_skuffen_id_fra_mapping(client_reference)
             .await
             .ok()??;
-        self.id_mapping.hent_arkiv_id_fra_mapping(skuffen_id).await.ok()?
+        self.id_mapping
+            .hent_arkiv_id_fra_mapping(skuffen_id)
+            .await
+            .ok()?
     }
 
     async fn build_reference_message(&self, envelope: &CommandEnvelope<Command>) -> Option<String> {
