@@ -1,14 +1,17 @@
 use anyhow::Result;
-use lib_schemas::skuffen::command::commands::{
-    Command, CommandEnvelope, CommandStatus, CommandStatusEvent,
-};
+use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::query::queries::SakKey;
 
 use crate::command::ports::{
     command_state_port::ArkivSakTilstandRepository, id_mapping_port::IdMappingRepository,
+    status_context_port::CommandStatusContextResolver,
     status_publisher_port::CommandStatusPublisher,
     validated_command_dispatcher_port::ValidatedCommandDispatcher,
 };
+use crate::command::status::{
+    validert_blocked_event, validert_error_event, validert_ok_event, validert_retrying_event,
+};
+use domain::eksekvering::typer::CommandLifecycleEvent;
 
 pub enum ValidationOutcome {
     Ok,
@@ -31,6 +34,7 @@ pub struct ValidateCommandService {
     id_mapping: Box<dyn IdMappingRepository>,
     dispatcher: Box<dyn ValidatedCommandDispatcher>,
     status_publisher: Box<dyn CommandStatusPublisher>,
+    status_context_resolver: Box<dyn CommandStatusContextResolver>,
 }
 
 impl ValidateCommandService {
@@ -39,17 +43,21 @@ impl ValidateCommandService {
         id_mapping: Box<dyn IdMappingRepository>,
         dispatcher: Box<dyn ValidatedCommandDispatcher>,
         status_publisher: Box<dyn CommandStatusPublisher>,
+        status_context_resolver: Box<dyn CommandStatusContextResolver>,
     ) -> Self {
         Self {
             state_repo,
             id_mapping,
             dispatcher,
             status_publisher,
+            status_context_resolver,
         }
     }
 
     pub async fn handle(&self, envelope: CommandEnvelope<Command>) -> Result<ValidationOutcome> {
-        self.emit_status(&envelope, CommandStatus::Pending, None, None)
+        let context = self
+            .status_context_resolver
+            .resolve_context(&envelope)
             .await?;
 
         let outcome = match envelope.payload.clone() {
@@ -69,32 +77,30 @@ impl ValidateCommandService {
         match outcome {
             ValidationOutcome::Ok => {
                 self.dispatcher.dispatch_validated(&envelope).await?;
-                self.emit_status(&envelope, CommandStatus::Ok, None, None)
+                self.emit_status(validert_ok_event(&envelope, context))
                     .await?;
                 Ok(ValidationOutcome::Ok)
             }
             ValidationOutcome::Blocked { message } => {
-                self.emit_status(
+                self.emit_status(validert_blocked_event(
                     &envelope,
-                    CommandStatus::Blocked,
-                    Some(message.clone()),
-                    None,
-                )
+                    message.clone(),
+                    context.clone(),
+                ))
                 .await?;
                 Ok(ValidationOutcome::Blocked { message })
             }
             ValidationOutcome::Recoverable { message } => {
-                self.emit_status(
+                self.emit_status(validert_retrying_event(
                     &envelope,
-                    CommandStatus::Retrying,
-                    Some(message.clone()),
-                    None,
-                )
+                    message.clone(),
+                    context.clone(),
+                ))
                 .await?;
                 Ok(ValidationOutcome::Recoverable { message })
             }
             ValidationOutcome::Irrecoverable { message } => {
-                self.emit_status(&envelope, CommandStatus::Error, Some(message.clone()), None)
+                self.emit_status(validert_error_event(&envelope, message.clone(), context))
                     .await?;
                 Ok(ValidationOutcome::Irrecoverable { message })
             }
@@ -167,20 +173,7 @@ impl ValidateCommandService {
         }
     }
 
-    async fn emit_status(
-        &self,
-        envelope: &CommandEnvelope<Command>,
-        status: CommandStatus,
-        message: Option<String>,
-        attempt: Option<u32>,
-    ) -> Result<()> {
-        let event = CommandStatusEvent {
-            command_id: envelope.command_id,
-            status,
-            message,
-            attempt,
-            timestamp: None,
-        };
+    async fn emit_status(&self, event: CommandLifecycleEvent) -> Result<()> {
         self.status_publisher.publish_status(event).await
     }
 }

@@ -97,7 +97,7 @@ pub trait EksekveringStateRepository: Send + Sync {
     async fn registrer_kommando(
         &self,
         envelope: &CommandEnvelope<Command>,
-    ) -> Result<(), anyhow::Error>;
+    ) -> Result<bool, anyhow::Error>;
 
     async fn hent_klare_kommandoer(
         &self,

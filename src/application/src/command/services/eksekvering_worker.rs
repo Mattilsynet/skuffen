@@ -50,7 +50,12 @@ impl EksekveringWorker {
     }
 
     async fn execute_one(&self, command: EksekveringKommando) -> anyhow::Result<()> {
-        let outcome = self.executor.handle(command.envelope).await?;
+        let attempt = if command.attempts < 0 {
+            1
+        } else {
+            command.attempts as u32 + 1
+        };
+        let outcome = self.executor.handle(command.envelope, attempt).await?;
         match outcome {
             ExecutionOutcome::Ok => {
                 self.state_repo

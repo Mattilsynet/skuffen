@@ -17,6 +17,7 @@ use crate::command::adapter::nats_status_publisher::NatsCommandStatusPublisher;
 use crate::command::adapter::nats_validated_publisher::NatsValidatedCommandDispatcher;
 use crate::command::adapter::sikri_arkiv_gateway::SikriArkivGateway;
 use crate::command::adapter::sikri_command_state_repo::SikriCommandStateRepository;
+use crate::command::adapter::status_context_resolver::IdMappingStatusContextResolver;
 use crate::command::media::ObjectStoreMediaStore;
 use crate::command::nats::command_listener::CommandListener;
 use crate::command::nats::eksekvering_listener::KommandoEksekveringListener;
@@ -92,6 +93,7 @@ pub fn build_command_listener(
     let command_service = application::command::services::ingest_command::IngestCommandService::new(
         Box::new(id_mapping_repo),
         Box::new(NatsCommandDispatcher::new(nats.clone())),
+        Box::new(NatsCommandStatusPublisher::new(nats.clone())),
     );
 
     CommandListener::new(nats, command_service, media_store)
@@ -102,12 +104,16 @@ pub fn build_validator_listener(
     id_mapping_repo: PostgresIdMappingRepository,
     use_fake_sikri: bool,
 ) -> CommandValidationListener {
+    let status_context_resolver = Box::new(IdMappingStatusContextResolver::new(Box::new(
+        id_mapping_repo.clone(),
+    )));
     let validator_service =
         application::command::services::validate_command::ValidateCommandService::new(
             command_state_repository(use_fake_sikri),
             Box::new(id_mapping_repo),
             Box::new(NatsValidatedCommandDispatcher::new(nats.clone())),
             Box::new(NatsCommandStatusPublisher::new(nats.clone())),
+            status_context_resolver,
         );
 
     CommandValidationListener::new(nats, validator_service)
@@ -127,6 +133,10 @@ pub fn build_eksekvering_components(
         application::command::services::registrer_eksekvering::RegistrerEksekveringService::new(
             Box::new(eksekvering_state_repo.clone()),
             Box::new(id_mapping_repo.clone()),
+            Box::new(NatsEksekveringStatusPublisher::new(nats.clone())),
+            Box::new(IdMappingStatusContextResolver::new(Box::new(
+                id_mapping_repo.clone(),
+            ))),
         );
 
     let eksekvering_service =
@@ -136,6 +146,9 @@ pub fn build_eksekvering_components(
             Box::new(NatsEksekveringStatusPublisher::new(nats.clone())),
             Box::new(NatsDonePublisher::new(nats.clone())),
             Box::new(id_mapping_repo.clone()),
+            Box::new(IdMappingStatusContextResolver::new(Box::new(
+                id_mapping_repo.clone(),
+            ))),
         );
 
     let eksekvering_listener =

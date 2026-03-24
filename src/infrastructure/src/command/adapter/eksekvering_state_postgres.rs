@@ -288,9 +288,9 @@ impl EksekveringStateRepository for PostgresEksekveringStateRepository {
     async fn registrer_kommando(
         &self,
         envelope: &CommandEnvelope<Command>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<bool, anyhow::Error> {
         let payload = serde_json::to_value(envelope)?;
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO command_execution (command_id, correlation_id, payload, status, attempts)
             VALUES ($1, $2, $3, 'pending', 0)
@@ -304,7 +304,7 @@ impl EksekveringStateRepository for PostgresEksekveringStateRepository {
         .execute(&self.pool)
         .await?;
 
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     async fn hent_klare_kommandoer(

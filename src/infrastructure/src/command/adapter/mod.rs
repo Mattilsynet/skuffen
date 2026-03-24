@@ -9,3 +9,4 @@ pub mod nats_status_publisher;
 pub mod nats_validated_publisher;
 pub mod sikri_arkiv_gateway;
 pub mod sikri_command_state_repo;
+pub mod status_context_resolver;

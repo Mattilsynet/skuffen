@@ -1,7 +1,8 @@
 use async_trait::async_trait;
-use lib_schemas::skuffen::command::commands::{
-    Command, CommandEnvelope, CommandStatus, CommandStatusEvent,
+use domain::eksekvering::typer::{
+    CommandLifecycleContext, CommandLifecycleEvent, CommandStage, CommandStageStatus,
 };
+use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandStatus};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
 };
@@ -16,20 +17,34 @@ use crate::command::ports::command_state_port::{
     ArkivSakTilstand, ArkivSakTilstandError, ArkivSakTilstandErrorKind, ArkivSakTilstandRepository,
 };
 use crate::command::ports::id_mapping_port::IdMappingRepository;
+use crate::command::ports::status_context_port::CommandStatusContextResolver;
 use crate::command::ports::status_publisher_port::CommandStatusPublisher;
 use crate::command::ports::validated_command_dispatcher_port::ValidatedCommandDispatcher;
 use crate::command::services::validate_command::{ValidateCommandService, ValidationOutcome};
 
 #[derive(Clone, Default)]
 struct FakeCommandStatusPublisher {
-    events: Arc<Mutex<Vec<CommandStatusEvent>>>,
+    events: Arc<Mutex<Vec<CommandLifecycleEvent>>>,
 }
 
 #[async_trait]
 impl CommandStatusPublisher for FakeCommandStatusPublisher {
-    async fn publish_status(&self, event: CommandStatusEvent) -> Result<(), anyhow::Error> {
+    async fn publish_status(&self, event: CommandLifecycleEvent) -> Result<(), anyhow::Error> {
         self.events.lock().unwrap().push(event);
         Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+struct FakeStatusContextResolver;
+
+#[async_trait]
+impl CommandStatusContextResolver for FakeStatusContextResolver {
+    async fn resolve_context(
+        &self,
+        _envelope: &CommandEnvelope<Command>,
+    ) -> Result<CommandLifecycleContext, anyhow::Error> {
+        Ok(CommandLifecycleContext::default())
     }
 }
 
@@ -240,6 +255,7 @@ fn build_service(
         Box::new(id_mapping),
         Box::new(dispatcher),
         Box::new(status_publisher),
+        Box::new(FakeStatusContextResolver),
     )
 }
 
@@ -293,20 +309,27 @@ fn wrap_command(command: Command) -> CommandEnvelope<Command> {
 }
 
 fn assert_statuses(
-    events: &[CommandStatusEvent],
+    events: &[CommandLifecycleEvent],
     command_id: Uuid,
     final_status: CommandStatus,
-    final_message: Option<&str>,
+    final_stage_status: CommandStageStatus,
+    final_detail: Option<&str>,
 ) {
-    assert_eq!(events.len(), 2);
-    assert_eq!(events[0].status, CommandStatus::Pending);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].status, final_status);
     assert_eq!(events[0].command_id, command_id);
-    assert!(events[0].message.is_none());
-    assert_eq!(events[1].status, final_status);
-    assert_eq!(events[1].command_id, command_id);
-    match final_message {
-        Some(expected) => assert_eq!(events[1].message.as_deref(), Some(expected)),
-        None => assert!(events[1].message.is_none()),
+    assert_eq!(events[0].stage, CommandStage::Validert);
+    assert_eq!(events[0].stage_status, final_stage_status);
+    match final_stage_status {
+        CommandStageStatus::Ok => assert_eq!(events[0].message, "validert::ok"),
+        CommandStageStatus::Blocked => assert_eq!(events[0].message, "validert::blocked"),
+        CommandStageStatus::Retrying => assert_eq!(events[0].message, "validert::retrying"),
+        CommandStageStatus::Error => assert_eq!(events[0].message, "validert::error"),
+        CommandStageStatus::Venter => unreachable!(),
+    }
+    match final_detail {
+        Some(expected) => assert_eq!(events[0].detail.as_deref(), Some(expected)),
+        None => assert!(events[0].detail.is_none()),
     }
 }
 
@@ -333,7 +356,13 @@ async fn test_validate_opprett_sak_dispatches_and_emits_ok_status() {
     assert_eq!(dispatcher.dispatched.lock().unwrap().len(), 1);
 
     let events = status_publisher.events.lock().unwrap();
-    assert_statuses(&events, command_id, CommandStatus::Ok, None);
+    assert_statuses(
+        &events,
+        command_id,
+        CommandStatus::Ok,
+        CommandStageStatus::Ok,
+        None,
+    );
 
     assert!(state_repo.calls.lock().unwrap().is_empty());
 }
@@ -372,6 +401,7 @@ async fn test_validate_journalpost_missing_sak_is_irrecoverable() {
         &events,
         command_id,
         CommandStatus::Error,
+        CommandStageStatus::Error,
         Some("Sak finnes ikke i Skuffen"),
     );
 
@@ -406,7 +436,13 @@ async fn test_validate_journalpost_allows_skuffen_only_sak() {
     assert_eq!(dispatcher.dispatched.lock().unwrap().len(), 1);
 
     let events = status_publisher.events.lock().unwrap();
-    assert_statuses(&events, command_id, CommandStatus::Ok, None);
+    assert_statuses(
+        &events,
+        command_id,
+        CommandStatus::Ok,
+        CommandStageStatus::Ok,
+        None,
+    );
 
     assert!(state_repo.calls.lock().unwrap().is_empty());
 }
@@ -452,6 +488,7 @@ async fn test_validate_journalpost_blocks_closed_sak() {
         &events,
         command_id,
         CommandStatus::Error,
+        CommandStageStatus::Error,
         Some("Sak er avsluttet"),
     );
 
@@ -483,7 +520,13 @@ async fn test_validate_arkiv_id_open_sak_is_ok() {
     assert_eq!(dispatcher.dispatched.lock().unwrap().len(), 1);
 
     let events = status_publisher.events.lock().unwrap();
-    assert_statuses(&events, command_id, CommandStatus::Ok, None);
+    assert_statuses(
+        &events,
+        command_id,
+        CommandStatus::Ok,
+        CommandStageStatus::Ok,
+        None,
+    );
 
     let calls = state_repo.calls.lock().unwrap();
     assert_eq!(calls.as_slice(), ["2025/42".to_string()]);
@@ -528,6 +571,7 @@ async fn test_validate_arkiv_id_recoverable_error_retries() {
         &events,
         command_id,
         CommandStatus::Retrying,
+        CommandStageStatus::Retrying,
         Some("Sikri timeout"),
     );
 }
@@ -571,6 +615,7 @@ async fn test_validate_arkiv_id_irrecoverable_error_is_error() {
         &events,
         command_id,
         CommandStatus::Error,
+        CommandStageStatus::Error,
         Some("Sak finnes ikke i Sikri (2025/404)"),
     );
 }
@@ -611,6 +656,7 @@ async fn test_validate_client_reference_lookup_error_is_retrying() {
         &events,
         command_id,
         CommandStatus::Retrying,
+        CommandStageStatus::Retrying,
         Some("db error"),
     );
 }
@@ -652,6 +698,7 @@ async fn test_validate_arkiv_id_lookup_error_is_retrying() {
         &events,
         command_id,
         CommandStatus::Retrying,
+        CommandStageStatus::Retrying,
         Some("lookup failed"),
     );
 }

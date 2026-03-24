@@ -1,25 +1,31 @@
 use anyhow::{Context, Result};
+use domain::eksekvering::typer::CommandLifecycleContext;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
 use lib_schemas::skuffen::dokument::Dokument;
 use uuid::Uuid;
 
 use crate::command::ports::{
     command_dispatcher_port::CommandDispatcher, id_mapping_port::IdMappingRepository,
+    status_publisher_port::CommandStatusPublisher,
 };
+use crate::command::status::mottatt_event;
 
 pub struct IngestCommandService {
     id_mapping: Box<dyn IdMappingRepository>,
     dispatcher: Box<dyn CommandDispatcher>,
+    status_publisher: Box<dyn CommandStatusPublisher>,
 }
 
 impl IngestCommandService {
     pub fn new(
         id_mapping: Box<dyn IdMappingRepository>,
         dispatcher: Box<dyn CommandDispatcher>,
+        status_publisher: Box<dyn CommandStatusPublisher>,
     ) -> Self {
         Self {
             id_mapping,
             dispatcher,
+            status_publisher,
         }
     }
 
@@ -34,6 +40,7 @@ impl IngestCommandService {
 
     async fn process_command(&self, envelope: CommandEnvelope<Command>) -> Result<()> {
         let command_id = envelope.command_id;
+        let mottatt_context = self.build_initial_context(&envelope);
 
         // 1. Check Command Idempotency
         if self.id_mapping.has_processed_command(command_id).await? {
@@ -95,7 +102,72 @@ impl IngestCommandService {
             .await
             .context("Failed to dispatch command")?;
 
+        self.status_publisher
+            .publish_status(mottatt_event(&envelope, mottatt_context))
+            .await
+            .context("Failed to publish mottatt status")?;
+
         Ok(())
+    }
+
+    fn build_initial_context(
+        &self,
+        envelope: &CommandEnvelope<Command>,
+    ) -> CommandLifecycleContext {
+        let mut context = CommandLifecycleContext::default();
+
+        match &envelope.payload {
+            Command::OpprettSak(command) => {
+                context.sak_client_reference = Some(command.client_reference.to_string());
+            }
+            Command::OpprettInngåendeJournalpost(command) => {
+                self.populate_journalpost_context(&mut context, &command.felles)
+            }
+            Command::OpprettUtgåendeJournalpost(command) => {
+                self.populate_journalpost_context(&mut context, &command.felles)
+            }
+            Command::OpprettInterntNotatJournalpost(command) => {
+                self.populate_journalpost_context(&mut context, &command.felles)
+            }
+            Command::AvsluttSak(command) => match &command.sak_key {
+                lib_schemas::skuffen::query::queries::SakKey::ArkivId(saksnummer) => {
+                    context.saksnummer = Some(saksnummer.as_str().to_string());
+                }
+                lib_schemas::skuffen::query::queries::SakKey::ClientReference(client_reference) => {
+                    context.sak_client_reference = Some(client_reference.to_string());
+                }
+            },
+        }
+
+        context
+    }
+
+    fn populate_journalpost_context(
+        &self,
+        context: &mut CommandLifecycleContext,
+        felles: &lib_schemas::skuffen::command::journalpost::JournalpostCommon,
+    ) {
+        context.journalpost_client_reference = Some(felles.client_reference.to_string());
+
+        match &felles.sak_key {
+            lib_schemas::skuffen::query::queries::SakKey::ArkivId(saksnummer) => {
+                context.saksnummer = Some(saksnummer.as_str().to_string());
+            }
+            lib_schemas::skuffen::query::queries::SakKey::ClientReference(client_reference) => {
+                context.sak_client_reference = Some(client_reference.to_string());
+            }
+        }
+
+        context.dokument_client_references = felles
+            .dokumenter
+            .iter()
+            .map(|dokument| dokument.client_reference.to_string())
+            .collect();
+        context.dokument_ids = felles
+            .dokumenter
+            .iter()
+            .map(|dokument| dokument.client_reference.to_string())
+            .collect();
     }
 
     fn extract_client_reference(&self, command: &Command) -> Option<Uuid> {

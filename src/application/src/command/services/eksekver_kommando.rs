@@ -1,6 +1,5 @@
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandStatus};
+use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::query::queries::SakKey;
-use std::fmt::Write;
 use uuid::Uuid;
 
 use crate::command::ports::eksekvering_port::{
@@ -11,8 +10,12 @@ use crate::command::ports::eksekvering_state_port::{
     DokumentState, EksekveringStateRepository, JournalpostState, SakState, SakStatus,
 };
 use crate::command::ports::id_mapping_port::IdMappingRepository;
+use crate::command::ports::status_context_port::CommandStatusContextResolver;
+use crate::command::status::{
+    utfores_blocked_event, utfores_error_event, utfores_ok_event, utfores_retrying_event,
+};
 use domain::eksekvering::plan::{EksekveringsPlan, JournalpostType, Steg, Utsending};
-use domain::eksekvering::typer::{status_event, EksekveringFeil, EksekveringFeiltype};
+use domain::eksekvering::typer::{CommandLifecycleEvent, EksekveringFeil, EksekveringFeiltype};
 
 pub struct EksekverKommandoService {
     state_repo: Box<dyn EksekveringStateRepository>,
@@ -20,6 +23,7 @@ pub struct EksekverKommandoService {
     status_publisher: Box<dyn EksekveringStatusPublisher>,
     done_publisher: Box<dyn EksekveringKvitteringPublisher>,
     id_mapping: Box<dyn IdMappingRepository>,
+    status_context_resolver: Box<dyn CommandStatusContextResolver>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +106,7 @@ impl EksekverKommandoService {
         status_publisher: Box<dyn EksekveringStatusPublisher>,
         done_publisher: Box<dyn EksekveringKvitteringPublisher>,
         id_mapping: Box<dyn IdMappingRepository>,
+        status_context_resolver: Box<dyn CommandStatusContextResolver>,
     ) -> Self {
         Self {
             state_repo,
@@ -109,42 +114,33 @@ impl EksekverKommandoService {
             status_publisher,
             done_publisher,
             id_mapping,
+            status_context_resolver,
         }
     }
 
     pub async fn handle(
         &self,
         envelope: CommandEnvelope<Command>,
+        attempt: u32,
     ) -> Result<ExecutionOutcome, anyhow::Error> {
-        self.status_publisher
-            .publiser_status(status_event(&envelope, CommandStatus::Pending, None, None))
-            .await?;
-
         let plan = match EksekveringsPlan::fra_command(&envelope.payload) {
             Ok(plan) => plan,
             Err(err) => {
-                return self.avslutt_med_feil(&envelope, err).await;
+                return self.avslutt_med_feil(&envelope, err, attempt).await;
             }
         };
 
         match self.execute_plan(&envelope, plan).await {
             Ok(()) => {
-                let refs_message = self.build_reference_message(&envelope).await;
-                self.status_publisher
-                    .publiser_status(status_event(
-                        &envelope,
-                        CommandStatus::Ok,
-                        refs_message,
-                        None,
-                    ))
+                let context = self
+                    .status_context_resolver
+                    .resolve_context(&envelope)
                     .await?;
-                let (subject, _) = domain::eksekvering::typer::done_subject(&envelope);
-                self.done_publisher
-                    .publiser_done(&subject, &envelope)
-                    .await?;
+                let event = utfores_ok_event(&envelope, None, context, Some(attempt));
+                self.publish_status(event, &envelope).await?;
                 Ok(ExecutionOutcome::Ok)
             }
-            Err(err) => self.avslutt_med_feil(&envelope, err).await,
+            Err(err) => self.avslutt_med_feil(&envelope, err, attempt).await,
         }
     }
 
@@ -701,50 +697,58 @@ impl EksekverKommandoService {
         &self,
         envelope: &CommandEnvelope<Command>,
         err: EksekveringFeil,
+        attempt: u32,
     ) -> Result<ExecutionOutcome, anyhow::Error> {
-        let status = match err.feiltype {
-            EksekveringFeiltype::Recoverable => CommandStatus::Retrying,
-            EksekveringFeiltype::Irrecoverable => CommandStatus::Error,
-            EksekveringFeiltype::Blocked => CommandStatus::Blocked,
-        };
-
-        let status_for_event = status.clone();
-        let is_terminal = matches!(
-            &status_for_event,
-            CommandStatus::Error | CommandStatus::Blocked
-        );
-        let refs_message = self.build_reference_message(envelope).await;
-        let merged_message = match refs_message {
-            Some(refs) if !err.melding.is_empty() => Some(format!("{} | {}", err.melding, refs)),
-            Some(refs) => Some(refs),
-            None => Some(err.melding.clone()),
-        };
-        let status_event_value =
-            status_event(envelope, status_for_event, merged_message.clone(), None);
-        self.status_publisher
-            .publiser_status(status_event_value)
+        let context = self
+            .status_context_resolver
+            .resolve_context(envelope)
             .await?;
+        let detail = err.melding.clone();
 
-        if is_terminal {
+        let event = match err.feiltype {
+            EksekveringFeiltype::Recoverable => {
+                utfores_retrying_event(envelope, detail.clone(), context, Some(attempt))
+            }
+            EksekveringFeiltype::Irrecoverable => {
+                utfores_error_event(envelope, detail.clone(), context, Some(attempt))
+            }
+            EksekveringFeiltype::Blocked => {
+                utfores_blocked_event(envelope, detail.clone(), context, Some(attempt))
+            }
+        };
+        self.publish_status(event, envelope).await?;
+
+        let outcome = match err.feiltype {
+            EksekveringFeiltype::Recoverable => ExecutionOutcome::Retrying {
+                last_error: Some(detail),
+            },
+            EksekveringFeiltype::Irrecoverable => ExecutionOutcome::Error {
+                last_error: Some(detail),
+            },
+            EksekveringFeiltype::Blocked => ExecutionOutcome::Blocked {
+                last_error: Some(detail),
+            },
+        };
+
+        Ok(outcome)
+    }
+
+    async fn publish_status(
+        &self,
+        event: CommandLifecycleEvent,
+        envelope: &CommandEnvelope<Command>,
+    ) -> Result<(), anyhow::Error> {
+        let terminal = event.terminal;
+        self.status_publisher.publiser_status(event).await?;
+
+        if terminal {
             let (subject, _) = domain::eksekvering::typer::done_subject(envelope);
             self.done_publisher
                 .publiser_done(&subject, envelope)
                 .await?;
         }
 
-        let outcome = match err.feiltype {
-            EksekveringFeiltype::Recoverable => ExecutionOutcome::Retrying {
-                last_error: merged_message,
-            },
-            EksekveringFeiltype::Irrecoverable => ExecutionOutcome::Error {
-                last_error: merged_message,
-            },
-            EksekveringFeiltype::Blocked => ExecutionOutcome::Blocked {
-                last_error: merged_message,
-            },
-        };
-
-        Ok(outcome)
+        Ok(())
     }
 
     fn map_arkiv_feil(&self, err: anyhow::Error) -> EksekveringFeil {
@@ -759,101 +763,5 @@ impl EksekverKommandoService {
             return EksekveringFeil::irrecoverable(message);
         }
         EksekveringFeil::recoverable(message)
-    }
-
-    async fn resolve_arkiv_id_from_client_reference(
-        &self,
-        client_reference: Uuid,
-    ) -> Option<String> {
-        let skuffen_id = self
-            .id_mapping
-            .hent_skuffen_id_fra_mapping(client_reference)
-            .await
-            .ok()??;
-        self.id_mapping
-            .hent_arkiv_id_fra_mapping(skuffen_id)
-            .await
-            .ok()?
-    }
-
-    async fn build_reference_message(&self, envelope: &CommandEnvelope<Command>) -> Option<String> {
-        let mut message = String::new();
-        match &envelope.payload {
-            Command::OpprettSak(cmd) => {
-                if let Some(saksnummer) = self
-                    .resolve_arkiv_id_from_client_reference(cmd.client_reference)
-                    .await
-                {
-                    let _ = write!(message, "saksnummer={saksnummer}");
-                }
-            }
-            Command::OpprettInngåendeJournalpost(cmd) => {
-                message = self.build_journalpost_reference_message(&cmd.felles).await;
-            }
-            Command::OpprettUtgåendeJournalpost(cmd) => {
-                message = self.build_journalpost_reference_message(&cmd.felles).await;
-            }
-            Command::OpprettInterntNotatJournalpost(cmd) => {
-                message = self.build_journalpost_reference_message(&cmd.felles).await;
-            }
-            Command::AvsluttSak(cmd) => {
-                let saksnummer = match &cmd.sak_key {
-                    SakKey::ArkivId(saksnummer) => Some(saksnummer.as_str().to_string()),
-                    SakKey::ClientReference(client_ref) => {
-                        self.resolve_arkiv_id_from_client_reference(*client_ref)
-                            .await
-                    }
-                };
-                if let Some(saksnummer) = saksnummer {
-                    let _ = write!(message, "saksnummer={saksnummer}");
-                }
-            }
-        }
-
-        if message.is_empty() {
-            None
-        } else {
-            Some(message)
-        }
-    }
-
-    async fn build_journalpost_reference_message(
-        &self,
-        felles: &lib_schemas::skuffen::command::journalpost::JournalpostCommon,
-    ) -> String {
-        let mut parts: Vec<String> = Vec::new();
-
-        let saksnummer = match &felles.sak_key {
-            SakKey::ArkivId(saksnummer) => Some(saksnummer.as_str().to_string()),
-            SakKey::ClientReference(client_ref) => {
-                self.resolve_arkiv_id_from_client_reference(*client_ref)
-                    .await
-            }
-        };
-        if let Some(saksnummer) = saksnummer {
-            parts.push(format!("saksnummer={saksnummer}"));
-        }
-
-        if let Some(journalpost_id) = self
-            .resolve_arkiv_id_from_client_reference(felles.client_reference)
-            .await
-        {
-            parts.push(format!("journalpostId={journalpost_id}"));
-        }
-
-        let mut dokument_ids: Vec<String> = Vec::new();
-        for dokument in &felles.dokumenter {
-            if let Some(dokument_id) = self
-                .resolve_arkiv_id_from_client_reference(dokument.client_reference)
-                .await
-            {
-                dokument_ids.push(dokument_id);
-            }
-        }
-        if !dokument_ids.is_empty() {
-            parts.push(format!("dokumentIds={}", dokument_ids.join(",")));
-        }
-
-        parts.join(" ")
     }
 }

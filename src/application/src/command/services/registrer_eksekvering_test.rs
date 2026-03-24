@@ -1,4 +1,7 @@
 use async_trait::async_trait;
+use domain::eksekvering::typer::{
+    CommandLifecycleContext, CommandLifecycleEvent, CommandStage, CommandStageStatus,
+};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
@@ -8,12 +11,14 @@ use lib_schemas::skuffen::query::queries::SakKey;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+use crate::command::ports::eksekvering_port::EksekveringStatusPublisher;
 use crate::command::ports::eksekvering_state_port::{
     DokumentState, EksekveringKommando, EksekveringStateRepository, EksekveringStatus,
     JournalpostState, SakState, SakStatus,
 };
 use crate::command::ports::id_mapping_port::IdMappingRepository;
 use crate::command::ports::registrer_eksekvering_port::RegistrerEksekveringUseCase;
+use crate::command::ports::status_context_port::CommandStatusContextResolver;
 use crate::command::services::registrer_eksekvering::RegistrerEksekveringService;
 
 #[derive(Clone, Default)]
@@ -97,13 +102,13 @@ impl EksekveringStateRepository for FakeEksekveringStateRepository {
     async fn registrer_kommando(
         &self,
         envelope: &CommandEnvelope<Command>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<bool, anyhow::Error> {
         self.data
             .lock()
             .unwrap()
             .registrerte_kommandoer
             .push(envelope.command_id);
-        Ok(())
+        Ok(true)
     }
 
     async fn hent_klare_kommandoer(
@@ -202,13 +207,54 @@ impl IdMappingRepository for FakeIdMappingRepository {
     }
 }
 
+#[derive(Clone, Default)]
+struct FakeStatusPublisher {
+    events: Arc<Mutex<Vec<CommandLifecycleEvent>>>,
+}
+
+#[async_trait]
+impl EksekveringStatusPublisher for FakeStatusPublisher {
+    async fn publiser_status(&self, event: CommandLifecycleEvent) -> Result<(), anyhow::Error> {
+        self.events.lock().unwrap().push(event);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+struct FakeStatusContextResolver;
+
+#[async_trait]
+impl CommandStatusContextResolver for FakeStatusContextResolver {
+    async fn resolve_context(
+        &self,
+        _envelope: &CommandEnvelope<Command>,
+    ) -> Result<CommandLifecycleContext, anyhow::Error> {
+        Ok(CommandLifecycleContext::default())
+    }
+}
+
+fn build_service(
+    state_repo: FakeEksekveringStateRepository,
+    id_mapping_repo: FakeIdMappingRepository,
+    status_publisher: FakeStatusPublisher,
+) -> RegistrerEksekveringService {
+    RegistrerEksekveringService::new(
+        Box::new(state_repo),
+        Box::new(id_mapping_repo),
+        Box::new(status_publisher),
+        Box::new(FakeStatusContextResolver),
+    )
+}
+
 #[tokio::test]
 async fn registrer_eksekvering_seeds_state_for_client_reference_sak() {
     let state_repo = FakeEksekveringStateRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
-    let service = RegistrerEksekveringService::new(
-        Box::new(state_repo.clone()),
-        Box::new(id_mapping_repo.clone()),
+    let status_publisher = FakeStatusPublisher::default();
+    let service = build_service(
+        state_repo.clone(),
+        id_mapping_repo.clone(),
+        status_publisher.clone(),
     );
 
     let sak_id = Uuid::new_v4();
@@ -230,6 +276,11 @@ async fn registrer_eksekvering_seeds_state_for_client_reference_sak() {
     assert_eq!(linked_sak_id, sak_id);
     assert_eq!(saved_journalpost_state.journalposttype, 'X');
     assert_eq!(state.registrerte_kommandoer, vec![envelope.command_id]);
+    let events = status_publisher.events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].stage, CommandStage::Utfores);
+    assert_eq!(events[0].stage_status, CommandStageStatus::Venter);
+    assert_eq!(events[0].message, "utfores::venter");
 
     let id_mapping = id_mapping_repo.data.lock().unwrap();
     assert!(id_mapping.ensure_calls.is_empty());
@@ -239,12 +290,14 @@ async fn registrer_eksekvering_seeds_state_for_client_reference_sak() {
 async fn registrer_eksekvering_ensures_mapping_for_arkiv_id_sak() {
     let state_repo = FakeEksekveringStateRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
     let ensured_sak_id = Uuid::new_v4();
     id_mapping_repo.data.lock().unwrap().ensured_sak_id = Some(ensured_sak_id);
 
-    let service = RegistrerEksekveringService::new(
-        Box::new(state_repo.clone()),
-        Box::new(id_mapping_repo.clone()),
+    let service = build_service(
+        state_repo.clone(),
+        id_mapping_repo.clone(),
+        status_publisher.clone(),
     );
 
     let journalpost_id = Uuid::new_v4();
@@ -269,6 +322,9 @@ async fn registrer_eksekvering_ensures_mapping_for_arkiv_id_sak() {
         id_mapping.ensure_calls,
         vec![("sak".to_string(), "2025/123".to_string())]
     );
+    let events = status_publisher.events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].message, "utfores::venter");
 }
 
 fn make_journalpost_command(journalpost_id: Uuid, sak_key: SakKey) -> CommandEnvelope<Command> {

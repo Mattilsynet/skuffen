@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use infrastructure::command::status_event::StatusEventMessage;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -39,12 +40,13 @@ async fn command_sequence_opprett_internt_notat_avslutt_sak() -> Result<()> {
         format!("Internt notat {}", Uuid::new_v4()),
     );
     send_command_batch(&env.nats_url, &commands).await?;
-    let _ = wait_for_status_events(
+    let events = wait_for_status_events(
         &env.nats_url,
         commands.iter().map(|command| command.command_id),
         Duration::from_secs(20),
     )
     .await?;
+    assert_happy_path_stages(&events, commands.iter().map(|command| command.command_id));
     wait_for_command_execution_all(
         &env.pool,
         commands.iter().map(|command| command.command_id),
@@ -88,12 +90,13 @@ async fn command_sequence_inngaende_journalpost_flow() -> Result<()> {
     )];
     insert_arkiv_id_mapping(&env.pool, scenario.sak_skuffen_id, "sak", saksnummer).await?;
     send_command_batch(&env.nats_url, &commands).await?;
-    let _ = wait_for_status_events(
+    let events = wait_for_status_events(
         &env.nats_url,
         commands.iter().map(|command| command.command_id),
         Duration::from_secs(20),
     )
     .await?;
+    assert_happy_path_stages(&events, commands.iter().map(|command| command.command_id));
     wait_for_command_execution_all(
         &env.pool,
         commands.iter().map(|command| command.command_id),
@@ -132,12 +135,13 @@ async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
     )];
     insert_arkiv_id_mapping(&env.pool, scenario.sak_skuffen_id, "sak", saksnummer).await?;
     send_command_batch(&env.nats_url, &commands).await?;
-    let _ = wait_for_status_events(
+    let events = wait_for_status_events(
         &env.nats_url,
         commands.iter().map(|command| command.command_id),
         Duration::from_secs(20),
     )
     .await?;
+    assert_happy_path_stages(&events, commands.iter().map(|command| command.command_id));
     wait_for_command_execution_all(
         &env.pool,
         commands.iter().map(|command| command.command_id),
@@ -339,4 +343,28 @@ async fn avslutt_sak_blokkeres_nar_journalpost_ikke_er_ok() -> Result<()> {
     assert_eq!(sak_state.status, "B");
 
     Ok(())
+}
+
+fn assert_happy_path_stages(
+    events: &[StatusEventMessage],
+    command_ids: impl IntoIterator<Item = Uuid>,
+) {
+    for command_id in command_ids {
+        let command_events: Vec<&StatusEventMessage> = events
+            .iter()
+            .filter(|event| event.command_id == command_id)
+            .collect();
+        assert!(command_events
+            .iter()
+            .any(|event| event.message == "mottatt"));
+        assert!(command_events
+            .iter()
+            .any(|event| event.message == "validert::ok"));
+        assert!(command_events
+            .iter()
+            .any(|event| event.message == "utfores::venter"));
+        assert!(command_events
+            .iter()
+            .any(|event| event.message == "utfores::ok" && event.terminal));
+    }
 }

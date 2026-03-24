@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use domain::eksekvering::typer::CommandLifecycleEvent;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,8 +60,5 @@ pub trait EksekveringKvitteringPublisher: Send + Sync {
 
 #[async_trait]
 pub trait EksekveringStatusPublisher: Send + Sync {
-    async fn publiser_status(
-        &self,
-        event: lib_schemas::skuffen::command::commands::CommandStatusEvent,
-    ) -> Result<(), anyhow::Error>;
+    async fn publiser_status(&self, event: CommandLifecycleEvent) -> Result<(), anyhow::Error>;
 }

@@ -8,12 +8,11 @@ use anyhow::Result;
 use async_nats::{jetstream, Client, ConnectOptions};
 use bytes::Bytes;
 use futures::StreamExt;
+use infrastructure::command::status_event::StatusEventMessage;
 use lib_nats::chunked_upload::protocol::{
     build_chunk_headers, split_payload, ChunkedUploadConfig, UploadMetadata,
 };
-use lib_schemas::skuffen::command::commands::{
-    Command, CommandEnvelope, CommandStatus, CommandStatusEvent,
-};
+use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
 };
@@ -392,7 +391,6 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
 
         let deadline = Instant::now() + timeout;
         let mut terminal_seen = false;
-        let mut ok_count: u8 = 0;
         while !terminal_seen {
             let now = Instant::now();
             if now >= deadline {
@@ -406,27 +404,27 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
                 anyhow::bail!("Status consumer closed for command_id={command_id}");
             };
             let msg = msg?;
-            let event: CommandStatusEvent = serde_json::from_slice(&msg.payload)?;
+            let event: StatusEventMessage = serde_json::from_slice(&msg.payload)?;
             let attempt = event
                 .attempt
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string());
-            let message = event.message.as_deref().unwrap_or("-");
+            let detail = event.detail.as_deref().unwrap_or("-");
             println!(
-                "command_id={} status={:?} attempt={} message={}",
-                event.command_id, event.status, attempt, message
+                "command_id={} status={:?} stage={} stage_status={} terminal={} attempt={} message={} detail={}",
+                event.command_id,
+                event.status,
+                event.stage,
+                event.stage_status,
+                event.terminal,
+                attempt,
+                event.message,
+                detail
             );
             msg.ack()
                 .await
                 .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-            terminal_seen = match event.status {
-                CommandStatus::Error | CommandStatus::Blocked => true,
-                CommandStatus::Ok => {
-                    ok_count = ok_count.saturating_add(1);
-                    ok_count >= 2
-                }
-                _ => false,
-            };
+            terminal_seen = event.terminal;
         }
     }
 

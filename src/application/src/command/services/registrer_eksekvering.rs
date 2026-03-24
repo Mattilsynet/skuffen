@@ -1,28 +1,38 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use domain::eksekvering::typer::CommandLifecycleEvent;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 
+use crate::command::ports::eksekvering_port::EksekveringStatusPublisher;
 use crate::command::ports::eksekvering_state_port::{
     EksekveringStateRepository, JournalpostState, SakState, SakStatus,
 };
 use crate::command::ports::id_mapping_port::IdMappingRepository;
 use crate::command::ports::registrer_eksekvering_port::RegistrerEksekveringUseCase;
+use crate::command::ports::status_context_port::CommandStatusContextResolver;
+use crate::command::status::utfores_venter_event;
 use domain::eksekvering::plan::{EksekveringsPlan, JournalpostType, Steg, Utsending};
 
 pub struct RegistrerEksekveringService {
     state_repo: Box<dyn EksekveringStateRepository>,
     id_mapping_repo: Box<dyn IdMappingRepository>,
+    status_publisher: Box<dyn EksekveringStatusPublisher>,
+    status_context_resolver: Box<dyn CommandStatusContextResolver>,
 }
 
 impl RegistrerEksekveringService {
     pub fn new(
         state_repo: Box<dyn EksekveringStateRepository>,
         id_mapping_repo: Box<dyn IdMappingRepository>,
+        status_publisher: Box<dyn EksekveringStatusPublisher>,
+        status_context_resolver: Box<dyn CommandStatusContextResolver>,
     ) -> Self {
         Self {
             state_repo,
             id_mapping_repo,
+            status_publisher,
+            status_context_resolver,
         }
     }
 
@@ -93,12 +103,27 @@ impl RegistrerEksekveringService {
 
         Ok(())
     }
+
+    async fn emit_status(&self, event: CommandLifecycleEvent) -> Result<()> {
+        self.status_publisher.publiser_status(event).await
+    }
 }
 
 #[async_trait]
 impl RegistrerEksekveringUseCase for RegistrerEksekveringService {
     async fn handle(&self, envelope: &CommandEnvelope<Command>) -> Result<()> {
         self.ensure_sak_state(envelope).await?;
-        self.state_repo.registrer_kommando(envelope).await
+        let inserted = self.state_repo.registrer_kommando(envelope).await?;
+
+        if inserted {
+            let context = self
+                .status_context_resolver
+                .resolve_context(envelope)
+                .await?;
+            self.emit_status(utfores_venter_event(envelope, context, Some(1)))
+                .await?;
+        }
+
+        Ok(())
     }
 }

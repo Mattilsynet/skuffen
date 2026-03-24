@@ -5,10 +5,11 @@ use anyhow::Result;
 use async_nats::jetstream;
 use bytes::Bytes;
 use futures::StreamExt;
+use infrastructure::command::status_event::StatusEventMessage;
 use lib_nats::chunked_upload::protocol::{
     build_chunk_headers, split_payload, ChunkedUploadConfig, UploadMetadata,
 };
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandStatusEvent};
+use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::journalpost::JournalpostKey as DtoJournalpostKey;
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::query::queries::{HentJournalpostQuery, HentSakQuery};
@@ -66,7 +67,7 @@ pub async fn wait_for_status_events(
     nats_url: &str,
     command_ids: impl IntoIterator<Item = uuid::Uuid>,
     timeout: Duration,
-) -> Result<Vec<CommandStatusEvent>> {
+) -> Result<Vec<StatusEventMessage>> {
     let mut pending: HashSet<uuid::Uuid> = command_ids.into_iter().collect();
     if pending.is_empty() {
         return Ok(Vec::new());
@@ -107,9 +108,14 @@ pub async fn wait_for_status_events(
             anyhow::bail!("Timed out waiting for status events");
         };
         let message = message?;
-        let event: CommandStatusEvent = serde_json::from_slice(&message.payload)?;
-        if pending.remove(&event.command_id) {
+        let event: StatusEventMessage = serde_json::from_slice(&message.payload)?;
+        if pending.contains(&event.command_id) {
+            let terminal = event.terminal;
+            let command_id = event.command_id;
             events.push(event);
+            if terminal {
+                pending.remove(&command_id);
+            }
         }
         message
             .ack()

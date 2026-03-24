@@ -1,7 +1,9 @@
 use crate::command::ports::command_dispatcher_port::CommandDispatcher;
 use crate::command::ports::id_mapping_port::IdMappingRepository;
+use crate::command::ports::status_publisher_port::CommandStatusPublisher;
 use crate::command::services::ingest_command::IngestCommandService;
 use async_trait::async_trait;
+use domain::eksekvering::typer::CommandLifecycleEvent;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost,
@@ -167,6 +169,30 @@ impl CommandDispatcher for FakeCommandDispatcher {
     }
 }
 
+#[derive(Clone, Default)]
+struct FakeCommandStatusPublisher {
+    pub events: Arc<Mutex<Vec<CommandLifecycleEvent>>>,
+}
+
+#[async_trait]
+impl CommandStatusPublisher for FakeCommandStatusPublisher {
+    async fn publish_status(&self, event: CommandLifecycleEvent) -> Result<(), anyhow::Error> {
+        self.events.lock().unwrap().push(event);
+        Ok(())
+    }
+}
+
+fn build_service(
+    fake_mapping: FakeIdMappingRepository,
+    fake_dispatcher: FakeCommandDispatcher,
+) -> IngestCommandService {
+    IngestCommandService::new(
+        Box::new(fake_mapping),
+        Box::new(fake_dispatcher),
+        Box::new(FakeCommandStatusPublisher::default()),
+    )
+}
+
 // --- Tests ---
 
 #[tokio::test]
@@ -192,10 +218,7 @@ async fn test_ingest_command_opprett_sak_success() {
     };
     let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
 
-    let service = IngestCommandService::new(
-        Box::new(fake_mapping.clone()),
-        Box::new(fake_dispatcher.clone()),
-    );
+    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
     let result: anyhow::Result<()> = service.handle(sequence).await;
@@ -251,10 +274,7 @@ async fn test_ingest_command_journalpost_success() {
     };
     let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
 
-    let service = IngestCommandService::new(
-        Box::new(fake_mapping.clone()),
-        Box::new(fake_dispatcher.clone()),
-    );
+    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
     let result: anyhow::Result<()> = service.handle(sequence).await;
@@ -321,10 +341,7 @@ async fn test_ingest_command_registers_document_mappings() {
     };
     let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
 
-    let service = IngestCommandService::new(
-        Box::new(fake_mapping.clone()),
-        Box::new(fake_dispatcher.clone()),
-    );
+    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
     let result: anyhow::Result<()> = service.handle(sequence).await;
@@ -390,10 +407,7 @@ async fn test_ingest_command_idempotency_duplicate_command() {
     let sequence1 = CommandSequence::try_from(vec![envelope.clone()]).unwrap();
     let sequence2 = CommandSequence::try_from(vec![envelope.clone()]).unwrap();
 
-    let service = IngestCommandService::new(
-        Box::new(fake_mapping.clone()),
-        Box::new(fake_dispatcher.clone()),
-    );
+    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act - First Call
     let result1 = service.handle(sequence1).await;
@@ -462,10 +476,7 @@ async fn test_ingest_command_allows_multiple_mappings_per_command_id() {
     };
     let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
 
-    let service = IngestCommandService::new(
-        Box::new(fake_mapping.clone()),
-        Box::new(fake_dispatcher.clone()),
-    );
+    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
     let result: anyhow::Result<()> = service.handle(sequence).await;
@@ -515,10 +526,7 @@ async fn test_ingest_command_mapping_failure() {
     };
     let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
 
-    let service = IngestCommandService::new(
-        Box::new(fake_mapping.clone()),
-        Box::new(fake_dispatcher.clone()),
-    );
+    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
     let result: anyhow::Result<()> = service.handle(sequence).await;
@@ -568,10 +576,7 @@ async fn test_ingest_command_dispatch_failure() {
     };
     let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
 
-    let service = IngestCommandService::new(
-        Box::new(fake_mapping.clone()),
-        Box::new(fake_dispatcher.clone()),
-    );
+    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
     let result: anyhow::Result<()> = service.handle(sequence).await;
@@ -613,10 +618,7 @@ async fn test_ingest_command_idempotent_duplicate_command_id() {
     };
     let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
 
-    let service = IngestCommandService::new(
-        Box::new(fake_mapping.clone()),
-        Box::new(fake_dispatcher.clone()),
-    );
+    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act - first should succeed
     let result1: anyhow::Result<()> = service.handle(sequence).await;
@@ -685,10 +687,7 @@ async fn test_ingest_command_utgående_journalpost_success() {
     };
     let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
 
-    let service = IngestCommandService::new(
-        Box::new(fake_mapping.clone()),
-        Box::new(fake_dispatcher.clone()),
-    );
+    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
     let result: anyhow::Result<()> = service.handle(sequence).await;
@@ -739,10 +738,7 @@ async fn test_ingest_command_internt_notat_journalpost_success() {
     };
     let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
 
-    let service = IngestCommandService::new(
-        Box::new(fake_mapping.clone()),
-        Box::new(fake_dispatcher.clone()),
-    );
+    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
     let result: anyhow::Result<()> = service.handle(sequence).await;
