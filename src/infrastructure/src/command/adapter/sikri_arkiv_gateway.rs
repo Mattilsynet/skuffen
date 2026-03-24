@@ -372,7 +372,9 @@ impl SikriArkivGateway {
             return Ok(Vec::new());
         };
 
-        let innhold = self.hent_media_base64(hoveddokument.dokument_referanse).await?;
+        let innhold = self
+            .hent_media_base64(hoveddokument.dokument_referanse)
+            .await?;
         Ok(vec![ElementsDokument {
             tittel: Some(hoveddokument.tittel.clone()),
             hoveddokument: true,

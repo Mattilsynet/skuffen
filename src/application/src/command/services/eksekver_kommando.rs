@@ -249,8 +249,10 @@ impl EksekverKommandoService {
             Utsending::UtenUtsending => Utsendingsvalg::UtenUtsending,
         });
 
+        let hoveddokument_id = plan.dokumenter.first().copied();
+
         let saksnummer = self
-            .hent_saksnummer(plan.sak_key)
+            .hent_saksnummer(plan.sak_key.clone())
             .await
             .ok_or_else(|| EksekveringFeil::blocked("Saksnummer mangler"))?;
 
@@ -290,6 +292,20 @@ impl EksekverKommandoService {
             .lagre_journalpost_state(plan.journalpost_id, sak_id, state)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+
+        if let Some(hoveddokument_id) = hoveddokument_id {
+            self.state_repo
+                .lagre_dokument_state(
+                    hoveddokument_id,
+                    plan.journalpost_id,
+                    DokumentState {
+                        lagt_til: true,
+                        irrecoverable_feil: false,
+                    },
+                )
+                .await
+                .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+        }
 
         let _ = (plan.journalpost_id, journalpost_id);
         Ok(ExecutionStepResult::completed())
