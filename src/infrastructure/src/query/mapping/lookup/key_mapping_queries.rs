@@ -3,20 +3,28 @@ use domain::model::sak::Saksnummer;
 // use tracing::error;
 use uuid::Uuid;
 
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, RwLock};
 
 use application::command::ports::id_mapping_port::IdMappingRepository;
 
-static ID_MAPPING_REPO: OnceLock<Arc<dyn IdMappingRepository + Send + Sync>> = OnceLock::new();
+static ID_MAPPING_REPO: OnceLock<RwLock<Option<Arc<dyn IdMappingRepository + Send + Sync>>>> =
+    OnceLock::new();
 
 pub fn init_id_mapping_repo(repo: Arc<dyn IdMappingRepository + Send + Sync>) {
-    ID_MAPPING_REPO.set(repo).ok(); // Ignore if already set
+    let repo_slot = ID_MAPPING_REPO.get_or_init(|| RwLock::new(None));
+    *repo_slot
+        .write()
+        .expect("IdMappingRepository lock poisoned") = Some(repo);
 }
 
-fn get_repo() -> &'static Arc<dyn IdMappingRepository + Send + Sync> {
+fn get_repo() -> Arc<dyn IdMappingRepository + Send + Sync> {
     ID_MAPPING_REPO
         .get()
+        .expect("IdMappingRepository not initialized")
+        .read()
+        .expect("IdMappingRepository lock poisoned")
+        .as_ref()
+        .cloned()
         .expect("IdMappingRepository not initialized")
 }
 
