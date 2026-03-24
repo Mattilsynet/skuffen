@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+skuffen = { path = ".." }
 application = { path = "../src/application" }
 infrastructure = { path = "../src/infrastructure" }
 domain = { path = "../src/domain" }

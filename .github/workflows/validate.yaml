@@ -49,7 +49,6 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --bin skuffen
       - run: cargo test -p skuffen-integration-tests -- --nocapture
 
   audit:

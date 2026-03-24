@@ -2999,6 +2999,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "skuffen",
  "sqlx",
  "testcontainers",
  "testcontainers-modules",
