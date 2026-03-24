@@ -24,10 +24,10 @@ const NATS_MONITOR_PORT: u16 = 8222;
 pub struct TestEnv {
     pub nats_url: String,
     pub pool: PgPool,
-    _guard: OwnedMutexGuard<()>,
     _postgres: ContainerAsync<Postgres>,
     _nats: ContainerAsync<GenericImage>,
     _skuffen: tokio::task::JoinHandle<anyhow::Result<()>>,
+    _guard: OwnedMutexGuard<()>,
 }
 
 impl Drop for TestEnv {
