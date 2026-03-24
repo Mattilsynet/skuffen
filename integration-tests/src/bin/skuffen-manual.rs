@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 use std::time::Duration;
 
@@ -22,6 +24,17 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 const DEFAULT_NATS_URL: &str = "nats://127.0.0.1:4222";
+const RESOURCES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/resources");
+const JOURNALPOST_PDF: &str = "dummy_journal_entry_report.pdf";
+const ATTACHMENT_FOOD_SAFETY: &str = "attachment_food_safety_inspection.png";
+const ATTACHMENT_ANIMAL_WELFARE: &str = "attachment_animal_welfare_inspection.png";
+
+struct ManualAttachment {
+    title: &'static str,
+    filetype: &'static str,
+    content_type: &'static str,
+    path: PathBuf,
+}
 
 #[derive(Clone, Debug)]
 struct ConnectionConfig {
@@ -51,7 +64,8 @@ async fn main() -> Result<()> {
                 .first()
                 .ok_or_else(|| anyhow::anyhow!("Missing dokument_referanse UUID"))?;
             let dokument_referanse = Uuid::parse_str(dokument_referanse)?;
-            publish_media(&config, dokument_referanse).await?;
+            let path = resource_path(JOURNALPOST_PDF)?;
+            publish_media(&config, dokument_referanse, &path, "application/pdf").await?;
             println!("Uploaded media for dokument_referanse={dokument_referanse}");
             Ok(())
         }
@@ -220,13 +234,37 @@ async fn ready(config: &ConnectionConfig) -> Result<()> {
 async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
     let saksbehandler_id = required_env("SIKRI_SAKSBEHANDLER_ID")?;
     let saksbehandler_enhet = required_env("SIKRI_SAKSBEHANDLER_ENHET")?;
+    let attachments = manual_attachments()?;
 
     let sak_client_reference = Uuid::new_v4();
     let journalpost_client_reference = Uuid::new_v4();
-    let dokument_client_reference = Uuid::new_v4();
-    let dokument_referanse = Uuid::new_v4();
+    let dokumenter: Vec<(DtoDokument, Uuid, &'static str, PathBuf)> = attachments
+        .into_iter()
+        .map(|attachment| {
+            let dokument_referanse = Uuid::new_v4();
+            (
+                DtoDokument {
+                    client_reference: Uuid::new_v4(),
+                    tittel: attachment.title.to_string(),
+                    filtype: attachment.filetype.to_string(),
+                    dokument_referanse,
+                },
+                dokument_referanse,
+                attachment.content_type,
+                attachment.path,
+            )
+        })
+        .collect();
 
-    publish_media(config, dokument_referanse).await?;
+    for (dokument, dokument_referanse, content_type, path) in &dokumenter {
+        publish_media(config, dokument_referanse.to_owned(), path, content_type).await?;
+        println!(
+            "Uploaded {} from {} as dokument_referanse={}",
+            dokument.tittel,
+            path.display(),
+            dokument_referanse
+        );
+    }
 
     let correlation_id = Some(Uuid::new_v4());
     let command_sequence = vec![
@@ -257,12 +295,10 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
                     saksbehandler: saksbehandler_id.clone(),
                     saksbehandler_enhet: saksbehandler_enhet.clone(),
                     tilgang: None,
-                    dokumenter: vec![DtoDokument {
-                        client_reference: dokument_client_reference,
-                        tittel: "Vedlegg".to_string(),
-                        filtype: "PDF".to_string(),
-                        dokument_referanse,
-                    }],
+                    dokumenter: dokumenter
+                        .iter()
+                        .map(|(dokument, ..)| dokument.clone())
+                        .collect(),
                     sak_key: DtoSakKey::ClientReference(sak_client_reference),
                     kildesystem: None,
                 },
@@ -285,7 +321,15 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
     println!("Sent sequence to {}", config.url);
     println!("sak_client_reference={sak_client_reference}");
     println!("journalpost_client_reference={journalpost_client_reference}");
-    println!("dokument_referanse={dokument_referanse}");
+    println!("dokument_referanser:");
+    for (dokument, dokument_referanse, _, path) in &dokumenter {
+        println!(
+            "- {} {} {}",
+            dokument.tittel,
+            dokument_referanse,
+            path.display()
+        );
+    }
     println!("command_ids:");
     for command in &command_sequence {
         println!("- {}", command.command_id);
@@ -385,12 +429,21 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
     Ok(())
 }
 
-async fn publish_media(config: &ConnectionConfig, dokument_id: Uuid) -> Result<()> {
+async fn publish_media(
+    config: &ConnectionConfig,
+    dokument_id: Uuid,
+    path: &Path,
+    content_type: &str,
+) -> Result<()> {
     let client = connect_client(config).await?;
-    let payload = b"Skuffen manual testvedlegg".to_vec();
+    let payload = fs::read(path)?;
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Invalid filename for {}", path.display()))?;
     let metadata = UploadMetadata {
-        filename: Some("manual-vedlegg.txt".to_string()),
-        content_type: Some("text/plain".to_string()),
+        filename: Some(filename.to_string()),
+        content_type: Some(content_type.to_string()),
     };
     let config = ChunkedUploadConfig::default();
     let chunks = split_payload(&payload, config.chunk_size)?;
@@ -422,6 +475,37 @@ async fn publish_media(config: &ConnectionConfig, dokument_id: Uuid) -> Result<(
     }
 
     Ok(())
+}
+
+fn manual_attachments() -> Result<Vec<ManualAttachment>> {
+    Ok(vec![
+        ManualAttachment {
+            title: "Dummy journal entry report",
+            filetype: "PDF",
+            content_type: "application/pdf",
+            path: resource_path(JOURNALPOST_PDF)?,
+        },
+        ManualAttachment {
+            title: "Attachment food safety inspection",
+            filetype: "PNG",
+            content_type: "image/png",
+            path: resource_path(ATTACHMENT_FOOD_SAFETY)?,
+        },
+        ManualAttachment {
+            title: "Attachment animal welfare inspection",
+            filetype: "PNG",
+            content_type: "image/png",
+            path: resource_path(ATTACHMENT_ANIMAL_WELFARE)?,
+        },
+    ])
+}
+
+fn resource_path(filename: &str) -> Result<PathBuf> {
+    let path = Path::new(RESOURCES_DIR).join(filename);
+    if !path.exists() {
+        anyhow::bail!("Missing resource file: {}", path.display());
+    }
+    Ok(path)
 }
 
 async fn request_json<T: serde::Serialize>(
