@@ -1,6 +1,6 @@
 # Audit config file for GitHub Actions
 
 [advisories]
-ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2024-0363"] # advisory IDs to ignore
+ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2024-0363", "RUSTSEC-2026-0049"] # advisory IDs to ignore; async-nats fix pending in https://github.com/nats-io/nats.rs/pull/1550
 informational_warnings = ["unmaintained"] # warn for categories of informational advisories
 severity_threshold = "low" # CVSS severity ("none", "low", "medium", "high", "critical")
