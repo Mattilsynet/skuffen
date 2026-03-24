@@ -25,6 +25,125 @@ impl SikriArkivGateway {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::SikriArkivGateway;
+    use crate::command::media::{MediaFile, MediaStore};
+    use async_trait::async_trait;
+    use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+    use lib_schemas::skuffen::command::journalpost::{
+        JournalpostCommon, OpprettInterntNotatJournalpost,
+    };
+    use lib_schemas::skuffen::dokument::Dokument;
+    use lib_schemas::skuffen::query::queries::SakKey;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    struct FakeMediaStore {
+        files: HashMap<Uuid, MediaFile>,
+    }
+
+    impl FakeMediaStore {
+        fn with_files(files: Vec<MediaFile>) -> Self {
+            Self {
+                files: files.into_iter().map(|file| (file.id, file)).collect(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl MediaStore for FakeMediaStore {
+        async fn save(&self, _file: MediaFile) -> Result<(), anyhow::Error> {
+            Ok(())
+        }
+
+        async fn exists(&self, id: Uuid) -> Result<bool, anyhow::Error> {
+            Ok(self.files.contains_key(&id))
+        }
+
+        async fn get(&self, id: Uuid) -> Result<Option<MediaFile>, anyhow::Error> {
+            Ok(self.files.get(&id).cloned())
+        }
+    }
+
+    #[tokio::test]
+    async fn create_mapping_only_includes_first_document_as_hoveddokument() {
+        let hoveddokument = sample_document("Rapport", "PDF");
+        let vedlegg = sample_document("Vedlegg", "PNG");
+        let gateway = sample_gateway(&[&hoveddokument, &vedlegg]);
+
+        let mapped = gateway
+            .map_dokumenter(&[hoveddokument.clone(), vedlegg])
+            .await
+            .expect("documents should map");
+
+        assert_eq!(mapped.len(), 1);
+        assert_eq!(mapped[0].tittel.as_deref(), Some("Rapport"));
+        assert_eq!(mapped[0].filtype.as_deref(), Some("PDF"));
+        assert!(mapped[0].hoveddokument);
+    }
+
+    #[tokio::test]
+    async fn attachment_mapping_marks_document_as_not_hoveddokument() {
+        let hoveddokument = sample_document("Rapport", "PDF");
+        let vedlegg = sample_document("Vedlegg", "PNG");
+        let gateway = sample_gateway(&[&hoveddokument, &vedlegg]);
+        let command = sample_command(vec![hoveddokument, vedlegg.clone()]);
+
+        let mapped = gateway
+            .map_vedlegg_dokument(&command, vedlegg.client_reference)
+            .await
+            .expect("attachment should map");
+
+        assert_eq!(mapped.tittel.as_deref(), Some("Vedlegg"));
+        assert_eq!(mapped.filtype.as_deref(), Some("PNG"));
+        assert!(!mapped.hoveddokument);
+    }
+
+    fn sample_gateway(dokumenter: &[&Dokument]) -> SikriArkivGateway {
+        let files = dokumenter
+            .iter()
+            .map(|dokument| MediaFile {
+                id: dokument.dokument_referanse,
+                data: dokument.tittel.as_bytes().to_vec(),
+                filename: Some(format!("{}.{}", dokument.tittel, dokument.filtype)),
+                content_type: None,
+            })
+            .collect();
+        SikriArkivGateway::new(Arc::new(FakeMediaStore::with_files(files)))
+    }
+
+    fn sample_command(dokumenter: Vec<Dokument>) -> CommandEnvelope<Command> {
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id: Some(Uuid::new_v4()),
+            payload: Command::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
+                felles: JournalpostCommon {
+                    client_reference: Uuid::new_v4(),
+                    tittel: "Internt notat".to_string(),
+                    dokument_dato: "2025-01-01".to_string(),
+                    saksbehandler: "Z12345".to_string(),
+                    saksbehandler_enhet: "1234".to_string(),
+                    tilgang: None,
+                    dokumenter,
+                    sak_key: SakKey::ClientReference(Uuid::new_v4()),
+                    kildesystem: None,
+                },
+            }),
+        }
+    }
+
+    fn sample_document(tittel: &str, filtype: &str) -> Dokument {
+        Dokument {
+            client_reference: Uuid::new_v4(),
+            tittel: tittel.to_string(),
+            filtype: filtype.to_string(),
+            dokument_referanse: Uuid::new_v4(),
+        }
+    }
+}
+
 #[async_trait]
 impl ArkivGateway for SikriArkivGateway {
     async fn opprett_sak(
@@ -249,17 +368,17 @@ impl SikriArkivGateway {
         &self,
         dokumenter: &[Dokument],
     ) -> Result<Vec<ElementsDokument>, anyhow::Error> {
-        let mut mapped = Vec::with_capacity(dokumenter.len());
-        for (index, d) in dokumenter.iter().enumerate() {
-            let innhold = self.hent_media_base64(d.dokument_referanse).await?;
-            mapped.push(ElementsDokument {
-                tittel: Some(d.tittel.clone()),
-                hoveddokument: index == 0,
-                filtype: Some(d.filtype.clone()),
-                innhold: Some(innhold),
-            });
-        }
-        Ok(mapped)
+        let Some(hoveddokument) = dokumenter.first() else {
+            return Ok(Vec::new());
+        };
+
+        let innhold = self.hent_media_base64(hoveddokument.dokument_referanse).await?;
+        Ok(vec![ElementsDokument {
+            tittel: Some(hoveddokument.tittel.clone()),
+            hoveddokument: true,
+            filtype: Some(hoveddokument.filtype.clone()),
+            innhold: Some(innhold),
+        }])
     }
 
     async fn map_vedlegg_dokument(

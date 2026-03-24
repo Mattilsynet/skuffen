@@ -161,7 +161,7 @@ impl EksekveringsPlan {
 
         let mut steg = Vec::with_capacity(2 + dokument_ids.len());
         steg.push(Steg::OpprettJournalpost { plan });
-        for dokument_id in dokument_ids {
+        for dokument_id in dokument_ids.into_iter().skip(1) {
             steg.push(Steg::LeggTilDokument {
                 journalpost_id,
                 dokument_id,
@@ -173,5 +173,80 @@ impl EksekveringsPlan {
         }
 
         Ok(Self { steg })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EksekveringsPlan, Steg};
+    use lib_schemas::skuffen::command::commands::Command;
+    use lib_schemas::skuffen::command::journalpost::{
+        JournalpostCommon, OpprettInterntNotatJournalpost,
+    };
+    use lib_schemas::skuffen::dokument::Dokument;
+    use lib_schemas::skuffen::query::queries::SakKey;
+    use uuid::Uuid;
+
+    #[test]
+    fn single_document_journalpost_only_creates_journalpost_then_journalfoerer() {
+        let document = sample_document("Hoveddokument", "PDF");
+        let command = sample_internt_notat_command(vec![document.clone()]);
+
+        let plan = EksekveringsPlan::fra_command(&command).expect("plan should be created");
+
+        assert_eq!(plan.steg.len(), 2);
+        assert!(matches!(plan.steg[0], Steg::OpprettJournalpost { .. }));
+        assert!(matches!(plan.steg[1], Steg::Journalfoer { .. }));
+    }
+
+    #[test]
+    fn multi_document_journalpost_only_adds_documents_after_the_first_as_attachments() {
+        let hoveddokument = sample_document("Rapport", "PDF");
+        let vedlegg_ett = sample_document("Bilde 1", "PNG");
+        let vedlegg_to = sample_document("Bilde 2", "PNG");
+        let command = sample_internt_notat_command(vec![
+            hoveddokument.clone(),
+            vedlegg_ett.clone(),
+            vedlegg_to.clone(),
+        ]);
+
+        let plan = EksekveringsPlan::fra_command(&command).expect("plan should be created");
+
+        assert_eq!(plan.steg.len(), 4);
+        assert!(matches!(plan.steg[0], Steg::OpprettJournalpost { .. }));
+        assert!(matches!(
+            plan.steg[1],
+            Steg::LeggTilDokument { dokument_id, .. } if dokument_id == vedlegg_ett.client_reference
+        ));
+        assert!(matches!(
+            plan.steg[2],
+            Steg::LeggTilDokument { dokument_id, .. } if dokument_id == vedlegg_to.client_reference
+        ));
+        assert!(matches!(plan.steg[3], Steg::Journalfoer { .. }));
+    }
+
+    fn sample_internt_notat_command(dokumenter: Vec<Dokument>) -> Command {
+        Command::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
+            felles: JournalpostCommon {
+                client_reference: Uuid::new_v4(),
+                tittel: "Internt notat".to_string(),
+                dokument_dato: "2025-01-01".to_string(),
+                saksbehandler: "Z12345".to_string(),
+                saksbehandler_enhet: "1234".to_string(),
+                tilgang: None,
+                dokumenter,
+                sak_key: SakKey::ClientReference(Uuid::new_v4()),
+                kildesystem: None,
+            },
+        })
+    }
+
+    fn sample_document(tittel: &str, filtype: &str) -> Dokument {
+        Dokument {
+            client_reference: Uuid::new_v4(),
+            tittel: tittel.to_string(),
+            filtype: filtype.to_string(),
+            dokument_referanse: Uuid::new_v4(),
+        }
     }
 }
