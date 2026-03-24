@@ -272,26 +272,26 @@ pub async fn legg_til_vedlegg(
 
 pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Result<()> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
-    let url = format!("{}/api/Archive/SettJournalpostStatus", base_url());
+    let url = format!("{}/api/Archive/SetJournalpostStatus", base_url());
     info!(
         target: "sikri.http",
-        method = "POST",
+        method = "PUT",
         url = %url,
         journalpost_id,
         journalpost_status = status,
         "Sending request to Sikri"
     );
     let resp = Client::new()
-        .post(&url)
+        .put(&url)
         .basic_auth(username, Some(password))
         .query(&[
             ("journalpostId", journalpost_id.to_string()),
-            ("status", status.to_string()),
+            ("nyJournalstatus", status.to_string()),
         ])
         .send()
         .await
         .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
-    let _ = ensure_success(resp, "POST", &url).await?;
+    let _ = ensure_success(resp, "PUT", &url).await?;
     Ok(())
 }
 
