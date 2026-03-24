@@ -1,6 +1,6 @@
 # Skuffen - Sequence Error flow
 
-Kilde: `.agent/skills/skuffen_architecture/resources/flows/Skuffen - Sequence Error flow.svg`
+Kilde: `.agent/guides/architecture/flows/Skuffen - Sequence Error flow.svg`
 
 ## Hovedflyt
 - Start batch 1.

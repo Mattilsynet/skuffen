@@ -1,6 +1,6 @@
 # Skuffen - Arkiv sak finnes Happy flow
 
-Kilde: `.agent/skills/skuffen_architecture/resources/flows/Skuffen - Arkiv sak finnes Happy flow.svg`
+Kilde: `.agent/guides/architecture/flows/Skuffen - Arkiv sak finnes Happy flow.svg`
 
 ## Hovedflyt (happy path)
 - Start batch 1.

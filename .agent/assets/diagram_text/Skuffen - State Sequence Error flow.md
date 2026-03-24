@@ -1,6 +1,6 @@
 # Skuffen - State Sequence Error flow
 
-Kilde: `.agent/skills/skuffen_architecture/resources/flows/Skuffen - State Sequence Error flow.svg`
+Kilde: `.agent/guides/architecture/flows/Skuffen - State Sequence Error flow.svg`
 
 ## Batch 1
 - Start batch 1.

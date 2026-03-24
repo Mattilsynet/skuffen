@@ -1,6 +1,6 @@
 # Skuffen - General flow
 
-Kilde: `.agent/skills/skuffen_architecture/resources/flows/Skuffen - General flow.svg`
+Kilde: `.agent/guides/architecture/flows/Skuffen - General flow.svg`
 
 ## Hovedflyt (hoyt nivaa)
 - Batch av kommandoer kommer inn.

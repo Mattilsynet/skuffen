@@ -1,6 +1,6 @@
 # Skuffen - Sequence flere saker happy flow
 
-Kilde: `.agent/skills/skuffen_architecture/resources/flows/Skuffen - Sequence flere saker happy flow.svg`
+Kilde: `.agent/guides/architecture/flows/Skuffen - Sequence flere saker happy flow.svg`
 
 ## Hovedflyt (happy path)
 - Start batch 1.

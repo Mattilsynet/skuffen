@@ -5,26 +5,17 @@ language:
   code_technical: "English naming for technical constructs"
 
 rules:
-  - id: process
-    path: .agent/rules/process.md
-    description: "Oppgavehandtering, risiko og planlegging"
-  - id: rust_and_language
-    path: .agent/rules/rust_and_language.md
-    description: "Rust coding guidelines og Norwenglish"
+  - id: repo_rules
+    path: .agent/rules/repo_rules.md
+    description: "Normative repo rules, Rust conventions, boundaries, and safety guidance"
 
-governance:
-  - id: tasks
-    path: .agent/governance/tasks.md
-  - id: plan
-    path: .agent/governance/plan.md
-  - id: roadmap
-    path: .agent/governance/roadmap.md
-  - id: risk
-    path: .agent/governance/risk.md
-
-workflows:
+guides:
   - id: commands
-    path: .agent/workflows/commands.md
+    path: .agent/guides/commands.md
+  - id: observability
+    path: .agent/guides/observability.md
+  - id: architecture
+    path: .agent/guides/architecture/README.md
 
 skills:
   - id: arkivfag
@@ -33,10 +24,6 @@ skills:
       - .agent/skills/arkivfag/resources
   - id: skuffen_architecture
     path: .agent/skills/skuffen_architecture/SKILL.md
-    resources:
-      - .agent/skills/skuffen_architecture/resources
-  - id: skuffen_process
-    path: .agent/skills/skuffen_process/SKILL.md
 
 assets:
   - id: diagrams_text

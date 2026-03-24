@@ -1,6 +1,6 @@
 # Skuffen - Arkiv sak finnes Ikke Error
 
-Kilde: `.agent/skills/skuffen_architecture/resources/flows/Skuffen - Arkiv sak finnes Ikke Error.svg`
+Kilde: `.agent/guides/architecture/flows/Skuffen - Arkiv sak finnes Ikke Error.svg`
 
 ## Hovedflyt
 - Start batch 1.

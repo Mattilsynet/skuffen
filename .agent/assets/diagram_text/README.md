@@ -1,6 +1,6 @@
 # Diagram-tekst
 
-Denne mappen inneholder tekstlige tolkninger av SVG-diagrammer i `.agent/skills/.../resources`.
+Denne mappen inneholder tekstlige tolkninger av SVG-diagrammer i `.agent/guides/architecture/`.
 Bruk disse nar SVG ikke kan rendres, eller for rask lesing i CLI.
 
 Regler:

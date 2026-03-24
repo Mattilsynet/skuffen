@@ -1,6 +1,6 @@
 # Skuffen - State machine utgaaende uten utsending
 
-Kilde: `.agent/skills/skuffen_architecture/resources/state_machines/Skuffen - State machine utgaaende uten utsending.svg`
+Kilde: `.agent/guides/architecture/state_machines/Skuffen - State machine utgaaende uten utsending.svg`
 
 ## Tittel
 - Utgaaende uten utsending

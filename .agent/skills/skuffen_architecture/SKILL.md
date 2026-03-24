@@ -1,44 +1,22 @@
 ---
 name: Skuffen Architecture
-description: Architecture documentation and resources for the Skuffen application.
+description: Thin skill entrypoint for architecture guidance in Skuffen.
 ---
 
 # Skuffen Architecture
 
-This skill provides access to architecture documentation, command mappings, and flow diagrams for the Skuffen application.
+This skill is a thin entrypoint to the architecture guidance in `.agent/guides/architecture/`.
 
-## Resources
+## Read this first
 
-The following resources are available in the `resources` directory:
+- Architecture index: `.agent/guides/architecture/README.md`
+- Design guidelines: `.agent/guides/architecture/design_guidelines.md`
+- Architecture principles: `.agent/guides/architecture/architecture_principles.md`
+- ID mapping and idempotency: `.agent/guides/architecture/id_mapping_and_idempotency.md`
+- Command and query reference: `.agent/guides/architecture/command/`
+- Observability guidance: `.agent/guides/observability.md`
+- Diagram text: `.agent/assets/diagram_text/INDEX.md`
 
-### Commands and Queries
-- **Commands**: [commands.md](resources/command/commands.md) - Documentation for commands (Opprett sak, Opprett Journalpost, etc.).
-- **Queries**: [query.md](resources/command/query.md) - Documentation for queries (Hent sak, Hent Journalpost, etc.).
-- **Visual Mapping**: `resources/command/Skuffen - Kommando mapping til Operasjon.svg`
+## Purpose
 
-### Architecture
-- **Design Guidelines**: [design_guidelines.md](resources/architecture/design_guidelines.md) - General info & philosophy.
-- **Principles**: [architecture_principles.md](resources/architecture/architecture_principles.md) - Core architecture principles.
-- **ID Mapping & Idempotency**: [id_mapping_and_idempotency.md](resources/architecture/id_mapping_and_idempotency.md) - Handling identity and references.
-
-### Diagram-tekst
-- Tekstlige tolkninger av SVG-diagrammer ligger i `.agent/assets/diagram_text/`.
-- Indeks: `.agent/assets/diagram_text/INDEX.md`.
-
-### Flows
-Detailed flow diagrams are available in the `resources/flows` directory.
-
-### State Machines
-State machine definitions are available in the `resources/state_machines` directory.
-
-## Usage
-
-Use these resources to understand the system's architecture, command/query capabilities, and intended behaviors when implementing features or fixing bugs in Skuffen.
-
-## General Information
-
-See [Design Guidelines](resources/architecture/design_guidelines.md) for general system philosophy and context.
-
-## Architecture principles
-
-See [Architecture Principles](resources/architecture/architecture_principles.md) for detailed architectural rules and the functional core definition.
+Use these guides to understand the system architecture, command/query capabilities, diagram assets, and intended behaviors when implementing or reviewing changes in Skuffen.

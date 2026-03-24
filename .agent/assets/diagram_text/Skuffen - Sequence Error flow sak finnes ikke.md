@@ -1,6 +1,6 @@
 # Skuffen - Sequence Error flow sak finnes ikke
 
-Kilde: `.agent/skills/skuffen_architecture/resources/flows/Skuffen - Sequence Error flow sak finnes ikke.svg`
+Kilde: `.agent/guides/architecture/flows/Skuffen - Sequence Error flow sak finnes ikke.svg`
 
 ## Hovedflyt
 - Start batch 1.

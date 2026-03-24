@@ -1,6 +1,6 @@
 # Skuffen - Arkiv irrecoverable error
 
-Kilde: `.agent/skills/skuffen_architecture/resources/flows/Skuffen - Arkiv irrecoverable error.svg`
+Kilde: `.agent/guides/architecture/flows/Skuffen - Arkiv irrecoverable error.svg`
 
 ## Hovedflyt
 - Start batch 1.

@@ -1,6 +1,6 @@
 # Skuffen - Happy Simple flow
 
-Kilde: `.agent/skills/skuffen_architecture/resources/flows/Skuffen - Happy Simple flow.svg`
+Kilde: `.agent/guides/architecture/flows/Skuffen - Happy Simple flow.svg`
 
 ## Hovedflyt (happy path)
 - Start batch 1.

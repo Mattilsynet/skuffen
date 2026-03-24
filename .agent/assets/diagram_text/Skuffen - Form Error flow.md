@@ -1,6 +1,6 @@
 # Skuffen - Form Error flow
 
-Kilde: `.agent/skills/skuffen_architecture/resources/flows/Skuffen - Form Error flow.svg`
+Kilde: `.agent/guides/architecture/flows/Skuffen - Form Error flow.svg`
 
 ## Hovedflyt
 - Start batch 1.

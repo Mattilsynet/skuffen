@@ -1,6 +1,6 @@
 # Skuffen - Legg til vedlegg paa ikke ferdig journalpost ERROR
 
-Kilde: `.agent/skills/skuffen_architecture/resources/flows/Skuffen - Legg til vedlegg paa ikke ferdig journalpost ERROR.svg`
+Kilde: `.agent/guides/architecture/flows/Skuffen - Legg til vedlegg paa ikke ferdig journalpost ERROR.svg`
 
 ## Batch 1
 - Start batch 1.

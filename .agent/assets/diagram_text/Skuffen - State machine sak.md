@@ -1,6 +1,6 @@
 # Skuffen - State machine sak
 
-Kilde: `.agent/skills/skuffen_architecture/resources/state_machines/Skuffen - State machine sak.svg`
+Kilde: `.agent/guides/architecture/state_machines/Skuffen - State machine sak.svg`
 
 ## Noder
 - Under behandling/Ferdig

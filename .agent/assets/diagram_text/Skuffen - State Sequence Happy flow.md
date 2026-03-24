@@ -1,6 +1,6 @@
 # Skuffen - State Sequence Happy flow
 
-Kilde: `.agent/skills/skuffen_architecture/resources/flows/Skuffen - State Sequence Happy flow.svg`
+Kilde: `.agent/guides/architecture/flows/Skuffen - State Sequence Happy flow.svg`
 
 ## Batch 1
 - Start batch 1.

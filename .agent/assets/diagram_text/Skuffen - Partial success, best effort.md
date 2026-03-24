@@ -1,6 +1,6 @@
 # Skuffen - Partial success, best effort
 
-Kilde: `.agent/skills/skuffen_architecture/resources/flows/Skuffen - Partial success, best effort.svg`
+Kilde: `.agent/guides/architecture/flows/Skuffen - Partial success, best effort.svg`
 
 ## Oversikt
 - Diagrammet viser en sekvens med to journalposter (X og Y) pa sak A.
