@@ -407,9 +407,14 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
             };
             let msg = msg?;
             let event: CommandStatusEvent = serde_json::from_slice(&msg.payload)?;
+            let attempt = event
+                .attempt
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let message = event.message.as_deref().unwrap_or("-");
             println!(
-                "command_id={} status={:?} attempt={:?} message={:?}",
-                event.command_id, event.status, event.attempt, event.message
+                "command_id={} status={:?} attempt={} message={}",
+                event.command_id, event.status, attempt, message
             );
             msg.ack()
                 .await

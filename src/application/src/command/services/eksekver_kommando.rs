@@ -63,6 +63,38 @@ impl<T> ExecutionGuard<T> {
     }
 }
 
+fn describe_incomplete_journalpost(journalpost: &JournalpostState) -> String {
+    let mut mangler: Vec<&str> = Vec::new();
+    if !journalpost.journalfoert {
+        mangler.push("journalfort");
+    }
+    if !journalpost.avskrevet {
+        mangler.push("avskrevet");
+    }
+
+    let journalpostnavn = match journalpost.journalposttype {
+        'I' => "inngaende journalpost",
+        'U' => "utgaende journalpost",
+        'X' => "internt notat",
+        _ => "journalpost",
+    };
+
+    let krav = if mangler.is_empty() {
+        "ukjent krav mangler".to_string()
+    } else {
+        mangler.join(" og ")
+    };
+
+    match journalpost.journalpostnummer {
+        Some(journalpostnummer) => format!(
+            "Kan ikke avslutte sak: {journalpostnavn} {journalpostnummer} er ikke komplett; mangler {krav}"
+        ),
+        None => {
+            format!("Kan ikke avslutte sak: {journalpostnavn} er ikke komplett; mangler {krav}")
+        }
+    }
+}
+
 impl EksekverKommandoService {
     pub fn new(
         state_repo: Box<dyn EksekveringStateRepository>,
@@ -505,7 +537,7 @@ impl EksekverKommandoService {
 
         let Some(state) = journalpost_state else {
             return Err(EksekveringFeil::blocked(
-                "Kan ikke legge til dokument før journalpost finnes",
+                "Kan ikke legge til dokument: journalpost finnes ikke i state ennå",
             ));
         };
 
@@ -541,12 +573,14 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
         let Some(state) = journalpost_state else {
-            return Err(EksekveringFeil::blocked("Journalpost finnes ikke i state"));
+            return Err(EksekveringFeil::blocked(
+                "Kan ikke journalfore journalpost: journalpost finnes ikke i state",
+            ));
         };
 
         if state.har_feilede_dokumenter {
             return Err(EksekveringFeil::blocked(
-                "Journalpost har feilede dokumenter",
+                "Kan ikke journalfore journalpost: ett eller flere dokumenter har feilet",
             ));
         }
 
@@ -563,11 +597,15 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
         let Some(state) = journalpost_state else {
-            return Err(EksekveringFeil::blocked("Journalpost finnes ikke i state"));
+            return Err(EksekveringFeil::blocked(
+                "Kan ikke avskrive journalpost: journalpost finnes ikke i state",
+            ));
         };
 
         if !state.journalfoert {
-            return Err(EksekveringFeil::blocked("Journalpost er ikke journalført"));
+            return Err(EksekveringFeil::blocked(
+                "Kan ikke avskrive journalpost: journalpost er ikke journalfort",
+            ));
         }
 
         Ok(ExecutionGuard::proceed(state))
@@ -583,7 +621,9 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
         let Some(state) = sak_state else {
-            return Err(EksekveringFeil::blocked("Sak finnes ikke"));
+            return Err(EksekveringFeil::blocked(
+                "Kan ikke avslutte sak: saken finnes ikke i state",
+            ));
         };
 
         if state.status == SakStatus::Avsluttet {
@@ -598,32 +638,36 @@ impl EksekverKommandoService {
         for journalpost in journalposter {
             if journalpost.har_feilede_dokumenter {
                 return Err(EksekveringFeil::blocked(
-                    "Sak kan ikke avsluttes med feilede dokumenter",
+                    "Kan ikke avslutte sak: minst ett dokument pa en journalpost har feilet",
                 ));
             }
 
             match journalpost.journalposttype {
                 'I' => {
                     if !journalpost.journalfoert || !journalpost.avskrevet {
-                        return Err(EksekveringFeil::blocked(
-                            "Inngående journalpost er ikke komplett",
-                        ));
+                        return Err(EksekveringFeil::blocked(describe_incomplete_journalpost(
+                            &journalpost,
+                        )));
                     }
                 }
                 'U' => {
                     if !journalpost.journalfoert {
-                        return Err(EksekveringFeil::blocked(
-                            "Utgående journalpost er ikke komplett",
-                        ));
+                        return Err(EksekveringFeil::blocked(describe_incomplete_journalpost(
+                            &journalpost,
+                        )));
                     }
                 }
                 'X' => {
                     if !journalpost.journalfoert {
-                        return Err(EksekveringFeil::blocked("Internt notat er ikke komplett"));
+                        return Err(EksekveringFeil::blocked(describe_incomplete_journalpost(
+                            &journalpost,
+                        )));
                     }
                 }
                 _ => {
-                    return Err(EksekveringFeil::blocked("Ukjent journalposttype i state"));
+                    return Err(EksekveringFeil::blocked(
+                        "Kan ikke avslutte sak: ukjent journalposttype i state",
+                    ));
                 }
             }
         }
