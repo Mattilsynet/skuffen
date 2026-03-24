@@ -39,6 +39,27 @@ impl CommandTypeCode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandLifecycleMetadata {
+    pub command_id: Uuid,
+    pub command_type: CommandTypeCode,
+    pub entity_type: CommandEntityType,
+}
+
+impl CommandLifecycleMetadata {
+    pub fn new(
+        command_id: Uuid,
+        command_type: CommandTypeCode,
+        entity_type: CommandEntityType,
+    ) -> Self {
+        Self {
+            command_id,
+            command_type,
+            entity_type,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandStage {
     Mottatt,
     Validert,
@@ -115,9 +136,7 @@ pub struct CommandLifecycleEvent {
 
 impl CommandLifecycleEvent {
     pub fn new(
-        command_id: Uuid,
-        command_type: CommandTypeCode,
-        entity_type: CommandEntityType,
+        metadata: CommandLifecycleMetadata,
         status: CommandStatus,
         stage: CommandStage,
         stage_status: CommandStageStatus,
@@ -126,9 +145,9 @@ impl CommandLifecycleEvent {
         attempt: Option<u32>,
     ) -> Self {
         Self {
-            command_id,
-            command_type,
-            entity_type,
+            command_id: metadata.command_id,
+            command_type: metadata.command_type,
+            entity_type: metadata.entity_type,
             status,
             stage,
             stage_status,
@@ -240,9 +259,7 @@ pub fn status_event(
     let (command_type, entity_type) = command_metadata(&envelope.payload);
 
     CommandLifecycleEvent::new(
-        envelope.command_id,
-        command_type,
-        entity_type,
+        CommandLifecycleMetadata::new(envelope.command_id, command_type, entity_type),
         status,
         stage,
         stage_status,
@@ -290,9 +307,11 @@ mod tests {
     #[test]
     fn mottatt_uses_stage_name_as_message() {
         let event = CommandLifecycleEvent::new(
-            Uuid::new_v4(),
-            CommandTypeCode::OpprettSak,
-            CommandEntityType::Sak,
+            CommandLifecycleMetadata::new(
+                Uuid::new_v4(),
+                CommandTypeCode::OpprettSak,
+                CommandEntityType::Sak,
+            ),
             CommandStatus::Pending,
             CommandStage::Mottatt,
             CommandStageStatus::Ok,
@@ -308,9 +327,11 @@ mod tests {
     fn retrying_message_id_includes_attempt() {
         let command_id = Uuid::new_v4();
         let event = CommandLifecycleEvent::new(
-            command_id,
-            CommandTypeCode::OpprettSak,
-            CommandEntityType::Sak,
+            CommandLifecycleMetadata::new(
+                command_id,
+                CommandTypeCode::OpprettSak,
+                CommandEntityType::Sak,
+            ),
             CommandStatus::Retrying,
             CommandStage::Utfores,
             CommandStageStatus::Retrying,
