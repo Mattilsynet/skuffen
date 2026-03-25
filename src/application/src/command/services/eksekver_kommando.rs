@@ -1,21 +1,28 @@
+mod dokument_handlers;
+mod execution_report;
+mod journalpost_handlers;
+mod lifecycle_publisher;
+mod plan_resolver;
+mod prerequisite;
+mod resolved_plan;
+mod sak_handlers;
+mod state_reader;
+mod step_outcome;
+
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use lib_schemas::skuffen::query::queries::SakKey;
-use uuid::Uuid;
 
 use crate::command::ports::eksekvering_port::{
     ArkivGateway, EksekveringKvitteringPublisher, EksekveringStatusPublisher,
-    OpprettJournalpostResultat, Utsendingsvalg,
 };
-use crate::command::ports::eksekvering_state_port::{
-    DokumentState, EksekveringStateRepository, JournalpostState, SakState, SakStatus,
-};
+use crate::command::ports::eksekvering_state_port::EksekveringStateRepository;
 use crate::command::ports::id_mapping_port::IdMappingRepository;
 use crate::command::ports::status_context_port::CommandStatusContextResolver;
-use crate::command::status::{
-    utfores_blocked_event, utfores_error_event, utfores_ok_event, utfores_retrying_event,
-};
-use domain::eksekvering::plan::{EksekveringsPlan, JournalpostType, Steg, Utsending};
-use domain::eksekvering::typer::{CommandLifecycleEvent, EksekveringFeil, EksekveringFeiltype};
+use domain::eksekvering::plan::EksekveringsPlan;
+use domain::eksekvering::typer::EksekveringFeil;
+
+use self::execution_report::ExecutionReport;
+use self::resolved_plan::{ResolvedPlan, ResolvedStep};
+use self::step_outcome::StepOutcome;
 
 pub struct EksekverKommandoService {
     state_repo: Box<dyn EksekveringStateRepository>,
@@ -35,67 +42,14 @@ pub enum ExecutionOutcome {
 }
 
 #[derive(Debug, Clone)]
-struct ExecutionStepResult {
-    #[allow(dead_code)]
-    reason: Option<String>,
+struct ExecutionFailure {
+    err: EksekveringFeil,
+    report: ExecutionReport,
 }
 
-impl ExecutionStepResult {
-    fn completed() -> Self {
-        Self { reason: None }
-    }
-
-    fn skipped(reason: impl Into<String>) -> Self {
-        Self {
-            reason: Some(reason.into()),
-        }
-    }
-}
-
-enum ExecutionGuard<T> {
-    Proceed(T),
-    Skip(ExecutionStepResult),
-}
-
-impl<T> ExecutionGuard<T> {
-    fn proceed(value: T) -> Self {
-        Self::Proceed(value)
-    }
-
-    fn skip(reason: impl Into<String>) -> Self {
-        Self::Skip(ExecutionStepResult::skipped(reason))
-    }
-}
-
-fn describe_incomplete_journalpost(journalpost: &JournalpostState) -> String {
-    let mut mangler: Vec<&str> = Vec::new();
-    if !journalpost.journalfoert {
-        mangler.push("journalfort");
-    }
-    if !journalpost.avskrevet {
-        mangler.push("avskrevet");
-    }
-
-    let journalpostnavn = match journalpost.journalposttype {
-        'I' => "inngaende journalpost",
-        'U' => "utgaende journalpost",
-        'X' => "internt notat",
-        _ => "journalpost",
-    };
-
-    let krav = if mangler.is_empty() {
-        "ukjent krav mangler".to_string()
-    } else {
-        mangler.join(" og ")
-    };
-
-    match journalpost.journalpostnummer {
-        Some(journalpostnummer) => format!(
-            "Kan ikke avslutte sak: {journalpostnavn} {journalpostnummer} er ikke komplett; mangler {krav}"
-        ),
-        None => {
-            format!("Kan ikke avslutte sak: {journalpostnavn} er ikke komplett; mangler {krav}")
-        }
+impl ExecutionFailure {
+    fn new(err: EksekveringFeil, report: ExecutionReport) -> Self {
+        Self { err, report }
     }
 }
 
@@ -126,645 +80,97 @@ impl EksekverKommandoService {
         let plan = match EksekveringsPlan::fra_command(&envelope.payload) {
             Ok(plan) => plan,
             Err(err) => {
-                return self.avslutt_med_feil(&envelope, err, attempt).await;
+                return self
+                    .avslutt_med_feil(&envelope, err, attempt, ExecutionReport::default())
+                    .await;
             }
         };
 
-        match self.execute_plan(&envelope, plan).await {
-            Ok(()) => {
-                let context = self
-                    .status_context_resolver
-                    .resolve_context(&envelope)
-                    .await?;
-                let event = utfores_ok_event(&envelope, None, context, Some(attempt));
-                self.publish_status(event, &envelope).await?;
-                Ok(ExecutionOutcome::Ok)
+        let resolved_plan = match self.resolve_plan(&envelope, plan).await {
+            Ok(plan) => plan,
+            Err(err) => {
+                return self
+                    .avslutt_med_feil(&envelope, err, attempt, ExecutionReport::default())
+                    .await;
             }
-            Err(err) => self.avslutt_med_feil(&envelope, err, attempt).await,
+        };
+
+        match self.execute_plan(&envelope, resolved_plan).await {
+            Ok(report) => self.publish_success(&envelope, attempt, report).await,
+            Err(failure) => {
+                self.avslutt_med_feil(&envelope, failure.err, attempt, failure.report)
+                    .await
+            }
         }
     }
 
-    /// Executes the plan sequentially. Each step is state-gated and idempotent,
-    /// so re-processing after a crash will skip completed work.
     async fn execute_plan(
         &self,
         envelope: &CommandEnvelope<Command>,
-        plan: EksekveringsPlan,
-    ) -> Result<(), EksekveringFeil> {
+        plan: ResolvedPlan,
+    ) -> Result<ExecutionReport, ExecutionFailure> {
+        let mut report = ExecutionReport::default();
+
         for steg in plan.steg {
-            let result = self.execute_step(envelope, steg).await?;
-            self.observe_step_result(&result);
+            let outcome = self
+                .execute_step(envelope, steg, &mut report)
+                .await
+                .map_err(|err| ExecutionFailure::new(err, report.clone()))?;
+
+            if let StepOutcome::Blocked {
+                prerequisite,
+                detail,
+            } = outcome
+            {
+                report.block(prerequisite, detail.clone());
+                return Err(ExecutionFailure::new(
+                    EksekveringFeil::blocked(detail),
+                    report,
+                ));
+            }
         }
-        Ok(())
+
+        Ok(report)
     }
 
     async fn execute_step(
         &self,
         envelope: &CommandEnvelope<Command>,
-        steg: Steg,
-    ) -> Result<ExecutionStepResult, EksekveringFeil> {
+        steg: ResolvedStep,
+        report: &mut ExecutionReport,
+    ) -> Result<StepOutcome, EksekveringFeil> {
         match steg {
-            Steg::OpprettSak { sak_id } => self.opprett_sak(envelope, sak_id).await,
-            Steg::OpprettJournalpost { plan } => self.opprett_journalpost(envelope, plan).await,
-            Steg::LeggTilDokument {
-                journalpost_id,
-                dokument_id,
+            ResolvedStep::OpprettSak {
+                sak_id,
+                sak_client_reference,
             } => {
-                self.legg_til_dokument(envelope, journalpost_id, dokument_id)
+                self.opprett_sak(envelope, sak_id, sak_client_reference, report)
                     .await
             }
-            Steg::Journalfoer { journalpost_id } => {
-                self.journalfoer_journalpost(envelope, journalpost_id).await
+            ResolvedStep::OpprettJournalpost { plan } => {
+                self.opprett_journalpost(envelope, plan, report).await
             }
-            Steg::Avskriv { journalpost_id } => {
-                self.avskriv_journalpost(envelope, journalpost_id).await
-            }
-            Steg::AvsluttSak { sak_id } => self.avslutt_sak(envelope, sak_id).await,
-        }
-    }
-
-    async fn opprett_sak(
-        &self,
-        envelope: &CommandEnvelope<Command>,
-        sak_id: Uuid,
-    ) -> Result<ExecutionStepResult, EksekveringFeil> {
-        let _ = match self.guard_sak_ikke_opprettet(sak_id).await? {
-            ExecutionGuard::Proceed(state) => state,
-            ExecutionGuard::Skip(result) => return Ok(result),
-        };
-
-        let saksnummer = self
-            .arkiv_gateway
-            .opprett_sak(envelope)
-            .await
-            .map_err(|err| self.map_arkiv_feil(err))?;
-
-        let client_reference = match &envelope.payload {
-            Command::OpprettSak(cmd) => cmd.client_reference,
-            _ => sak_id,
-        };
-        self.id_mapping
-            .oppdater_arkiv_id_for_client_reference(client_reference, saksnummer.clone())
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-
-        let oppdatert = SakState {
-            status: SakStatus::UnderBehandling,
-            opprettet: true,
-            saksnummer: Some(saksnummer.clone()),
-        };
-        self.state_repo
-            .lagre_sak_state(sak_id, oppdatert)
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-
-        let _ = (sak_id, saksnummer);
-        Ok(ExecutionStepResult::completed())
-    }
-
-    async fn opprett_journalpost(
-        &self,
-        envelope: &CommandEnvelope<Command>,
-        plan: domain::eksekvering::plan::JournalpostPlan,
-    ) -> Result<ExecutionStepResult, EksekveringFeil> {
-        let sak_id = match plan.sak_key.clone() {
-            SakKey::ClientReference(id) => id,
-            SakKey::ArkivId(saksnummer) => self
-                .id_mapping
-                .hent_eller_opprett_skuffen_id_for_arkiv_id("sak", saksnummer.as_str())
-                .await
-                .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?,
-        };
-
-        let _ = match self
-            .guard_journalpost_sak(plan.journalpost_id, sak_id)
-            .await?
-        {
-            ExecutionGuard::Proceed(state) => state,
-            ExecutionGuard::Skip(result) => return Ok(result),
-        };
-
-        let utsending = plan.utsending.map(|u| match u {
-            Utsending::MedUtsending => Utsendingsvalg::MedUtsending,
-            Utsending::UtenUtsending => Utsendingsvalg::UtenUtsending,
-        });
-
-        let hoveddokument_id = plan.dokumenter.first().copied();
-
-        let saksnummer = self
-            .hent_saksnummer(plan.sak_key.clone())
-            .await
-            .ok_or_else(|| EksekveringFeil::blocked("Saksnummer mangler"))?;
-
-        let OpprettJournalpostResultat { journalpost_id } = self
-            .arkiv_gateway
-            .opprett_journalpost(envelope, saksnummer.as_str(), utsending)
-            .await
-            .map_err(|err| self.map_arkiv_feil(err))?;
-
-        let client_reference = match &envelope.payload {
-            Command::OpprettInngåendeJournalpost(cmd) => cmd.felles.client_reference,
-            Command::OpprettUtgåendeJournalpost(cmd) => cmd.felles.client_reference,
-            Command::OpprettInterntNotatJournalpost(cmd) => cmd.felles.client_reference,
-            _ => plan.journalpost_id,
-        };
-        self.id_mapping
-            .oppdater_arkiv_id_for_client_reference(client_reference, journalpost_id.to_string())
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-
-        let journalposttype = match plan.journalpost_type {
-            JournalpostType::Inngaende => 'I',
-            JournalpostType::Utgaaende => 'U',
-            JournalpostType::InterntNotat => 'X',
-        };
-
-        let state = JournalpostState {
-            journalfoert: false,
-            avskrevet: false,
-            ekspedert: false,
-            har_feilede_dokumenter: false,
-            med_utsending: matches!(plan.utsending, Some(Utsending::MedUtsending)),
-            journalposttype,
-            journalpostnummer: Some(journalpost_id),
-        };
-        self.state_repo
-            .lagre_journalpost_state(plan.journalpost_id, sak_id, state)
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-
-        if let Some(hoveddokument_id) = hoveddokument_id {
-            self.state_repo
-                .lagre_dokument_state(
-                    hoveddokument_id,
-                    plan.journalpost_id,
-                    DokumentState {
-                        lagt_til: true,
-                        irrecoverable_feil: false,
-                    },
+            ResolvedStep::LeggTilDokument {
+                journalpost_id,
+                dokument_id,
+                dokument_client_reference,
+            } => {
+                self.legg_til_dokument(
+                    envelope,
+                    journalpost_id,
+                    dokument_id,
+                    dokument_client_reference,
                 )
                 .await
-                .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-        }
-
-        let _ = (plan.journalpost_id, journalpost_id);
-        Ok(ExecutionStepResult::completed())
-    }
-
-    async fn legg_til_dokument(
-        &self,
-        envelope: &CommandEnvelope<Command>,
-        journalpost_id: Uuid,
-        dokument_id: Uuid,
-    ) -> Result<ExecutionStepResult, EksekveringFeil> {
-        let _ = match self.guard_journalpost_finnes(journalpost_id).await? {
-            ExecutionGuard::Proceed(state) => state,
-            ExecutionGuard::Skip(result) => return Ok(result),
-        };
-
-        let _ = match self.guard_dokument_ikke_lagt_til(dokument_id).await? {
-            ExecutionGuard::Proceed(state) => state,
-            ExecutionGuard::Skip(result) => return Ok(result),
-        };
-
-        let journalpostnummer = self
-            .hent_journalpostnummer(journalpost_id)
-            .await
-            .ok_or_else(|| EksekveringFeil::blocked("Journalpostnummer mangler"))?;
-
-        let resp = self
-            .arkiv_gateway
-            .legg_til_vedlegg(envelope, journalpostnummer, vec![dokument_id])
-            .await
-            .map_err(|err| self.map_arkiv_feil(err))?;
-
-        if let Some(Some(arkiv_id)) = resp.into_iter().next() {
-            self.id_mapping
-                .oppdater_arkiv_id_for_client_reference(dokument_id, arkiv_id.to_string())
-                .await
-                .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-        }
-
-        self.state_repo
-            .lagre_dokument_state(
-                dokument_id,
-                journalpost_id,
-                DokumentState {
-                    lagt_til: true,
-                    irrecoverable_feil: false,
-                },
-            )
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-
-        Ok(ExecutionStepResult::completed())
-    }
-
-    async fn journalfoer_journalpost(
-        &self,
-        _envelope: &CommandEnvelope<Command>,
-        journalpost_id: Uuid,
-    ) -> Result<ExecutionStepResult, EksekveringFeil> {
-        let state = match self
-            .guard_journalpost_kan_journalfores(journalpost_id)
-            .await?
-        {
-            ExecutionGuard::Proceed(state) => state,
-            ExecutionGuard::Skip(result) => return Ok(result),
-        };
-
-        let journalpostnummer = self
-            .hent_journalpostnummer(journalpost_id)
-            .await
-            .ok_or_else(|| EksekveringFeil::blocked("Journalpostnummer mangler"))?;
-
-        let (ny_status, journalfoert, ekspedert) = match state.journalposttype {
-            'U' => {
-                if state.med_utsending {
-                    ("F", false, false)
-                } else {
-                    ("J", true, state.ekspedert)
-                }
             }
-            _ => ("J", true, state.ekspedert),
-        };
-
-        self.arkiv_gateway
-            .sett_journalpost_status(journalpostnummer, ny_status)
-            .await
-            .map_err(|err| self.map_arkiv_feil(err))?;
-
-        self.state_repo
-            .lagre_journalpost_state(
-                journalpost_id,
-                Uuid::nil(),
-                JournalpostState {
-                    journalfoert,
-                    ekspedert,
-                    ..state
-                },
-            )
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-
-        Ok(ExecutionStepResult::completed())
-    }
-
-    async fn avskriv_journalpost(
-        &self,
-        _envelope: &CommandEnvelope<Command>,
-        journalpost_id: Uuid,
-    ) -> Result<ExecutionStepResult, EksekveringFeil> {
-        let state = match self.guard_journalpost_kan_avskrives(journalpost_id).await? {
-            ExecutionGuard::Proceed(state) => state,
-            ExecutionGuard::Skip(result) => return Ok(result),
-        };
-
-        let journalpostnummer = self
-            .hent_journalpostnummer(journalpost_id)
-            .await
-            .ok_or_else(|| EksekveringFeil::blocked("Journalpostnummer mangler"))?;
-
-        self.arkiv_gateway
-            .avskriv_journalpost(journalpostnummer, "TE")
-            .await
-            .map_err(|err| self.map_arkiv_feil(err))?;
-
-        self.state_repo
-            .lagre_journalpost_state(
-                journalpost_id,
-                Uuid::nil(),
-                JournalpostState {
-                    avskrevet: true,
-                    ..state
-                },
-            )
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-
-        Ok(ExecutionStepResult::completed())
-    }
-
-    async fn avslutt_sak(
-        &self,
-        _envelope: &CommandEnvelope<Command>,
-        sak_id: Uuid,
-    ) -> Result<ExecutionStepResult, EksekveringFeil> {
-        let _ = match self.guard_sak_kan_avsluttes(sak_id).await? {
-            ExecutionGuard::Proceed(state) => state,
-            ExecutionGuard::Skip(result) => return Ok(result),
-        };
-
-        let saksnummer = self
-            .hent_saksnummer(SakKey::ClientReference(sak_id))
-            .await
-            .ok_or_else(|| EksekveringFeil::blocked("Saksnummer mangler"))?;
-
-        self.arkiv_gateway
-            .avslutt_sak(saksnummer.as_str())
-            .await
-            .map_err(|err| self.map_arkiv_feil(err))?;
-
-        self.state_repo
-            .lagre_sak_state(
-                sak_id,
-                SakState {
-                    status: SakStatus::Avsluttet,
-                    opprettet: true,
-                    saksnummer: Some(saksnummer.clone()),
-                },
-            )
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-
-        Ok(ExecutionStepResult::completed())
-    }
-
-    fn observe_step_result(&self, _result: &ExecutionStepResult) {}
-
-    async fn guard_sak_ikke_opprettet(
-        &self,
-        sak_id: Uuid,
-    ) -> Result<ExecutionGuard<Option<SakState>>, EksekveringFeil> {
-        let state = self
-            .state_repo
-            .hent_sak_state_fra_state(sak_id)
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-
-        if let Some(existing) = &state {
-            if existing.opprettet {
-                return Ok(ExecutionGuard::skip("Sak finnes allerede i state"));
+            ResolvedStep::Journalfoer { journalpost_id } => {
+                self.journalfoer_journalpost(envelope, journalpost_id).await
             }
-        }
-
-        Ok(ExecutionGuard::proceed(state))
-    }
-
-    async fn guard_journalpost_sak(
-        &self,
-        journalpost_id: Uuid,
-        sak_id: Uuid,
-    ) -> Result<ExecutionGuard<SakState>, EksekveringFeil> {
-        let sak_state = self
-            .state_repo
-            .hent_sak_state_fra_state(sak_id)
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-
-        let sak_state =
-            sak_state.ok_or_else(|| EksekveringFeil::blocked("Sak finnes ikke i skuffen-state"))?;
-
-        if sak_state.status == SakStatus::Avsluttet {
-            return Err(EksekveringFeil::irrecoverable(
-                "Kan ikke opprette journalpost på avsluttet sak",
-            ));
-        }
-
-        let journalpost_state = self
-            .state_repo
-            .hent_journalpost_state_fra_state(journalpost_id)
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-        if journalpost_state
-            .as_ref()
-            .and_then(|state| state.journalpostnummer)
-            .is_some()
-        {
-            return Ok(ExecutionGuard::skip("Journalpost finnes allerede i state"));
-        }
-
-        Ok(ExecutionGuard::proceed(sak_state))
-    }
-
-    async fn guard_journalpost_finnes(
-        &self,
-        journalpost_id: Uuid,
-    ) -> Result<ExecutionGuard<JournalpostState>, EksekveringFeil> {
-        let journalpost_state = self
-            .state_repo
-            .hent_journalpost_state_fra_state(journalpost_id)
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-
-        let Some(state) = journalpost_state else {
-            return Err(EksekveringFeil::blocked(
-                "Kan ikke legge til dokument: journalpost finnes ikke i state ennå",
-            ));
-        };
-
-        Ok(ExecutionGuard::proceed(state))
-    }
-
-    async fn guard_dokument_ikke_lagt_til(
-        &self,
-        dokument_id: Uuid,
-    ) -> Result<ExecutionGuard<Option<DokumentState>>, EksekveringFeil> {
-        let dokument_state = self
-            .state_repo
-            .hent_dokument_state_fra_state(dokument_id)
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-
-        if let Some(existing) = &dokument_state {
-            if existing.lagt_til {
-                return Ok(ExecutionGuard::skip("Dokument er allerede lagt til"));
+            ResolvedStep::Avskriv { journalpost_id } => {
+                self.avskriv_journalpost(envelope, journalpost_id).await
             }
+            ResolvedStep::AvsluttSak { sak_id } => self.avslutt_sak(envelope, sak_id).await,
         }
-
-        Ok(ExecutionGuard::proceed(dokument_state))
-    }
-
-    async fn guard_journalpost_kan_journalfores(
-        &self,
-        journalpost_id: Uuid,
-    ) -> Result<ExecutionGuard<JournalpostState>, EksekveringFeil> {
-        let journalpost_state = self
-            .state_repo
-            .hent_journalpost_state_fra_state(journalpost_id)
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-        let Some(state) = journalpost_state else {
-            return Err(EksekveringFeil::blocked(
-                "Kan ikke journalfore journalpost: journalpost finnes ikke i state",
-            ));
-        };
-
-        if state.har_feilede_dokumenter {
-            return Err(EksekveringFeil::blocked(
-                "Kan ikke journalfore journalpost: ett eller flere dokumenter har feilet",
-            ));
-        }
-
-        Ok(ExecutionGuard::proceed(state))
-    }
-
-    async fn guard_journalpost_kan_avskrives(
-        &self,
-        journalpost_id: Uuid,
-    ) -> Result<ExecutionGuard<JournalpostState>, EksekveringFeil> {
-        let journalpost_state = self
-            .state_repo
-            .hent_journalpost_state_fra_state(journalpost_id)
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-        let Some(state) = journalpost_state else {
-            return Err(EksekveringFeil::blocked(
-                "Kan ikke avskrive journalpost: journalpost finnes ikke i state",
-            ));
-        };
-
-        if !state.journalfoert {
-            return Err(EksekveringFeil::blocked(
-                "Kan ikke avskrive journalpost: journalpost er ikke journalfort",
-            ));
-        }
-
-        Ok(ExecutionGuard::proceed(state))
-    }
-
-    async fn guard_sak_kan_avsluttes(
-        &self,
-        sak_id: Uuid,
-    ) -> Result<ExecutionGuard<SakState>, EksekveringFeil> {
-        let sak_state = self
-            .state_repo
-            .hent_sak_state_fra_state(sak_id)
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-        let Some(state) = sak_state else {
-            return Err(EksekveringFeil::blocked(
-                "Kan ikke avslutte sak: saken finnes ikke i state",
-            ));
-        };
-
-        if state.status == SakStatus::Avsluttet {
-            return Ok(ExecutionGuard::skip("Sak er allerede avsluttet"));
-        }
-
-        let journalposter = self
-            .state_repo
-            .hent_journalposter_for_sak_fra_state(sak_id)
-            .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-        for journalpost in journalposter {
-            if journalpost.har_feilede_dokumenter {
-                return Err(EksekveringFeil::blocked(
-                    "Kan ikke avslutte sak: minst ett dokument pa en journalpost har feilet",
-                ));
-            }
-
-            match journalpost.journalposttype {
-                'I' => {
-                    if !journalpost.journalfoert || !journalpost.avskrevet {
-                        return Err(EksekveringFeil::blocked(describe_incomplete_journalpost(
-                            &journalpost,
-                        )));
-                    }
-                }
-                'U' => {
-                    if !journalpost.journalfoert {
-                        return Err(EksekveringFeil::blocked(describe_incomplete_journalpost(
-                            &journalpost,
-                        )));
-                    }
-                }
-                'X' => {
-                    if !journalpost.journalfoert {
-                        return Err(EksekveringFeil::blocked(describe_incomplete_journalpost(
-                            &journalpost,
-                        )));
-                    }
-                }
-                _ => {
-                    return Err(EksekveringFeil::blocked(
-                        "Kan ikke avslutte sak: ukjent journalposttype i state",
-                    ));
-                }
-            }
-        }
-
-        Ok(ExecutionGuard::proceed(state))
-    }
-
-    async fn hent_saksnummer(&self, sak_key: SakKey) -> Option<String> {
-        match sak_key {
-            SakKey::ClientReference(sak_id) => self
-                .state_repo
-                .hent_sak_state_fra_state(sak_id)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|state| state.saksnummer),
-            SakKey::ArkivId(saksnummer) => Some(saksnummer.as_str().to_string()),
-        }
-    }
-
-    async fn hent_journalpostnummer(&self, journalpost_id: Uuid) -> Option<i32> {
-        self.state_repo
-            .hent_journalpost_state_fra_state(journalpost_id)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|state| state.journalpostnummer)
-    }
-
-    async fn avslutt_med_feil(
-        &self,
-        envelope: &CommandEnvelope<Command>,
-        err: EksekveringFeil,
-        attempt: u32,
-    ) -> Result<ExecutionOutcome, anyhow::Error> {
-        let context = self
-            .status_context_resolver
-            .resolve_context(envelope)
-            .await?;
-        let detail = err.melding.clone();
-
-        let event = match err.feiltype {
-            EksekveringFeiltype::Recoverable => {
-                utfores_retrying_event(envelope, detail.clone(), context, Some(attempt))
-            }
-            EksekveringFeiltype::Irrecoverable => {
-                utfores_error_event(envelope, detail.clone(), context, Some(attempt))
-            }
-            EksekveringFeiltype::Blocked => {
-                utfores_blocked_event(envelope, detail.clone(), context, Some(attempt))
-            }
-        };
-        self.publish_status(event, envelope).await?;
-
-        let outcome = match err.feiltype {
-            EksekveringFeiltype::Recoverable => ExecutionOutcome::Retrying {
-                last_error: Some(detail),
-            },
-            EksekveringFeiltype::Irrecoverable => ExecutionOutcome::Error {
-                last_error: Some(detail),
-            },
-            EksekveringFeiltype::Blocked => ExecutionOutcome::Blocked {
-                last_error: Some(detail),
-            },
-        };
-
-        Ok(outcome)
-    }
-
-    async fn publish_status(
-        &self,
-        event: CommandLifecycleEvent,
-        envelope: &CommandEnvelope<Command>,
-    ) -> Result<(), anyhow::Error> {
-        let terminal = event.terminal;
-        self.status_publisher.publiser_status(event).await?;
-
-        if terminal {
-            let (subject, _) = domain::eksekvering::typer::done_subject(envelope);
-            self.done_publisher
-                .publiser_done(&subject, envelope)
-                .await?;
-        }
-
-        Ok(())
     }
 
     fn map_arkiv_feil(&self, err: anyhow::Error) -> EksekveringFeil {
@@ -778,6 +184,7 @@ impl EksekverKommandoService {
         if original.contains("sikri_recoverability=irrecoverable") {
             return EksekveringFeil::irrecoverable(message);
         }
+
         EksekveringFeil::recoverable(message)
     }
 }

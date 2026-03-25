@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use domain::eksekvering::typer::CommandLifecycleEvent;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
+use uuid::Uuid;
 
 use crate::command::ports::eksekvering_port::EksekveringStatusPublisher;
 use crate::command::ports::eksekvering_state_port::{
@@ -12,7 +13,7 @@ use crate::command::ports::id_mapping_port::IdMappingRepository;
 use crate::command::ports::registrer_eksekvering_port::RegistrerEksekveringUseCase;
 use crate::command::ports::status_context_port::CommandStatusContextResolver;
 use crate::command::status::utfores_venter_event;
-use domain::eksekvering::plan::{EksekveringsPlan, JournalpostType, Steg, Utsending};
+use domain::eksekvering::plan::{EksekveringsPlan, Steg, Utsending};
 
 pub struct RegistrerEksekveringService {
     state_repo: Box<dyn EksekveringStateRepository>,
@@ -41,29 +42,22 @@ impl RegistrerEksekveringService {
             .map_err(|err| anyhow::anyhow!(err.melding))?;
 
         if let Some(Steg::OpprettJournalpost { plan }) = plan.steg.first() {
-            let (sak_id, sak_state) = match &plan.sak_key {
-                DtoSakKey::ClientReference(sak_id) => (
-                    *sak_id,
-                    SakState {
-                        status: SakStatus::UnderBehandling,
-                        opprettet: false,
-                        saksnummer: None,
-                    },
-                ),
-                DtoSakKey::ArkivId(saksnummer) => {
-                    let sak_id = self
-                        .id_mapping_repo
-                        .hent_eller_opprett_skuffen_id_for_arkiv_id("sak", saksnummer.as_str())
-                        .await?;
-                    (
-                        sak_id,
-                        SakState {
-                            status: SakStatus::UnderBehandling,
-                            opprettet: true,
-                            saksnummer: Some(saksnummer.as_str().to_string()),
-                        },
-                    )
-                }
+            let sak_id = self.resolve_sak_id(&plan.sak_key).await?;
+            let journalpost_id = self
+                .resolve_skuffen_id_for_client_reference("journalpost", plan.journalpost_id)
+                .await?;
+
+            let sak_state = match &plan.sak_key {
+                DtoSakKey::ClientReference(_) => SakState {
+                    status: SakStatus::UnderBehandling,
+                    opprettet: false,
+                    saksnummer: None,
+                },
+                DtoSakKey::ArkivId(saksnummer) => SakState {
+                    status: SakStatus::UnderBehandling,
+                    opprettet: true,
+                    saksnummer: Some(saksnummer.as_str().to_string()),
+                },
             };
 
             if self
@@ -77,31 +71,57 @@ impl RegistrerEksekveringService {
 
             if self
                 .state_repo
-                .hent_journalpost_state_fra_state(plan.journalpost_id)
+                .hent_journalpost_state_fra_state(journalpost_id)
                 .await?
                 .is_none()
             {
-                let journalposttype = match plan.journalpost_type {
-                    JournalpostType::Inngaende => 'I',
-                    JournalpostType::Utgaaende => 'U',
-                    JournalpostType::InterntNotat => 'X',
-                };
                 let journalpost_state = JournalpostState {
                     journalfoert: false,
                     avskrevet: false,
                     ekspedert: false,
                     har_feilede_dokumenter: false,
                     med_utsending: matches!(plan.utsending, Some(Utsending::MedUtsending)),
-                    journalposttype,
+                    journalposttype: plan.journalpost_type,
                     journalpostnummer: None,
                 };
                 self.state_repo
-                    .lagre_journalpost_state(plan.journalpost_id, sak_id, journalpost_state)
+                    .lagre_journalpost_state(journalpost_id, sak_id, journalpost_state)
                     .await?;
             }
         }
 
         Ok(())
+    }
+
+    async fn resolve_sak_id(&self, sak_key: &DtoSakKey) -> Result<Uuid> {
+        match sak_key {
+            DtoSakKey::ClientReference(client_reference) => {
+                self.resolve_skuffen_id_for_client_reference("sak", *client_reference)
+                    .await
+            }
+            DtoSakKey::ArkivId(saksnummer) => {
+                self.id_mapping_repo
+                    .hent_eller_opprett_skuffen_id_for_arkiv_id("sak", saksnummer.as_str())
+                    .await
+            }
+        }
+    }
+
+    async fn resolve_skuffen_id_for_client_reference(
+        &self,
+        entity_type: &str,
+        client_reference: Uuid,
+    ) -> Result<Uuid> {
+        match self
+            .id_mapping_repo
+            .hent_skuffen_id_fra_mapping(client_reference)
+            .await?
+        {
+            Some(skuffen_id) => Ok(skuffen_id),
+            None => Err(anyhow::anyhow!(
+                "Fant ikke skuffen_id for {entity_type} client_reference {client_reference}"
+            )),
+        }
     }
 
     async fn emit_status(&self, event: CommandLifecycleEvent) -> Result<()> {

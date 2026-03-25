@@ -11,10 +11,11 @@ use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
 
 use support::{
-    fetch_dokument_state, fetch_journalpost_state, fetch_sak_state, hent_journalpost_via_nats,
-    hent_sak_via_nats, insert_arkiv_id_mapping, insert_id_mapping, publish_media,
-    send_command_batch, wait_for_command_execution_all, wait_for_status_events, CommandScenario,
-    FakeArkivGateway, FakeArkivGatewayState, FakeArkivSakTilstandRepository, TestEnv,
+    fetch_dokument_state_for_client_reference, fetch_journalpost_state_for_client_reference,
+    fetch_sak_state_for_client_reference, hent_journalpost_via_nats, hent_sak_via_nats,
+    insert_arkiv_id_mapping, insert_id_mapping, publish_media, send_command_batch,
+    wait_for_command_execution_all, wait_for_status_events, CommandScenario, FakeArkivGateway,
+    FakeArkivGatewayState, FakeArkivSakTilstandRepository, TestEnv,
 };
 
 mod support;
@@ -54,15 +55,20 @@ async fn command_sequence_opprett_internt_notat_avslutt_sak() -> Result<()> {
     )
     .await?;
 
-    let sak_state = fetch_sak_state(&env.pool, scenario.sak_client_reference).await?;
+    let sak_state =
+        fetch_sak_state_for_client_reference(&env.pool, scenario.sak_client_reference).await?;
     assert!(sak_state.is_some());
 
-    let journalpost_state =
-        fetch_journalpost_state(&env.pool, scenario.journalpost_internt_client_reference).await?;
+    let journalpost_state = fetch_journalpost_state_for_client_reference(
+        &env.pool,
+        scenario.journalpost_internt_client_reference,
+    )
+    .await?;
     assert!(journalpost_state.is_some());
 
     let dokument_state =
-        fetch_dokument_state(&env.pool, scenario.dokument_client_reference).await?;
+        fetch_dokument_state_for_client_reference(&env.pool, scenario.dokument_client_reference)
+            .await?;
     assert!(dokument_state.is_some());
 
     Ok(())
@@ -104,8 +110,11 @@ async fn command_sequence_inngaende_journalpost_flow() -> Result<()> {
     )
     .await?;
 
-    let journalpost_state =
-        fetch_journalpost_state(&env.pool, scenario.journalpost_inngaende_client_reference).await?;
+    let journalpost_state = fetch_journalpost_state_for_client_reference(
+        &env.pool,
+        scenario.journalpost_inngaende_client_reference,
+    )
+    .await?;
     let journalpost_state = journalpost_state.expect("journalpost state should exist");
     assert!(journalpost_state.journalfoert);
     assert!(journalpost_state.avskrevet);
@@ -149,8 +158,11 @@ async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
     )
     .await?;
 
-    let journalpost_state =
-        fetch_journalpost_state(&env.pool, scenario.journalpost_utgaaende_client_reference).await?;
+    let journalpost_state = fetch_journalpost_state_for_client_reference(
+        &env.pool,
+        scenario.journalpost_utgaaende_client_reference,
+    )
+    .await?;
     let journalpost_state = journalpost_state.expect("journalpost state should exist");
     assert!(journalpost_state.journalfoert);
     assert!(!journalpost_state.avskrevet);
@@ -253,7 +265,7 @@ async fn avslutt_sak_uten_journalposter_er_tillatt() -> Result<()> {
     )
     .await?;
 
-    let sak_state = fetch_sak_state(&env.pool, sak_client_reference)
+    let sak_state = fetch_sak_state_for_client_reference(&env.pool, sak_client_reference)
         .await?
         .expect("sak state should exist");
     assert_eq!(sak_state.status, "A");
@@ -337,7 +349,7 @@ async fn avslutt_sak_blokkeres_nar_journalpost_ikke_er_ok() -> Result<()> {
     .await?;
     assert_eq!(avslutt_status.map(|(s,)| s), Some("blocked".to_string()));
 
-    let sak_state = fetch_sak_state(&env.pool, sak_client_reference)
+    let sak_state = fetch_sak_state_for_client_reference(&env.pool, sak_client_reference)
         .await?
         .expect("sak state should exist");
     assert_eq!(sak_state.status, "B");

@@ -3,6 +3,7 @@ use application::command::ports::eksekvering_state_port::{
     JournalpostState, SakState, SakStatus,
 };
 use async_trait::async_trait;
+use domain::eksekvering::plan::JournalpostType;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use sqlx::postgres::PgPool;
 use sqlx::types::chrono;
@@ -102,7 +103,7 @@ impl EksekveringStateRepository for PostgresEksekveringStateRepository {
                 ekspedert,
                 har_feilede_dokumenter,
                 med_utsending,
-                journalposttype: journalposttype.chars().next().unwrap_or('I'),
+                journalposttype: parse_journalposttype(&journalposttype),
                 journalpostnummer,
             },
         ))
@@ -147,10 +148,67 @@ impl EksekveringStateRepository for PostgresEksekveringStateRepository {
         .bind(state.ekspedert)
         .bind(state.har_feilede_dokumenter)
         .bind(state.med_utsending)
-        .bind(state.journalposttype.to_string())
+        .bind(journalposttype_code(state.journalposttype))
         .bind(state.journalpostnummer)
         .execute(&self.pool)
         .await?;
+
+        Ok(())
+    }
+
+    async fn marker_journalpost_journalfoert(
+        &self,
+        journalpost_id: Uuid,
+        journalfoert: bool,
+        ekspedert: bool,
+    ) -> Result<(), anyhow::Error> {
+        let result = sqlx::query(
+            r#"
+            UPDATE journalpost_state
+            SET journalfoert = $2,
+                ekspedert = $3,
+                updated_at = now()
+            WHERE journalpost_id = $1
+            "#,
+        )
+        .bind(journalpost_id)
+        .bind(journalfoert)
+        .bind(ekspedert)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(anyhow::anyhow!(
+                "Fant ikke journalpost_state for journalpost_id {}",
+                journalpost_id
+            ));
+        }
+
+        Ok(())
+    }
+
+    async fn marker_journalpost_avskrevet(
+        &self,
+        journalpost_id: Uuid,
+    ) -> Result<(), anyhow::Error> {
+        let result = sqlx::query(
+            r#"
+            UPDATE journalpost_state
+            SET avskrevet = true,
+                updated_at = now()
+            WHERE journalpost_id = $1
+            "#,
+        )
+        .bind(journalpost_id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(anyhow::anyhow!(
+                "Fant ikke journalpost_state for journalpost_id {}",
+                journalpost_id
+            ));
+        }
 
         Ok(())
     }
@@ -187,7 +245,7 @@ impl EksekveringStateRepository for PostgresEksekveringStateRepository {
                     ekspedert,
                     har_feilede_dokumenter,
                     med_utsending,
-                    journalposttype: journalposttype.chars().next().unwrap_or('I'),
+                    journalposttype: parse_journalposttype(&journalposttype),
                     journalpostnummer,
                 },
             )
@@ -350,5 +408,22 @@ impl EksekveringStateRepository for PostgresEksekveringStateRepository {
         }
 
         Ok(result)
+    }
+}
+
+fn parse_journalposttype(journalposttype: &str) -> JournalpostType {
+    match journalposttype {
+        "I" => JournalpostType::Inngaende,
+        "U" => JournalpostType::Utgaaende,
+        "X" => JournalpostType::InterntNotat,
+        _ => JournalpostType::Inngaende,
+    }
+}
+
+fn journalposttype_code(journalposttype: JournalpostType) -> &'static str {
+    match journalposttype {
+        JournalpostType::Inngaende => "I",
+        JournalpostType::Utgaaende => "U",
+        JournalpostType::InterntNotat => "X",
     }
 }

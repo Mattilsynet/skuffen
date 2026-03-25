@@ -9,6 +9,9 @@ pub mod validate_command;
 mod ingest_command_test;
 
 #[cfg(test)]
+mod eksekver_kommando_test;
+
+#[cfg(test)]
 mod registrer_eksekvering_test;
 
 #[cfg(test)]

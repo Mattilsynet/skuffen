@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use domain::eksekvering::plan::JournalpostType;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use uuid::Uuid;
 
@@ -41,7 +42,7 @@ pub struct JournalpostState {
     pub ekspedert: bool,
     pub har_feilede_dokumenter: bool,
     pub med_utsending: bool,
-    pub journalposttype: char,
+    pub journalposttype: JournalpostType,
     pub journalpostnummer: Option<i32>,
 }
 
@@ -69,6 +70,16 @@ pub trait EksekveringStateRepository: Send + Sync {
         sak_id: Uuid,
         state: JournalpostState,
     ) -> Result<(), anyhow::Error>;
+
+    async fn marker_journalpost_journalfoert(
+        &self,
+        journalpost_id: Uuid,
+        journalfoert: bool,
+        ekspedert: bool,
+    ) -> Result<(), anyhow::Error>;
+
+    async fn marker_journalpost_avskrevet(&self, journalpost_id: Uuid)
+        -> Result<(), anyhow::Error>;
 
     async fn hent_journalposter_for_sak_fra_state(
         &self,

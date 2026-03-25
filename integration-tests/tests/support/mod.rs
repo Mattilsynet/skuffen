@@ -6,8 +6,9 @@ pub mod nats;
 
 pub use commands::CommandScenario;
 pub use db::{
-    fetch_dokument_state, fetch_journalpost_state, fetch_sak_state, insert_arkiv_id_mapping,
-    insert_id_mapping, wait_for_command_execution_all,
+    fetch_dokument_state_for_client_reference, fetch_journalpost_state_for_client_reference,
+    fetch_sak_state_for_client_reference, insert_arkiv_id_mapping, insert_id_mapping,
+    wait_for_command_execution_all,
 };
 pub use env::{start_runtime, TestEnv};
 pub use fakes::{FakeArkivGateway, FakeArkivGatewayState, FakeArkivSakTilstandRepository};

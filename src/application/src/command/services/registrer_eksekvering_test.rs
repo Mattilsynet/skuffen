@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use domain::eksekvering::plan::JournalpostType;
 use domain::eksekvering::typer::{
     CommandLifecycleContext, CommandLifecycleEvent, CommandStage, CommandStageStatus,
 };
@@ -66,6 +67,22 @@ impl EksekveringStateRepository for FakeEksekveringStateRepository {
         Ok(())
     }
 
+    async fn marker_journalpost_journalfoert(
+        &self,
+        _journalpost_id: Uuid,
+        _journalfoert: bool,
+        _ekspedert: bool,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
+    async fn marker_journalpost_avskrevet(
+        &self,
+        _journalpost_id: Uuid,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
     async fn hent_journalposter_for_sak_fra_state(
         &self,
         _sak_id: Uuid,
@@ -129,6 +146,7 @@ struct FakeIdMappingRepository {
 struct FakeIdMappingData {
     ensure_calls: Vec<(String, String)>,
     ensured_sak_id: Option<Uuid>,
+    skuffen_id_for_client_reference: Vec<(Uuid, Uuid)>,
 }
 
 #[async_trait]
@@ -175,9 +193,17 @@ impl IdMappingRepository for FakeIdMappingRepository {
 
     async fn hent_skuffen_id_fra_mapping(
         &self,
-        _client_reference: Uuid,
+        client_reference: Uuid,
     ) -> Result<Option<Uuid>, anyhow::Error> {
-        Ok(None)
+        Ok(self
+            .data
+            .lock()
+            .unwrap()
+            .skuffen_id_for_client_reference
+            .iter()
+            .find_map(|(stored_client_reference, skuffen_id)| {
+                (*stored_client_reference == client_reference).then_some(*skuffen_id)
+            }))
     }
 
     async fn hent_skuffen_id_fra_arkiv_id_i_mapping(
@@ -259,22 +285,34 @@ async fn registrer_eksekvering_seeds_state_for_client_reference_sak() {
 
     let sak_id = Uuid::new_v4();
     let journalpost_id = Uuid::new_v4();
+    let sak_skuffen_id = Uuid::new_v4();
+    let journalpost_skuffen_id = Uuid::new_v4();
+    {
+        let mut data = id_mapping_repo.data.lock().unwrap();
+        data.skuffen_id_for_client_reference = vec![
+            (sak_id, sak_skuffen_id),
+            (journalpost_id, journalpost_skuffen_id),
+        ];
+    }
     let envelope = make_journalpost_command(journalpost_id, SakKey::ClientReference(sak_id));
 
     service.handle(&envelope).await.unwrap();
 
     let state = state_repo.data.lock().unwrap();
     let (saved_sak_id, saved_sak_state) = state.sak_state.clone().unwrap();
-    assert_eq!(saved_sak_id, sak_id);
+    assert_eq!(saved_sak_id, sak_skuffen_id);
     assert_eq!(saved_sak_state.status, SakStatus::UnderBehandling);
     assert!(!saved_sak_state.opprettet);
     assert_eq!(saved_sak_state.saksnummer, None);
 
     let (saved_journalpost_id, linked_sak_id, saved_journalpost_state) =
         state.journalpost_state.clone().unwrap();
-    assert_eq!(saved_journalpost_id, journalpost_id);
-    assert_eq!(linked_sak_id, sak_id);
-    assert_eq!(saved_journalpost_state.journalposttype, 'X');
+    assert_eq!(saved_journalpost_id, journalpost_skuffen_id);
+    assert_eq!(linked_sak_id, sak_skuffen_id);
+    assert_eq!(
+        saved_journalpost_state.journalposttype,
+        JournalpostType::InterntNotat
+    );
     assert_eq!(state.registrerte_kommandoer, vec![envelope.command_id]);
     let events = status_publisher.events.lock().unwrap();
     assert_eq!(events.len(), 1);
@@ -292,7 +330,14 @@ async fn registrer_eksekvering_ensures_mapping_for_arkiv_id_sak() {
     let id_mapping_repo = FakeIdMappingRepository::default();
     let status_publisher = FakeStatusPublisher::default();
     let ensured_sak_id = Uuid::new_v4();
+    let journalpost_id = Uuid::new_v4();
+    let journalpost_skuffen_id = Uuid::new_v4();
     id_mapping_repo.data.lock().unwrap().ensured_sak_id = Some(ensured_sak_id);
+    id_mapping_repo
+        .data
+        .lock()
+        .unwrap()
+        .skuffen_id_for_client_reference = vec![(journalpost_id, journalpost_skuffen_id)];
 
     let service = build_service(
         state_repo.clone(),
@@ -300,7 +345,6 @@ async fn registrer_eksekvering_ensures_mapping_for_arkiv_id_sak() {
         status_publisher.clone(),
     );
 
-    let journalpost_id = Uuid::new_v4();
     let envelope = make_journalpost_command(
         journalpost_id,
         SakKey::ArkivId(lib_schemas::skuffen::sak::Saksnummer::new("2025/123").unwrap()),
@@ -314,7 +358,8 @@ async fn registrer_eksekvering_ensures_mapping_for_arkiv_id_sak() {
     assert!(saved_sak_state.opprettet);
     assert_eq!(saved_sak_state.saksnummer.as_deref(), Some("2025/123"));
 
-    let (_, linked_sak_id, _) = state.journalpost_state.clone().unwrap();
+    let (saved_journalpost_id, linked_sak_id, _) = state.journalpost_state.clone().unwrap();
+    assert_eq!(saved_journalpost_id, journalpost_skuffen_id);
     assert_eq!(linked_sak_id, ensured_sak_id);
 
     let id_mapping = id_mapping_repo.data.lock().unwrap();

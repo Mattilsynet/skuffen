@@ -46,6 +46,27 @@ pub async fn fetch_sak_state(pool: &PgPool, sak_id: Uuid) -> Result<Option<DbSak
     }))
 }
 
+pub async fn fetch_sak_state_for_client_reference(
+    pool: &PgPool,
+    client_reference: Uuid,
+) -> Result<Option<DbSakState>> {
+    let skuffen_id: Option<Uuid> = sqlx::query_scalar(
+        r#"
+        SELECT skuffen_id
+        FROM id_mapping
+        WHERE client_reference = $1
+        "#,
+    )
+    .bind(client_reference)
+    .fetch_optional(pool)
+    .await?;
+
+    match skuffen_id {
+        Some(skuffen_id) => fetch_sak_state(pool, skuffen_id).await,
+        None => Ok(None),
+    }
+}
+
 pub async fn fetch_journalpost_state(
     pool: &PgPool,
     journalpost_id: Uuid,
@@ -82,6 +103,27 @@ pub async fn fetch_journalpost_state(
     ))
 }
 
+pub async fn fetch_journalpost_state_for_client_reference(
+    pool: &PgPool,
+    client_reference: Uuid,
+) -> Result<Option<DbJournalpostState>> {
+    let skuffen_id: Option<Uuid> = sqlx::query_scalar(
+        r#"
+        SELECT skuffen_id
+        FROM id_mapping
+        WHERE client_reference = $1
+        "#,
+    )
+    .bind(client_reference)
+    .fetch_optional(pool)
+    .await?;
+
+    match skuffen_id {
+        Some(skuffen_id) => fetch_journalpost_state(pool, skuffen_id).await,
+        None => Ok(None),
+    }
+}
+
 pub async fn fetch_dokument_state(
     pool: &PgPool,
     dokument_id: Uuid,
@@ -101,6 +143,27 @@ pub async fn fetch_dokument_state(
         lagt_til,
         irrecoverable_feil,
     }))
+}
+
+pub async fn fetch_dokument_state_for_client_reference(
+    pool: &PgPool,
+    client_reference: Uuid,
+) -> Result<Option<DbDokumentState>> {
+    let skuffen_id: Option<Uuid> = sqlx::query_scalar(
+        r#"
+        SELECT skuffen_id
+        FROM id_mapping
+        WHERE client_reference = $1
+        "#,
+    )
+    .bind(client_reference)
+    .fetch_optional(pool)
+    .await?;
+
+    match skuffen_id {
+        Some(skuffen_id) => fetch_dokument_state(pool, skuffen_id).await,
+        None => Ok(None),
+    }
 }
 
 pub async fn fetch_command_execution_status(
