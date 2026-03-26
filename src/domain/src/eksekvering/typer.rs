@@ -139,6 +139,7 @@ pub struct CommandLifecycleEvent {
 }
 
 impl CommandLifecycleEvent {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         metadata: CommandLifecycleMetadata,
         correlation_id: Option<Uuid>,
@@ -261,6 +262,7 @@ pub fn is_terminal(stage: CommandStage, stage_status: CommandStageStatus) -> boo
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn status_event(
     envelope: &CommandEnvelope<Command>,
     status: CommandStatus,
