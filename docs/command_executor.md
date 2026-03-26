@@ -1,18 +1,35 @@
 # Eksekvering av kommandoer mot Sikri
 
-Dette dokumentet beskriver hvordan Skuffen eksekverer kommandoer mot Sikri. Fokus er best‑effort, rekkefølge, arkivfag og konsekvent feilhåndtering.
+Dette dokumentet beskriver execution v2 i Skuffen. Målet er robusthet og pålitelighet mot et upålitelig arkiv-API, men med en så tydelig modell at fremtidige endringer fortsatt er trygge.
+
+## Mental modell
+
+Execution skal kunne forklares slik:
+
+1. En validert kommando registreres i execution-systemet.
+2. Skuffen materialiserer lokal snapshot-state for sak, journalpost og dokument.
+3. Skuffen vurderer om kommandoen er **klar** eller **venter**.
+4. Én executor plukker neste kjørbare kommando og kjører den stegvis mot Sikri.
+5. Etter hvert steg oppdateres snapshot-state og command execution state eksplisitt.
+6. Kommandoen ender i `ok`, `retry_venter`, `venter` eller `feil`.
+
+Det er ingen skjult workflow engine. Snapshot-state beskriver fakta. `command_execution` beskriver progresjon.
 
 ## Flyt
 
 1. Lytt på `arkiv.command.ready.<entity>.<commandId>` (JetStream, retention 180 dager).
-2. Lagre kommandoen i `command_execution` (inkl. payload). ACK meldingen når DB‑innsett er ok.
-3. Eksekvering worker henter klare kommandoer fra DB og kjører dem.
-4. Worker bygger eksekveringsplan (parse + typebasert validering).
-5. Worker kjører planen steg for steg:
-   - Hvert steg har en guard som leser DB‑state og avgjør om vi kan kjøre, skal skippe, eller må blokkere.
-   - Når guard sier “kjør”: kall Sikri, oppdater state og id‑mapping.
-6. Emit `CommandStatusEvent` på `arkiv.status.<commandId>`.
-7. Når kommandoen er terminal: publiser `arkiv.command.done.<entity>.<commandId>`.
+2. Registrer kommandoen i `command_execution` og seed snapshot-state i samme use case.
+3. Bruk én eksplisitt readiness-vurderer for å avgjøre om kommandoen er:
+   - `klar`
+   - `venter`
+4. Executor starter, tar singleton-lock og resetter eventuelle hengende `kjorer`-rader tilbake til `klar`.
+5. Executor plukker neste kjørbare kommando fra DB.
+6. Executor kjører planen steg for steg:
+   - guard leser snapshot-state
+   - steg kaller Sikri
+   - steg oppdaterer snapshot-state og command execution state
+7. Status-eventer publiseres på `arkiv.status.<commandId>`.
+8. Når kommandoen er terminal, publiseres `arkiv.command.done.<entity>.<commandId>`.
 
 ## Arkivfaglige regler (oppsummering)
 
@@ -51,9 +68,50 @@ Steg:
 Steg:
 - `AvsluttSak`
 
-## Lokal state i database (arkivfaglige fakta)
+## Lokal state i database
 
-Minimal lagring for rekkefølge og blokkering.
+Execution v2 skiller bevisst mellom:
+
+- **workflow-state**: hvor langt kommandoen har kommet
+- **snapshot-state**: arkivfaglige fakta som guarder og regler leser
+
+### Workflow-state: `command_execution`
+
+`command_execution` er runtime source of truth for executor. Den beskriver bare progresjon og årsak til at en kommando eventuelt ikke kan kjøre nå.
+
+Felt på høyt nivå:
+- `command_id`
+- `correlation_id`
+- `payload`
+- `command_type`
+- `sak_id`, `journalpost_id` (når relevant)
+- `status`
+- `attempt_no`
+- `retry_ready_at`
+- `wait_kind`
+- `wait_sak_id`, `wait_journalpost_id`
+- `last_detail`
+- `utfores_venter_publisert_at`
+- `created_at`, `updated_at`, `started_at`, `finished_at`
+
+Statusene er:
+- `klar`
+- `kjorer`
+- `venter`
+- `retry_venter`
+- `ok`
+- `feil`
+
+Semantikk:
+- `venter` = prerequisite mangler i Skuffen-state; ingen timer
+- `retry_venter` = recoverable teknisk feil; styres av `retry_ready_at`
+- `feil` = terminal, inkludert irrecoverable stegfeil
+
+### Historikk: `command_execution_attempt`
+
+Historikk per forsøk brukes for audit/debug og startup recovery. Denne tabellen er ikke scheduler-state.
+
+### Snapshot-state (arkivfaglige fakta)
 
 ### SakState
 - `sak_id` (skuffen_id)
@@ -77,14 +135,6 @@ Minimal lagring for rekkefølge og blokkering.
 - `journalpost_id` (FK)
 - `lagt_til` bool
 - `irrecoverable_feil` bool
-
-### CommandExecution
-- `command_id`
-- `correlation_id`
-- `payload` (CommandEnvelope som JSON)
-- `status` (pending|running|ok|blocked|error|retrying)
-- `attempts`, `last_error`, `next_retry_at`
-- `locked_at`, `locked_by`
 
 ## Rekkefølge og blokkering
 
@@ -113,53 +163,54 @@ Krav:
 - Alle journalposter på saken er ferdige iht. arkivfag (se over).
 - Ingen journalposter har `har_feilede_dokumenter = true`.
 
- Hvis krav ikke er oppfylt: `Blocked`.
+Hvis krav ikke er oppfylt, blir kommandoen enten:
+
+- `venter`, hvis prerequisite kan bli oppfylt av videre Skuffen-fremdrift
+- `feil`, hvis tilstanden er irrecoverable for denne kommandoen
 
 ## Hva hvis prosessen dør midt i planen?
 
-- Planen ligger i RAM, men **hver operasjon er idempotent** og **gated av DB‑state**.
-- På restart blir hele kommandoen re‑prosessert fra start, men steg som allerede er fullført blir skippet.
-- Eksempel: `OpprettJournalpost` fullført, `LeggTilDokument` feilet → på retry vil `OpprettJournalpost` skippe fordi `journalpost_state` finnes.
+- Planen ligger i RAM, men **hvert steg skal være gated av lokal snapshot-state**.
+- Ved startup resettes `kjorer` til `klar`, og executor kan kjøre kommandoen på nytt.
+- Allerede fullførte steg skal skippe basert på snapshot-state.
+- `command_execution_attempt` brukes til å se hva som skjedde før restart.
 
 ## Timeout/feil fra arkivet
 
-- Sikri‑feil mappes til `Recoverable` eller `Irrecoverable`.
-- Recoverable feil (timeout, 5xx, 429) fører til `CommandStatus::Retrying` og planlagt `next_retry_at` i DB.
-- NATS redelivery brukes kun hvis DB‑innsett feiler (ikke for retry).
+- Sikri-feil mappes til `Recoverable` eller `Irrecoverable`.
+- Recoverable feil fører til `retry_venter` og planlagt `retry_ready_at` i DB.
+- Irrecoverable stegfeil betyr at **hele kommandoen feiler**.
+- NATS redelivery brukes kun hvis registrering i Skuffen feiler, ikke for execution retry.
 
-## Best effort og delvis suksess
+## Feilsemantikk
 
-Hvis ett vedlegg feiler irrecoverably, stopper ikke systemet hele sekvensen. Det påvirker kun journalposten det gjelder, og blokkerer avslutning av sak.
+- Hvis ett steg i en kommando feiler irrecoverably, feiler **hele kommandoen**.
+- `venter` brukes bare når kommandoen faktisk kan komme videre av senere state-endringer i Skuffen.
+- `retry_venter` brukes bare for tekniske feil som kan forsøkes igjen senere.
 
-Eksempel:
-1. Opprett sak A
-2. Opprett journalpost X med vedlegg 1,2,3
-3. Opprett journalpost Y med vedlegg 4
-4. Avslutt sak A
+## Wake-up av ventende kommandoer
 
-Hvis vedlegg 2 feiler irrecoverably:
-- Vedlegg 3 legges fortsatt til.
-- Journalpost Y opprettes og fullføres.
-- `AvsluttSak` blokkeres fordi journalpost X ikke er komplett.
+`venter` er ikke timer-basert. Når relevant snapshot-state endres, reevaluerer Skuffen ventende kommandoer for samme sak eller journalpost.
 
-## Feilhåndtering
+Samme readiness-vurderer brukes:
+- ved registrering
+- ved wake-up
 
-Samme modell som validering, men styrt fra DB‑worker:
+Wake-up kan flytte en kommando fra `venter` til `klar` eller terminal `feil`.
+Ved `venter -> feil` publiseres også outward error-status og `done`.
 
-- **Recoverable**: 429/5xx/timeout → `CommandStatus::Retrying`, `next_retry_at` settes.
-- **Irrecoverable**: 4xx som ikke kan rettes → `CommandStatus::Error` (terminal).
-- **Blocked**: domenekrav ikke oppfylt → `CommandStatus::Blocked` + `next_retry_at`.
+Hvis et step allerede er fullfort og execution derfor skiper med `AlreadyCompleted`, skal relevante wake-up scopes fortsatt trigges, slik at tidligere tapte wake-ups kan hentes inn igjen.
 
-`CommandStatusEvent` sendes på alle overganger (Pending/Retrying/Ok/Error/Blocked).
+Det skal være enkelt å lese hvorfor en kommando venter, og hva som må skje før den kan bli `klar`.
 
-## Backoff‑strategi
+## Backoff-strategi
 
 Backoff skal aldri være 0. Bruk eksponentiell backoff med øvre grense til ett forsøk per dag, og fortsett med ett forsøk per dag deretter.
 
 Eksempel:
 - 1m, 5m, 15m, 1h, 6h, 12h, 24h, 24h, 24h ...
 
-## NATS‑kanaler
+## NATS-kanaler
 
 - Input: `arkiv.command.ready.<entity>.<commandId>`
 - Status: `arkiv.status.<commandId>` (stream `arkiv_status`)

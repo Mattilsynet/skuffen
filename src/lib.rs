@@ -45,7 +45,7 @@ pub async fn run() -> anyhow::Result<()> {
         infrastructure::bootstrap::build_eksekvering_components(
             runtime.nats.clone(),
             runtime.id_mapping_repo,
-            runtime.eksekvering_state_repo,
+            runtime.execution_store,
             runtime.media_store,
             runtime.use_fake_sikri,
         );

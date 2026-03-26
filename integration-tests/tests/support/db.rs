@@ -194,14 +194,14 @@ pub async fn wait_for_command_execution(
     loop {
         if let Some(status) = fetch_command_execution_status(pool, command_id).await? {
             last_seen_status = Some(status.clone());
-            if matches!(status.as_str(), "ok" | "blocked" | "error") {
+            if matches!(status.as_str(), "ok" | "venter" | "feil") {
                 return Ok(status);
             }
         }
         if Instant::now() >= deadline {
             let row: Option<(String, i32, Option<String>)> = sqlx::query_as(
                 r#"
-                SELECT status, attempts, last_error
+                SELECT status, attempt_no, last_detail
                 FROM command_execution
                 WHERE command_id = $1
                 "#,

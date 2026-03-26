@@ -2,7 +2,7 @@ use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSa
 use domain::eksekvering::regler::{JournalpostRuleState, SakRuleState};
 use domain::eksekvering::typer::EksekveringFeil;
 
-use crate::command::ports::eksekvering_state_port::{DokumentState, JournalpostState, SakState};
+use crate::command::ports::execution_snapshot_port::{DokumentState, JournalpostState, SakState};
 
 use super::EksekverKommandoService;
 
@@ -11,7 +11,7 @@ impl EksekverKommandoService {
         &self,
         sak_id: SkuffenSakId,
     ) -> Result<Option<SakState>, EksekveringFeil> {
-        self.state_repo
+        self.snapshot_repo
             .hent_sak_state(sak_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))
@@ -21,7 +21,7 @@ impl EksekverKommandoService {
         &self,
         journalpost_id: SkuffenJournalpostId,
     ) -> Result<Option<JournalpostState>, EksekveringFeil> {
-        self.state_repo
+        self.snapshot_repo
             .hent_journalpost_state(journalpost_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))
@@ -31,7 +31,7 @@ impl EksekverKommandoService {
         &self,
         dokument_id: SkuffenDokumentId,
     ) -> Result<Option<DokumentState>, EksekveringFeil> {
-        self.state_repo
+        self.snapshot_repo
             .hent_dokument_state(dokument_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))
@@ -41,7 +41,7 @@ impl EksekverKommandoService {
         &self,
         sak_id: SkuffenSakId,
     ) -> Result<Vec<JournalpostState>, EksekveringFeil> {
-        self.state_repo
+        self.snapshot_repo
             .hent_journalposter_for_sak(sak_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))
@@ -62,7 +62,7 @@ pub(super) fn til_sak_rule_state(state: &SakState) -> SakRuleState {
     SakRuleState {
         avsluttet: matches!(
             state.status,
-            crate::command::ports::eksekvering_state_port::SakStatus::Avsluttet
+            crate::command::ports::execution_snapshot_port::SakStatus::Avsluttet
         ),
     }
 }

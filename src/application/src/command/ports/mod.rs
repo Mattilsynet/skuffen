@@ -1,9 +1,12 @@
 pub mod command_dispatcher_port;
+pub mod command_execution_port;
 pub mod command_state_port;
 pub mod eksekvering_port;
-pub mod eksekvering_state_port;
+pub mod execution_registration_port;
+pub mod execution_snapshot_port;
 pub mod id_mapping_port;
 pub mod registrer_i_eksekveringssystem_port;
 pub mod status_projection_port;
 pub mod status_publisher_port;
 pub mod validated_command_dispatcher_port;
+pub mod ventende_kommando_wakeup_port;

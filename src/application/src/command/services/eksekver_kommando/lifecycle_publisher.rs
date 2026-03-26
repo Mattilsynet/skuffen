@@ -134,6 +134,10 @@ impl EksekverKommandoService {
                 last_error: Some(detail),
             },
             domain::eksekvering::typer::CommandStageStatus::Blocked => ExecutionOutcome::Blocked {
+                grunn: report
+                    .blocked_by
+                    .as_ref()
+                    .map(|prerequisite| prerequisite.as_ventegrunn()),
                 last_error: Some(detail),
             },
             domain::eksekvering::typer::CommandStageStatus::Ok

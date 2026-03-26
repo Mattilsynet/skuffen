@@ -4,7 +4,7 @@ use domain::eksekvering::typer::EksekveringFeil;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use uuid::Uuid;
 
-use crate::command::ports::eksekvering_state_port::{SakStatus, SakTransition};
+use crate::command::ports::execution_snapshot_port::{SakStatus, SakTransition};
 
 use super::execution_report::ExecutionReport;
 use super::prerequisite::Prerequisite;
@@ -25,7 +25,9 @@ impl EksekverKommandoService {
             .await?
             .is_some_and(|existing| existing.opprettet)
         {
-            return Ok(StepOutcome::AlreadyCompleted);
+            let outcome = StepOutcome::AlreadyCompleted;
+            self.maybe_wake_after_sak_step(sak_id, &outcome).await?;
+            return Ok(outcome);
         }
 
         let saksnummer = self
@@ -39,7 +41,7 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
-        self.state_repo
+        self.snapshot_repo
             .anvend_sak_transition(
                 sak_id,
                 SakTransition {
@@ -53,7 +55,9 @@ impl EksekverKommandoService {
 
         report.set_saksnummer(saksnummer);
 
-        Ok(StepOutcome::Completed)
+        let outcome = StepOutcome::Completed;
+        self.maybe_wake_after_sak_step(sak_id, &outcome).await?;
+        Ok(outcome)
     }
 
     pub(super) async fn avslutt_sak(
@@ -69,7 +73,9 @@ impl EksekverKommandoService {
         };
 
         if state.status == SakStatus::Avsluttet {
-            return Ok(StepOutcome::AlreadyCompleted);
+            let outcome = StepOutcome::AlreadyCompleted;
+            self.maybe_wake_after_sak_step(sak_id, &outcome).await?;
+            return Ok(outcome);
         }
 
         let journalposter = self.hent_journalposter_for_sak(sak_id).await?;
@@ -88,7 +94,7 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| self.map_arkiv_feil(err))?;
 
-        self.state_repo
+        self.snapshot_repo
             .anvend_sak_transition(
                 sak_id,
                 SakTransition {
@@ -100,6 +106,8 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
-        Ok(StepOutcome::Completed)
+        let outcome = StepOutcome::Completed;
+        self.maybe_wake_after_sak_step(sak_id, &outcome).await?;
+        Ok(outcome)
     }
 }

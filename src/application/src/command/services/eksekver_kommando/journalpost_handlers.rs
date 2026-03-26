@@ -7,7 +7,7 @@ use domain::eksekvering::typer::EksekveringFeil;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 
 use crate::command::ports::eksekvering_port::{OpprettJournalpostResultat, Utsendingsvalg};
-use crate::command::ports::eksekvering_state_port::{
+use crate::command::ports::execution_snapshot_port::{
     JournalpostOpprettetTransition, JournalpostOvergangVedJournalfoering,
 };
 
@@ -19,6 +19,24 @@ use super::step_outcome::StepOutcome;
 use super::EksekverKommandoService;
 
 impl EksekverKommandoService {
+    pub(super) async fn resolve_sak_id_for_journalpost_envelope(
+        &self,
+        envelope: &CommandEnvelope<Command>,
+    ) -> Result<domain::eksekvering::id::SkuffenSakId, EksekveringFeil> {
+        let sak_key = match &envelope.payload {
+            Command::OpprettInngåendeJournalpost(cmd) => cmd.felles.sak_key.clone(),
+            Command::OpprettUtgåendeJournalpost(cmd) => cmd.felles.sak_key.clone(),
+            Command::OpprettInterntNotatJournalpost(cmd) => cmd.felles.sak_key.clone(),
+            _ => {
+                return Err(EksekveringFeil::recoverable(
+                    "Uventet kommando for journalpoststeg".to_string(),
+                ))
+            }
+        };
+
+        self.resolve_sak_id(sak_key).await
+    }
+
     pub(super) async fn opprett_journalpost(
         &self,
         envelope: &CommandEnvelope<Command>,
@@ -41,7 +59,10 @@ impl EksekverKommandoService {
             .and_then(|state| state.journalpostnummer)
             .is_some()
         {
-            return Ok(StepOutcome::AlreadyCompleted);
+            let outcome = StepOutcome::AlreadyCompleted;
+            self.maybe_wake_after_opprett_journalpost(&plan, &outcome)
+                .await?;
+            return Ok(outcome);
         }
 
         let utsending = plan.utsending.map(|utsending| match utsending {
@@ -77,7 +98,7 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
-        self.state_repo
+        self.snapshot_repo
             .anvend_journalpost_opprettet(
                 plan.journalpost_id,
                 JournalpostOpprettetTransition {
@@ -88,7 +109,7 @@ impl EksekverKommandoService {
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
         if let Some(hoveddokument) = plan.dokumenter.first() {
-            self.state_repo
+            self.snapshot_repo
                 .anvend_dokument_lagt_til(hoveddokument.dokument_id, plan.journalpost_id)
                 .await
                 .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
@@ -96,12 +117,15 @@ impl EksekverKommandoService {
 
         report.set_journalpost_id(journalpost_id.to_string());
 
-        Ok(StepOutcome::Completed)
+        let outcome = StepOutcome::Completed;
+        self.maybe_wake_after_opprett_journalpost(&plan, &outcome)
+            .await?;
+        Ok(outcome)
     }
 
     pub(super) async fn journalfoer_journalpost(
         &self,
-        _envelope: &CommandEnvelope<Command>,
+        envelope: &CommandEnvelope<Command>,
         journalpost_id: SkuffenJournalpostId,
     ) -> Result<StepOutcome, EksekveringFeil> {
         let Some(state) = self.hent_journalpost_state(journalpost_id).await? else {
@@ -112,7 +136,10 @@ impl EksekverKommandoService {
         };
 
         if state.journalfoert {
-            return Ok(StepOutcome::AlreadyCompleted);
+            let outcome = StepOutcome::AlreadyCompleted;
+            self.maybe_wake_after_journalpost_step(envelope, journalpost_id, &outcome)
+                .await?;
+            return Ok(outcome);
         }
 
         kan_journalfoere_journalpost(&til_journalpost_rule_state(&state))?;
@@ -135,7 +162,7 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| self.map_arkiv_feil(err))?;
 
-        self.state_repo
+        self.snapshot_repo
             .anvend_journalpost_overgang_ved_journalfoering(
                 journalpost_id,
                 JournalpostOvergangVedJournalfoering {
@@ -146,12 +173,15 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
-        Ok(StepOutcome::Completed)
+        let outcome = StepOutcome::Completed;
+        self.maybe_wake_after_journalpost_step(envelope, journalpost_id, &outcome)
+            .await?;
+        Ok(outcome)
     }
 
     pub(super) async fn avskriv_journalpost(
         &self,
-        _envelope: &CommandEnvelope<Command>,
+        envelope: &CommandEnvelope<Command>,
         journalpost_id: SkuffenJournalpostId,
     ) -> Result<StepOutcome, EksekveringFeil> {
         let Some(state) = self.hent_journalpost_state(journalpost_id).await? else {
@@ -162,7 +192,10 @@ impl EksekverKommandoService {
         };
 
         if state.avskrevet {
-            return Ok(StepOutcome::AlreadyCompleted);
+            let outcome = StepOutcome::AlreadyCompleted;
+            self.maybe_wake_after_journalpost_step(envelope, journalpost_id, &outcome)
+                .await?;
+            return Ok(outcome);
         }
 
         if !state.journalfoert {
@@ -189,11 +222,14 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| self.map_arkiv_feil(err))?;
 
-        self.state_repo
+        self.snapshot_repo
             .anvend_journalpost_avskrevet(journalpost_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
-        Ok(StepOutcome::Completed)
+        let outcome = StepOutcome::Completed;
+        self.maybe_wake_after_journalpost_step(envelope, journalpost_id, &outcome)
+            .await?;
+        Ok(outcome)
     }
 }

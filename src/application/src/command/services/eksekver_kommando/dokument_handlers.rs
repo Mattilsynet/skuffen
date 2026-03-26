@@ -28,7 +28,10 @@ impl EksekverKommandoService {
             .await?
             .is_some_and(|existing| existing.lagt_til)
         {
-            return Ok(StepOutcome::AlreadyCompleted);
+            let outcome = StepOutcome::AlreadyCompleted;
+            self.maybe_wake_after_dokument_step(envelope, journalpost_id, &outcome)
+                .await?;
+            return Ok(outcome);
         }
 
         let journalpostnummer = match journalpost_state.journalpostnummer {
@@ -41,11 +44,48 @@ impl EksekverKommandoService {
             }
         };
 
-        let resp = self
+        let resp = match self
             .arkiv_gateway
             .legg_til_vedlegg(envelope, journalpostnummer, vec![dokument_client_reference])
             .await
-            .map_err(|err| self.map_arkiv_feil(err))?;
+        {
+            Ok(resp) => resp,
+            Err(err) => {
+                let err = self.map_arkiv_feil(err);
+                if matches!(
+                    err.feiltype,
+                    domain::eksekvering::typer::EksekveringFeiltype::Irrecoverable
+                ) {
+                    self.snapshot_repo
+                        .anvend_dokument_irrecoverable_feil(dokument_id, journalpost_id)
+                        .await
+                        .map_err(|persist_err| {
+                            EksekveringFeil::recoverable(format!(
+                                "Klarte ikke a persistere irrecoverable dokumentfeil: {}",
+                                persist_err
+                            ))
+                        })?;
+
+                    self.wake_journalpost(journalpost_id)
+                        .await
+                        .map_err(|wake_err| {
+                            EksekveringFeil::recoverable(format!(
+                                "Klarte ikke wake ventende kommandoer etter dokumentfeil: {}",
+                                wake_err.melding
+                            ))
+                        })?;
+                    self.wake_sak_for_journalpost_envelope(envelope)
+                        .await
+                        .map_err(|wake_err| {
+                            EksekveringFeil::recoverable(format!(
+                                "Klarte ikke wake sak-scope etter dokumentfeil: {}",
+                                wake_err.melding
+                            ))
+                        })?;
+                }
+                return Err(err);
+            }
+        };
 
         if let Some(Some(arkiv_id)) = resp.into_iter().next() {
             self.id_mapping
@@ -58,11 +98,14 @@ impl EksekverKommandoService {
             report.add_dokument_id(arkiv_id.to_string());
         }
 
-        self.state_repo
+        self.snapshot_repo
             .anvend_dokument_lagt_til(dokument_id, journalpost_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
-        Ok(StepOutcome::Completed)
+        let outcome = StepOutcome::Completed;
+        self.maybe_wake_after_dokument_step(envelope, journalpost_id, &outcome)
+            .await?;
+        Ok(outcome)
     }
 }

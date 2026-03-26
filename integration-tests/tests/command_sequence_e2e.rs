@@ -347,7 +347,7 @@ async fn avslutt_sak_blokkeres_nar_journalpost_ikke_er_ok() -> Result<()> {
     .bind(avslutt_sak.command_id)
     .fetch_optional(&env.pool)
     .await?;
-    assert_eq!(avslutt_status.map(|(s,)| s), Some("blocked".to_string()));
+    assert_eq!(avslutt_status.map(|(s,)| s), Some("venter".to_string()));
 
     let sak_state = fetch_sak_state_for_client_reference(&env.pool, sak_client_reference)
         .await?

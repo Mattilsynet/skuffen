@@ -17,13 +17,13 @@ use crate::command::ports::eksekvering_port::{
     ArkivGateway, EksekveringKvitteringPublisher, EksekveringStatusPublisher,
     OpprettJournalpostResultat, Utsendingsvalg,
 };
-use crate::command::ports::eksekvering_state_port::{
-    DokumentState, EksekveringKommando, EksekveringStateRepository, EksekveringStatus,
-    JournalpostOpprettetTransition, JournalpostOvergangVedJournalfoering, JournalpostState,
-    SakState, SakTransition,
+use crate::command::ports::execution_snapshot_port::{
+    DokumentState, EksekveringSnapshotRepository, JournalpostOpprettetTransition,
+    JournalpostOvergangVedJournalfoering, JournalpostState, SakState, SakTransition,
 };
 use crate::command::ports::id_mapping_port::{IdMappingRepository, MappingEntityType};
 use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
+use crate::command::ports::ventende_kommando_wakeup_port::VentendeKommandoWakeup;
 use crate::command::services::eksekver_kommando::{EksekverKommandoService, ExecutionOutcome};
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
@@ -34,16 +34,15 @@ struct FakeExecutionData {
     journalposter: HashMap<Uuid, JournalpostState>,
     journalposter_per_sak: HashMap<Uuid, Vec<Uuid>>,
     dokumenter: HashMap<Uuid, DokumentState>,
-    execution_updates: Vec<(Uuid, EksekveringStatus)>,
 }
 
 #[derive(Clone, Default)]
-struct FakeEksekveringStateRepository {
+struct FakeSnapshotRepository {
     data: Arc<Mutex<FakeExecutionData>>,
 }
 
 #[async_trait]
-impl EksekveringStateRepository for FakeEksekveringStateRepository {
+impl EksekveringSnapshotRepository for FakeSnapshotRepository {
     async fn hent_sak_state(
         &self,
         sak_id: SkuffenSakId,
@@ -230,41 +229,30 @@ impl EksekveringStateRepository for FakeEksekveringStateRepository {
         Ok(state.clone())
     }
 
-    async fn oppdater_eksekvering(
+    async fn anvend_dokument_irrecoverable_feil(
         &self,
-        command_id: Uuid,
-        status: EksekveringStatus,
-        _last_error: Option<String>,
-        _next_retry_at: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<(), anyhow::Error> {
-        self.data
-            .lock()
-            .unwrap()
-            .execution_updates
-            .push((command_id, status));
-        Ok(())
-    }
-
-    async fn registrer_kommando(
-        &self,
-        _envelope: &CommandEnvelope<Command>,
-    ) -> Result<bool, anyhow::Error> {
-        Ok(true)
-    }
-
-    async fn marker_utfores_venter_publisert(
-        &self,
-        _command_id: Uuid,
-    ) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn hent_klare_kommandoer(
-        &self,
-        _limit: i64,
-        _worker_id: &str,
-    ) -> Result<Vec<EksekveringKommando>, anyhow::Error> {
-        Ok(Vec::new())
+        dokument_id: SkuffenDokumentId,
+        journalpost_id: SkuffenJournalpostId,
+    ) -> Result<DokumentState, anyhow::Error> {
+        let mut data = self.data.lock().unwrap();
+        let dokument_state = {
+            let state = data
+                .dokumenter
+                .entry(Uuid::from(dokument_id))
+                .or_insert(DokumentState {
+                    lagt_til: false,
+                    irrecoverable_feil: false,
+                });
+            state.irrecoverable_feil = true;
+            state.lagt_til = false;
+            state.clone()
+        };
+        let journalpost_state = data
+            .journalposter
+            .get_mut(&Uuid::from(journalpost_id))
+            .ok_or_else(|| anyhow::anyhow!("missing journalpost state"))?;
+        journalpost_state.har_feilede_dokumenter = true;
+        Ok(dokument_state)
     }
 }
 
@@ -422,6 +410,7 @@ struct FakeArkivData {
     sett_status_calls: Vec<(i32, String)>,
     avskriv_calls: Vec<i32>,
     avslutt_sak_calls: Vec<String>,
+    fail_legg_til_vedlegg: Option<String>,
     fail_sett_status: Option<String>,
 }
 
@@ -460,6 +449,9 @@ impl ArkivGateway for FakeArkivGateway {
     ) -> Result<Vec<Option<i32>>, anyhow::Error> {
         let mut data = self.data.lock().unwrap();
         data.legg_til_vedlegg_calls += 1;
+        if let Some(feilmelding) = data.fail_legg_til_vedlegg.clone() {
+            return Err(anyhow::anyhow!(feilmelding));
+        }
         Ok(dokument_ids.into_iter().map(|_| Some(70001)).collect())
     }
 
@@ -539,26 +531,70 @@ impl CommandOutwardStatusProjector for FakeStatusContextResolver {
     }
 }
 
+#[derive(Clone, Default)]
+struct RecordingWakeupService {
+    sak_calls: Arc<Mutex<Vec<Uuid>>>,
+    journalpost_calls: Arc<Mutex<Vec<Uuid>>>,
+}
+
+#[async_trait]
+impl VentendeKommandoWakeup for RecordingWakeupService {
+    async fn etter_sak_endret(&self, sak_id: SkuffenSakId) -> Result<(), anyhow::Error> {
+        self.sak_calls.lock().unwrap().push(Uuid::from(sak_id));
+        Ok(())
+    }
+
+    async fn etter_journalpost_endret(
+        &self,
+        journalpost_id: SkuffenJournalpostId,
+    ) -> Result<(), anyhow::Error> {
+        self.journalpost_calls
+            .lock()
+            .unwrap()
+            .push(Uuid::from(journalpost_id));
+        Ok(())
+    }
+}
+
 fn build_service(
-    state_repo: FakeEksekveringStateRepository,
+    snapshot_repo: FakeSnapshotRepository,
     arkiv_gateway: FakeArkivGateway,
     status_publisher: FakeStatusPublisher,
     done_publisher: FakeDonePublisher,
     id_mapping: FakeIdMappingRepository,
 ) -> EksekverKommandoService {
+    build_service_with_wakeup(
+        snapshot_repo,
+        arkiv_gateway,
+        status_publisher,
+        done_publisher,
+        id_mapping,
+        RecordingWakeupService::default(),
+    )
+}
+
+fn build_service_with_wakeup(
+    snapshot_repo: FakeSnapshotRepository,
+    arkiv_gateway: FakeArkivGateway,
+    status_publisher: FakeStatusPublisher,
+    done_publisher: FakeDonePublisher,
+    id_mapping: FakeIdMappingRepository,
+    wakeup_service: RecordingWakeupService,
+) -> EksekverKommandoService {
     EksekverKommandoService::new(
-        Box::new(state_repo),
+        Box::new(snapshot_repo),
         Box::new(arkiv_gateway),
         Box::new(status_publisher),
         Box::new(done_publisher),
         Box::new(id_mapping),
         Box::new(FakeStatusContextResolver),
+        Box::new(wakeup_service),
     )
 }
 
 #[tokio::test]
 async fn handle_returns_blocked_when_journalpost_waits_for_sak() {
-    let state_repo = FakeEksekveringStateRepository::default();
+    let state_repo = FakeSnapshotRepository::default();
     let arkiv_gateway = FakeArkivGateway::default();
     let status_publisher = FakeStatusPublisher::default();
     let done_publisher = FakeDonePublisher::default();
@@ -603,7 +639,8 @@ async fn handle_returns_blocked_when_journalpost_waits_for_sak() {
     assert!(matches!(
         outcome,
         ExecutionOutcome::Blocked {
-            last_error: Some(ref detail)
+            last_error: Some(ref detail),
+            ..
         } if detail == "Sak finnes ikke i skuffen-state"
     ));
     assert_eq!(
@@ -625,7 +662,7 @@ async fn handle_returns_blocked_when_journalpost_waits_for_sak() {
 
 #[tokio::test]
 async fn journalfoering_skips_when_already_journalfoert() {
-    let state_repo = FakeEksekveringStateRepository::default();
+    let state_repo = FakeSnapshotRepository::default();
     let arkiv_gateway = FakeArkivGateway::default();
     let status_publisher = FakeStatusPublisher::default();
     let done_publisher = FakeDonePublisher::default();
@@ -635,8 +672,10 @@ async fn journalfoering_skips_when_already_journalfoert() {
     let sak_skuffen_id = Uuid::new_v4();
     let journalpost_client_reference = Uuid::new_v4();
     let journalpost_skuffen_id = Uuid::new_v4();
-    let dokument_client_reference = Uuid::new_v4();
-    let dokument_skuffen_id = Uuid::new_v4();
+    let hoveddokument_client_reference = Uuid::new_v4();
+    let hoveddokument_skuffen_id = Uuid::new_v4();
+    let vedlegg_client_reference = Uuid::new_v4();
+    let vedlegg_skuffen_id = Uuid::new_v4();
     {
         let mut mapping_data = id_mapping.data.lock().unwrap();
         mapping_data
@@ -647,14 +686,17 @@ async fn journalfoering_skips_when_already_journalfoert() {
             .insert(journalpost_client_reference, journalpost_skuffen_id);
         mapping_data
             .client_to_skuffen
-            .insert(dokument_client_reference, dokument_skuffen_id);
+            .insert(hoveddokument_client_reference, hoveddokument_skuffen_id);
+        mapping_data
+            .client_to_skuffen
+            .insert(vedlegg_client_reference, vedlegg_skuffen_id);
     }
     {
         let mut execution_data = state_repo.data.lock().unwrap();
         execution_data.saker.insert(
             sak_skuffen_id,
             SakState {
-                status: crate::command::ports::eksekvering_state_port::SakStatus::UnderBehandling,
+                status: crate::command::ports::execution_snapshot_port::SakStatus::UnderBehandling,
                 opprettet: true,
                 saksnummer: Some("2026/1".to_string()),
             },
@@ -683,10 +725,10 @@ async fn journalfoering_skips_when_already_journalfoert() {
 
     let outcome = service
         .handle(
-            make_internt_notat_command(
+            make_internt_notat_command_with_documents(
                 journalpost_client_reference,
                 sak_client_reference,
-                dokument_client_reference,
+                vec![hoveddokument_client_reference, vedlegg_client_reference],
             ),
             1,
         )
@@ -704,7 +746,7 @@ async fn journalfoering_skips_when_already_journalfoert() {
 
 #[tokio::test]
 async fn avskriving_skips_when_already_avskrevet() {
-    let state_repo = FakeEksekveringStateRepository::default();
+    let state_repo = FakeSnapshotRepository::default();
     let arkiv_gateway = FakeArkivGateway::default();
     let status_publisher = FakeStatusPublisher::default();
     let done_publisher = FakeDonePublisher::default();
@@ -733,7 +775,7 @@ async fn avskriving_skips_when_already_avskrevet() {
         execution_data.saker.insert(
             sak_skuffen_id,
             SakState {
-                status: crate::command::ports::eksekvering_state_port::SakStatus::UnderBehandling,
+                status: crate::command::ports::execution_snapshot_port::SakStatus::UnderBehandling,
                 opprettet: true,
                 saksnummer: Some("2026/1".to_string()),
             },
@@ -778,7 +820,7 @@ async fn avskriving_skips_when_already_avskrevet() {
 
 #[tokio::test]
 async fn handle_returns_retrying_for_gateway_failure() {
-    let state_repo = FakeEksekveringStateRepository::default();
+    let state_repo = FakeSnapshotRepository::default();
     let arkiv_gateway = FakeArkivGateway::default();
     let status_publisher = FakeStatusPublisher::default();
     let done_publisher = FakeDonePublisher::default();
@@ -807,7 +849,7 @@ async fn handle_returns_retrying_for_gateway_failure() {
         execution_data.saker.insert(
             sak_skuffen_id,
             SakState {
-                status: crate::command::ports::eksekvering_state_port::SakStatus::UnderBehandling,
+                status: crate::command::ports::execution_snapshot_port::SakStatus::UnderBehandling,
                 opprettet: true,
                 saksnummer: Some("2026/1".to_string()),
             },
@@ -862,8 +904,199 @@ async fn handle_returns_retrying_for_gateway_failure() {
 }
 
 #[tokio::test]
+async fn irrecoverable_dokumentfeil_markerer_dokument_state_og_feiler_kommandoen() {
+    let state_repo = FakeSnapshotRepository::default();
+    let arkiv_gateway = FakeArkivGateway::default();
+    let status_publisher = FakeStatusPublisher::default();
+    let done_publisher = FakeDonePublisher::default();
+    let id_mapping = FakeIdMappingRepository::default();
+    let wakeup_service = RecordingWakeupService::default();
+
+    let sak_client_reference = Uuid::new_v4();
+    let sak_skuffen_id = Uuid::new_v4();
+    let journalpost_client_reference = Uuid::new_v4();
+    let journalpost_skuffen_id = Uuid::new_v4();
+    let hoveddokument_client_reference = Uuid::new_v4();
+    let hoveddokument_skuffen_id = Uuid::new_v4();
+    let vedlegg_client_reference = Uuid::new_v4();
+    let vedlegg_skuffen_id = Uuid::new_v4();
+    {
+        let mut mapping_data = id_mapping.data.lock().unwrap();
+        mapping_data
+            .client_to_skuffen
+            .insert(sak_client_reference, sak_skuffen_id);
+        mapping_data
+            .client_to_skuffen
+            .insert(journalpost_client_reference, journalpost_skuffen_id);
+        mapping_data
+            .client_to_skuffen
+            .insert(hoveddokument_client_reference, hoveddokument_skuffen_id);
+        mapping_data
+            .client_to_skuffen
+            .insert(vedlegg_client_reference, vedlegg_skuffen_id);
+    }
+    {
+        let mut execution_data = state_repo.data.lock().unwrap();
+        execution_data.saker.insert(
+            sak_skuffen_id,
+            SakState {
+                status: crate::command::ports::execution_snapshot_port::SakStatus::UnderBehandling,
+                opprettet: true,
+                saksnummer: Some("2026/1".to_string()),
+            },
+        );
+        execution_data.journalposter.insert(
+            journalpost_skuffen_id,
+            JournalpostState {
+                journalfoert: false,
+                avskrevet: false,
+                ekspedert: false,
+                har_feilede_dokumenter: false,
+                med_utsending: false,
+                journalposttype: JournalpostType::InterntNotat,
+                journalpostnummer: Some(42),
+            },
+        );
+    }
+    arkiv_gateway.data.lock().unwrap().fail_legg_til_vedlegg =
+        Some("sikri_recoverability=irrecoverable dokument avvist".to_string());
+
+    let service = build_service_with_wakeup(
+        state_repo.clone(),
+        arkiv_gateway,
+        status_publisher.clone(),
+        done_publisher,
+        id_mapping,
+        wakeup_service.clone(),
+    );
+
+    let outcome = service
+        .handle(
+            make_internt_notat_command_with_documents(
+                journalpost_client_reference,
+                sak_client_reference,
+                vec![hoveddokument_client_reference, vedlegg_client_reference],
+            ),
+            1,
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        outcome,
+        ExecutionOutcome::Error {
+            last_error: Some(ref detail)
+        } if detail.contains("dokument avvist")
+    ));
+    assert!(state_repo
+        .data
+        .lock()
+        .unwrap()
+        .dokumenter
+        .get(&vedlegg_skuffen_id)
+        .is_some_and(|state| state.irrecoverable_feil));
+    assert!(state_repo
+        .data
+        .lock()
+        .unwrap()
+        .journalposter
+        .get(&journalpost_skuffen_id)
+        .is_some_and(|state| state.har_feilede_dokumenter));
+    let events = status_publisher.events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].error_code,
+        Some(SkuffenStatusErrorCode::ProcessingFailed)
+    );
+    assert!(!wakeup_service.journalpost_calls.lock().unwrap().is_empty());
+    assert!(!wakeup_service.sak_calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn already_completed_journalfoering_triggerer_fortsatt_wakeup() {
+    let state_repo = FakeSnapshotRepository::default();
+    let arkiv_gateway = FakeArkivGateway::default();
+    let status_publisher = FakeStatusPublisher::default();
+    let done_publisher = FakeDonePublisher::default();
+    let id_mapping = FakeIdMappingRepository::default();
+    let wakeup_service = RecordingWakeupService::default();
+
+    let sak_client_reference = Uuid::new_v4();
+    let sak_skuffen_id = Uuid::new_v4();
+    let journalpost_client_reference = Uuid::new_v4();
+    let journalpost_skuffen_id = Uuid::new_v4();
+    let hoveddokument_client_reference = Uuid::new_v4();
+    let hoveddokument_skuffen_id = Uuid::new_v4();
+    let vedlegg_client_reference = Uuid::new_v4();
+    let vedlegg_skuffen_id = Uuid::new_v4();
+    {
+        let mut mapping_data = id_mapping.data.lock().unwrap();
+        mapping_data
+            .client_to_skuffen
+            .insert(sak_client_reference, sak_skuffen_id);
+        mapping_data
+            .client_to_skuffen
+            .insert(journalpost_client_reference, journalpost_skuffen_id);
+        mapping_data
+            .client_to_skuffen
+            .insert(hoveddokument_client_reference, hoveddokument_skuffen_id);
+        mapping_data
+            .client_to_skuffen
+            .insert(vedlegg_client_reference, vedlegg_skuffen_id);
+    }
+    {
+        let mut execution_data = state_repo.data.lock().unwrap();
+        execution_data.saker.insert(
+            sak_skuffen_id,
+            SakState {
+                status: crate::command::ports::execution_snapshot_port::SakStatus::UnderBehandling,
+                opprettet: true,
+                saksnummer: Some("2026/1".to_string()),
+            },
+        );
+        execution_data.journalposter.insert(
+            journalpost_skuffen_id,
+            JournalpostState {
+                journalfoert: true,
+                avskrevet: false,
+                ekspedert: false,
+                har_feilede_dokumenter: false,
+                med_utsending: false,
+                journalposttype: JournalpostType::InterntNotat,
+                journalpostnummer: Some(42),
+            },
+        );
+    }
+
+    let service = build_service_with_wakeup(
+        state_repo,
+        arkiv_gateway,
+        status_publisher,
+        done_publisher,
+        id_mapping,
+        wakeup_service.clone(),
+    );
+
+    let outcome = service
+        .handle(
+            make_internt_notat_command_with_documents(
+                journalpost_client_reference,
+                sak_client_reference,
+                vec![hoveddokument_client_reference, vedlegg_client_reference],
+            ),
+            1,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(outcome, ExecutionOutcome::Ok);
+    assert!(!wakeup_service.journalpost_calls.lock().unwrap().is_empty());
+    assert!(!wakeup_service.sak_calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn successful_opprett_sak_publishes_done() {
-    let state_repo = FakeEksekveringStateRepository::default();
+    let state_repo = FakeSnapshotRepository::default();
     let arkiv_gateway = FakeArkivGateway::default();
     let status_publisher = FakeStatusPublisher::default();
     let done_publisher = FakeDonePublisher::default();
@@ -911,7 +1144,7 @@ async fn successful_opprett_sak_publishes_done() {
 
 #[tokio::test]
 async fn successful_journalpost_execution_merges_report_ids_into_status_context() {
-    let state_repo = FakeEksekveringStateRepository::default();
+    let state_repo = FakeSnapshotRepository::default();
     let arkiv_gateway = FakeArkivGateway::default();
     let status_publisher = FakeStatusPublisher::default();
     let done_publisher = FakeDonePublisher::default();
@@ -945,7 +1178,7 @@ async fn successful_journalpost_execution_merges_report_ids_into_status_context(
         execution_data.saker.insert(
             sak_skuffen_id,
             SakState {
-                status: crate::command::ports::eksekvering_state_port::SakStatus::UnderBehandling,
+                status: crate::command::ports::execution_snapshot_port::SakStatus::UnderBehandling,
                 opprettet: true,
                 saksnummer: Some("2026/1".to_string()),
             },
@@ -983,7 +1216,7 @@ async fn successful_journalpost_execution_merges_report_ids_into_status_context(
 
 #[tokio::test]
 async fn avslutt_sak_med_arkiv_id_bruker_mapping_og_avslutter_sak() {
-    let state_repo = FakeEksekveringStateRepository::default();
+    let state_repo = FakeSnapshotRepository::default();
     let arkiv_gateway = FakeArkivGateway::default();
     let status_publisher = FakeStatusPublisher::default();
     let done_publisher = FakeDonePublisher::default();
@@ -1001,7 +1234,7 @@ async fn avslutt_sak_med_arkiv_id_bruker_mapping_og_avslutter_sak() {
         execution_data.saker.insert(
             skuffen_sak_id,
             SakState {
-                status: crate::command::ports::eksekvering_state_port::SakStatus::UnderBehandling,
+                status: crate::command::ports::execution_snapshot_port::SakStatus::UnderBehandling,
                 opprettet: true,
                 saksnummer: Some("2025/456".to_string()),
             },
@@ -1038,7 +1271,7 @@ async fn avslutt_sak_med_arkiv_id_bruker_mapping_og_avslutter_sak() {
             .get(&skuffen_sak_id)
             .unwrap()
             .status,
-        crate::command::ports::eksekvering_state_port::SakStatus::Avsluttet
+        crate::command::ports::execution_snapshot_port::SakStatus::Avsluttet
     );
 }
 

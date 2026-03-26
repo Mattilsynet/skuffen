@@ -1,96 +1,105 @@
 use chrono::{DateTime, Utc};
 use tokio::time::{sleep, Duration};
 
-use crate::command::ports::eksekvering_state_port::{
-    EksekveringKommando, EksekveringStateRepository, EksekveringStatus,
-};
+use crate::command::ports::command_execution_port::CommandExecutionRepository;
 use crate::command::services::eksekver_kommando::{EksekverKommandoService, ExecutionOutcome};
 
 pub struct EksekveringWorker {
-    state_repo: Box<dyn EksekveringStateRepository>,
+    execution_repo: Box<dyn CommandExecutionRepository>,
     executor: EksekverKommandoService,
     worker_id: String,
     poll_interval: Duration,
-    batch_size: i64,
 }
 
 impl EksekveringWorker {
     pub fn new(
-        state_repo: Box<dyn EksekveringStateRepository>,
+        execution_repo: Box<dyn CommandExecutionRepository>,
         executor: EksekverKommandoService,
         worker_id: String,
         poll_interval: Duration,
-        batch_size: i64,
     ) -> Self {
         Self {
-            state_repo,
+            execution_repo,
             executor,
             worker_id,
             poll_interval,
-            batch_size,
         }
     }
 
     pub async fn run(&self) -> anyhow::Result<()> {
-        loop {
-            let commands = self
-                .state_repo
-                .hent_klare_kommandoer(self.batch_size, &self.worker_id)
-                .await?;
+        if !self
+            .execution_repo
+            .try_acquire_executor_lock(&self.worker_id)
+            .await?
+        {
+            return Ok(());
+        }
 
-            if commands.is_empty() {
+        let _ = self.execution_repo.reset_kjorer_til_klar().await?;
+
+        loop {
+            let Some(command) = self.execution_repo.hent_neste_kjorbare().await? else {
                 sleep(self.poll_interval).await;
                 continue;
-            }
+            };
 
-            for command in commands {
-                self.execute_one(command).await?;
-            }
+            self.execute_one(command.command_id, command.envelope)
+                .await?;
         }
     }
 
-    async fn execute_one(&self, command: EksekveringKommando) -> anyhow::Result<()> {
-        let attempt = if command.attempts < 0 {
-            1
-        } else {
-            command.attempts as u32 + 1
-        };
-        let outcome = self.executor.handle(command.envelope, attempt).await?;
+    async fn execute_one(
+        &self,
+        command_id: uuid::Uuid,
+        envelope: lib_schemas::skuffen::command::commands::CommandEnvelope<
+            lib_schemas::skuffen::command::commands::Command,
+        >,
+    ) -> anyhow::Result<()> {
+        let attempt_no = self.execution_repo.marker_kjorer(command_id).await?;
+        self.execution_repo
+            .registrer_forsok(command_id, attempt_no, &self.worker_id)
+            .await?;
+
+        let outcome = self.executor.handle(envelope, attempt_no as u32).await?;
         match outcome {
             ExecutionOutcome::Ok => {
-                self.state_repo
-                    .oppdater_eksekvering(command.command_id, EksekveringStatus::Ok, None, None)
+                self.execution_repo
+                    .marker_ok(command_id, attempt_no)
                     .await?;
             }
             ExecutionOutcome::Error { last_error } => {
-                self.state_repo
-                    .oppdater_eksekvering(
-                        command.command_id,
-                        EksekveringStatus::Error,
-                        last_error,
-                        None,
+                self.execution_repo
+                    .marker_feil(
+                        command_id,
+                        attempt_no,
+                        last_error.as_deref().unwrap_or("ukjent execution-feil"),
                     )
                     .await?;
             }
-            ExecutionOutcome::Blocked { last_error } => {
-                let next_retry = self.neste_retry_at(command.attempts);
-                self.state_repo
-                    .oppdater_eksekvering(
-                        command.command_id,
-                        EksekveringStatus::Blocked,
-                        last_error,
-                        Some(next_retry),
+            ExecutionOutcome::Blocked { grunn, last_error } => {
+                let grunn =
+                    grunn.ok_or_else(|| anyhow::anyhow!("Blocked outcome mangler ventegrunn"))?;
+                self.execution_repo
+                    .marker_venter(
+                        command_id,
+                        attempt_no,
+                        &grunn,
+                        last_error
+                            .as_deref()
+                            .unwrap_or("kommando venter på prerequisite"),
                     )
                     .await?;
             }
             ExecutionOutcome::Retrying { last_error } => {
-                let next_retry = self.neste_retry_at(command.attempts);
-                self.state_repo
-                    .oppdater_eksekvering(
-                        command.command_id,
-                        EksekveringStatus::Retrying,
-                        last_error,
-                        Some(next_retry),
+                let next_retry = self.neste_retry_at(attempt_no - 1);
+                self.execution_repo
+                    .marker_retry_venter(
+                        command_id,
+                        attempt_no,
+                        last_error
+                            .as_deref()
+                            .unwrap_or("recoverable execution-feil"),
+                        next_retry,
                     )
                     .await?;
             }

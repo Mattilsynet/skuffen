@@ -8,15 +8,18 @@ mod resolved_plan;
 mod sak_handlers;
 mod state_reader;
 mod step_outcome;
+mod wakeup;
 
+use domain::eksekvering::execution::Ventegrunn;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 
 use crate::command::ports::eksekvering_port::{
     ArkivGateway, EksekveringKvitteringPublisher, EksekveringStatusPublisher,
 };
-use crate::command::ports::eksekvering_state_port::EksekveringStateRepository;
+use crate::command::ports::execution_snapshot_port::EksekveringSnapshotRepository;
 use crate::command::ports::id_mapping_port::IdMappingRepository;
 use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
+use crate::command::ports::ventende_kommando_wakeup_port::VentendeKommandoWakeup;
 use domain::eksekvering::plan::EksekveringsPlan;
 use domain::eksekvering::typer::EksekveringFeil;
 
@@ -25,20 +28,28 @@ use self::resolved_plan::{ResolvedPlan, ResolvedStep};
 use self::step_outcome::StepOutcome;
 
 pub struct EksekverKommandoService {
-    state_repo: Box<dyn EksekveringStateRepository>,
+    snapshot_repo: Box<dyn EksekveringSnapshotRepository>,
     arkiv_gateway: Box<dyn ArkivGateway>,
     status_publisher: Box<dyn EksekveringStatusPublisher>,
     done_publisher: Box<dyn EksekveringKvitteringPublisher>,
     id_mapping: Box<dyn IdMappingRepository>,
     outward_status_projector: Box<dyn CommandOutwardStatusProjector>,
+    wakeup_service: Box<dyn VentendeKommandoWakeup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionOutcome {
     Ok,
-    Blocked { last_error: Option<String> },
-    Retrying { last_error: Option<String> },
-    Error { last_error: Option<String> },
+    Blocked {
+        grunn: Option<Ventegrunn>,
+        last_error: Option<String>,
+    },
+    Retrying {
+        last_error: Option<String>,
+    },
+    Error {
+        last_error: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -55,20 +66,22 @@ impl ExecutionFailure {
 
 impl EksekverKommandoService {
     pub fn new(
-        state_repo: Box<dyn EksekveringStateRepository>,
+        snapshot_repo: Box<dyn EksekveringSnapshotRepository>,
         arkiv_gateway: Box<dyn ArkivGateway>,
         status_publisher: Box<dyn EksekveringStatusPublisher>,
         done_publisher: Box<dyn EksekveringKvitteringPublisher>,
         id_mapping: Box<dyn IdMappingRepository>,
         outward_status_projector: Box<dyn CommandOutwardStatusProjector>,
+        wakeup_service: Box<dyn VentendeKommandoWakeup>,
     ) -> Self {
         Self {
-            state_repo,
+            snapshot_repo,
             arkiv_gateway,
             status_publisher,
             done_publisher,
             id_mapping,
             outward_status_projector,
+            wakeup_service,
         }
     }
 

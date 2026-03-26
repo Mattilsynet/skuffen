@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use lib_nats::jetstream;
 use tokio::task::JoinHandle;
 
-use crate::command::adapter::eksekvering_state_postgres::PostgresEksekveringStateRepository;
 use crate::command::adapter::fake_arkiv_gateway::FakeArkivGateway;
 use crate::command::adapter::fake_command_state_repo::FakeArkivSakTilstandRepository;
 use crate::command::adapter::id_mapping_postgres::PostgresIdMappingRepository;
@@ -16,6 +15,7 @@ use crate::command::adapter::nats_publisher::NatsCommandDispatcher;
 use crate::command::adapter::nats_status_publisher::NatsCommandStatusPublisher;
 use crate::command::adapter::nats_validated_publisher::NatsValidatedCommandDispatcher;
 use crate::command::adapter::outward_status_projector::IdMappingOutwardStatusProjector;
+use crate::command::adapter::postgres_execution_store::PostgresExecutionStore;
 use crate::command::adapter::sikri_arkiv_gateway::SikriArkivGateway;
 use crate::command::adapter::sikri_command_state_repo::SikriCommandStateRepository;
 use crate::command::media::ObjectStoreMediaStore;
@@ -36,7 +36,7 @@ pub struct RuntimeDeps {
     pub nats: NatsClient,
     pub health_check_handle: JoinHandle<()>,
     pub id_mapping_repo: PostgresIdMappingRepository,
-    pub eksekvering_state_repo: PostgresEksekveringStateRepository,
+    pub execution_store: PostgresExecutionStore,
     pub media_store: std::sync::Arc<ObjectStoreMediaStore>,
     pub use_fake_sikri: bool,
 }
@@ -52,14 +52,14 @@ pub async fn prepare_runtime() -> anyhow::Result<RuntimeDeps> {
     let id_mapping_repo = PostgresIdMappingRepository::new(db_pool.clone());
     key_mapping_queries::init_id_mapping_repo(std::sync::Arc::new(id_mapping_repo.clone()));
 
-    let eksekvering_state_repo = PostgresEksekveringStateRepository::new(db_pool);
+    let execution_store = PostgresExecutionStore::new(db_pool);
     let media_store = setup_media_store(nats.clone()).await?;
 
     Ok(RuntimeDeps {
         nats,
         health_check_handle,
         id_mapping_repo,
-        eksekvering_state_repo,
+        execution_store,
         media_store,
         use_fake_sikri,
     })
@@ -122,7 +122,7 @@ pub fn build_validator_listener(
 pub fn build_eksekvering_components(
     nats: NatsClient,
     id_mapping_repo: PostgresIdMappingRepository,
-    eksekvering_state_repo: PostgresEksekveringStateRepository,
+    execution_store: PostgresExecutionStore,
     media_store: std::sync::Arc<ObjectStoreMediaStore>,
     use_fake_sikri: bool,
 ) -> (
@@ -131,7 +131,8 @@ pub fn build_eksekvering_components(
 ) {
     let registrer_i_eksekveringssystem_service =
         application::command::services::registrer_i_eksekveringssystem::RegistrerIEksekveringssystemService::new(
-            Box::new(eksekvering_state_repo.clone()),
+            Box::new(execution_store.clone()),
+            Box::new(execution_store.clone()),
             Box::new(id_mapping_repo.clone()),
             Box::new(NatsEksekveringStatusPublisher::new(nats.clone())),
             Box::new(IdMappingOutwardStatusProjector::new(Box::new(
@@ -141,7 +142,7 @@ pub fn build_eksekvering_components(
 
     let eksekvering_service =
         application::command::services::eksekver_kommando::EksekverKommandoService::new(
-            Box::new(eksekvering_state_repo.clone()),
+            Box::new(execution_store.clone()),
             arkiv_gateway(use_fake_sikri, media_store),
             Box::new(NatsEksekveringStatusPublisher::new(nats.clone())),
             Box::new(NatsDonePublisher::new(nats.clone())),
@@ -149,17 +150,28 @@ pub fn build_eksekvering_components(
             Box::new(IdMappingOutwardStatusProjector::new(Box::new(
                 id_mapping_repo.clone(),
             ))),
+            Box::new(
+                application::command::services::reevaluer_ventende_kommandoer::ReevaluerVentendeKommandoerService::new(
+                    Box::new(execution_store.clone()),
+                    Box::new(execution_store.clone()),
+                    Box::new(id_mapping_repo.clone()),
+                    Box::new(NatsEksekveringStatusPublisher::new(nats.clone())),
+                    Box::new(NatsDonePublisher::new(nats.clone())),
+                    Box::new(IdMappingOutwardStatusProjector::new(Box::new(
+                        id_mapping_repo.clone(),
+                    ))),
+                ),
+            ),
         );
 
     let eksekvering_listener =
         KommandoEksekveringListener::new(nats, Box::new(registrer_i_eksekveringssystem_service));
     let eksekvering_worker =
         application::command::services::eksekvering_worker::EksekveringWorker::new(
-            Box::new(eksekvering_state_repo),
+            Box::new(execution_store),
             eksekvering_service,
             "worker-1".to_string(),
             std::time::Duration::from_secs(5),
-            10,
         );
 
     (eksekvering_listener, eksekvering_worker)
