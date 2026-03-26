@@ -7,7 +7,7 @@ edition = "2024"
 application = { path = "../application" }
 domain = { path = "../domain" }
 
-lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas" }
+lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas", features = ["skuffen"] }
 lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats" }
 sikri_client = {path = "../../crates/sikri_client"}
 

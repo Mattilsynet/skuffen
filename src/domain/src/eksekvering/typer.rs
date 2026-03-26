@@ -1,5 +1,6 @@
 use chrono::Utc;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandStatus};
+use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +122,7 @@ impl CommandLifecycleContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandLifecycleEvent {
     pub command_id: Uuid,
+    pub correlation_id: Option<Uuid>,
     pub command_type: CommandTypeCode,
     pub entity_type: CommandEntityType,
     pub status: CommandStatus,
@@ -128,6 +130,8 @@ pub struct CommandLifecycleEvent {
     pub stage_status: CommandStageStatus,
     pub terminal: bool,
     pub message: String,
+    pub outward_message: Option<String>,
+    pub error_code: Option<SkuffenStatusErrorCode>,
     pub detail: Option<String>,
     pub context: CommandLifecycleContext,
     pub attempt: Option<u32>,
@@ -137,15 +141,18 @@ pub struct CommandLifecycleEvent {
 impl CommandLifecycleEvent {
     pub fn new(
         metadata: CommandLifecycleMetadata,
+        correlation_id: Option<Uuid>,
         status: CommandStatus,
         stage: CommandStage,
         stage_status: CommandStageStatus,
+        error_code: Option<SkuffenStatusErrorCode>,
         detail: Option<String>,
         context: CommandLifecycleContext,
         attempt: Option<u32>,
     ) -> Self {
         Self {
             command_id: metadata.command_id,
+            correlation_id,
             command_type: metadata.command_type,
             entity_type: metadata.entity_type,
             status,
@@ -153,6 +160,8 @@ impl CommandLifecycleEvent {
             stage_status,
             terminal: is_terminal(stage, stage_status),
             message: status_message(stage, stage_status),
+            outward_message: None,
+            error_code,
             detail,
             context,
             attempt,
@@ -176,6 +185,11 @@ impl CommandLifecycleEvent {
                 self.stage_status.as_code()
             ),
         }
+    }
+
+    pub fn with_outward_message(mut self, outward_message: impl Into<String>) -> Self {
+        self.outward_message = Some(outward_message.into());
+        self
     }
 }
 
@@ -252,6 +266,7 @@ pub fn status_event(
     status: CommandStatus,
     stage: CommandStage,
     stage_status: CommandStageStatus,
+    error_code: Option<SkuffenStatusErrorCode>,
     detail: Option<String>,
     context: CommandLifecycleContext,
     attempt: Option<u32>,
@@ -260,9 +275,11 @@ pub fn status_event(
 
     CommandLifecycleEvent::new(
         CommandLifecycleMetadata::new(envelope.command_id, command_type, entity_type),
+        envelope.correlation_id,
         status,
         stage,
         stage_status,
+        error_code,
         detail,
         context,
         attempt,
@@ -312,9 +329,11 @@ mod tests {
                 CommandTypeCode::OpprettSak,
                 CommandEntityType::Sak,
             ),
+            None,
             CommandStatus::Pending,
             CommandStage::Mottatt,
             CommandStageStatus::Ok,
+            None,
             None,
             CommandLifecycleContext::default(),
             None,
@@ -332,9 +351,11 @@ mod tests {
                 CommandTypeCode::OpprettSak,
                 CommandEntityType::Sak,
             ),
+            None,
             CommandStatus::Retrying,
             CommandStage::Utfores,
             CommandStageStatus::Retrying,
+            None,
             Some("Sikri timeout".to_string()),
             CommandLifecycleContext::default(),
             Some(2),

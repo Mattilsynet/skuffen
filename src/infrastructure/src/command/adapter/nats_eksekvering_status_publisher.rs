@@ -1,4 +1,4 @@
-use crate::command::status_event::StatusEventMessage;
+use crate::command::status_event::to_public_status_event;
 use crate::nats::client::NatsClient;
 use application::command::ports::eksekvering_port::EksekveringStatusPublisher;
 use async_nats::HeaderMap;
@@ -25,6 +25,7 @@ impl EksekveringStatusPublisher for NatsEksekveringStatusPublisher {
         name = "nats.publish.status.execution",
         fields(
             command_id = %event.command_id,
+            correlation_id = ?event.correlation_id,
             status = ?event.status,
             stage = event.stage.as_code(),
             stage_status = event.stage_status.as_code(),
@@ -33,7 +34,7 @@ impl EksekveringStatusPublisher for NatsEksekveringStatusPublisher {
     )]
     async fn publiser_status(&self, event: CommandLifecycleEvent) -> Result<(), anyhow::Error> {
         let subject = format!("arkiv.status.{}", event.command_id);
-        let payload = serde_json::to_vec(&StatusEventMessage::from(&event))?;
+        let payload = serde_json::to_vec(&to_public_status_event(&event))?;
         let message_id = event.message_id();
         let jetstream = jetstream::new(self.client.inner().clone());
         Span::current().record("subject", tracing::field::display(subject.as_str()));

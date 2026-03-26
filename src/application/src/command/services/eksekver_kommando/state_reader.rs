@@ -1,6 +1,6 @@
+use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::regler::{JournalpostRuleState, SakRuleState};
 use domain::eksekvering::typer::EksekveringFeil;
-use uuid::Uuid;
 
 use crate::command::ports::eksekvering_state_port::{DokumentState, JournalpostState, SakState};
 
@@ -9,47 +9,47 @@ use super::EksekverKommandoService;
 impl EksekverKommandoService {
     pub(super) async fn hent_sak_state(
         &self,
-        sak_id: Uuid,
+        sak_id: SkuffenSakId,
     ) -> Result<Option<SakState>, EksekveringFeil> {
         self.state_repo
-            .hent_sak_state_fra_state(sak_id)
+            .hent_sak_state(sak_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))
     }
 
     pub(super) async fn hent_journalpost_state(
         &self,
-        journalpost_id: Uuid,
+        journalpost_id: SkuffenJournalpostId,
     ) -> Result<Option<JournalpostState>, EksekveringFeil> {
         self.state_repo
-            .hent_journalpost_state_fra_state(journalpost_id)
+            .hent_journalpost_state(journalpost_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))
     }
 
     pub(super) async fn hent_dokument_state(
         &self,
-        dokument_id: Uuid,
+        dokument_id: SkuffenDokumentId,
     ) -> Result<Option<DokumentState>, EksekveringFeil> {
         self.state_repo
-            .hent_dokument_state_fra_state(dokument_id)
+            .hent_dokument_state(dokument_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))
     }
 
     pub(super) async fn hent_journalposter_for_sak(
         &self,
-        sak_id: Uuid,
+        sak_id: SkuffenSakId,
     ) -> Result<Vec<JournalpostState>, EksekveringFeil> {
         self.state_repo
-            .hent_journalposter_for_sak_fra_state(sak_id)
+            .hent_journalposter_for_sak(sak_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))
     }
 
     pub(super) async fn hent_saksnummer_for_sak(
         &self,
-        sak_id: Uuid,
+        sak_id: SkuffenSakId,
     ) -> Result<Option<String>, EksekveringFeil> {
         Ok(self
             .hent_sak_state(sak_id)

@@ -16,7 +16,7 @@ use crate::command::ports::eksekvering_port::{
 };
 use crate::command::ports::eksekvering_state_port::EksekveringStateRepository;
 use crate::command::ports::id_mapping_port::IdMappingRepository;
-use crate::command::ports::status_context_port::CommandStatusContextResolver;
+use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
 use domain::eksekvering::plan::EksekveringsPlan;
 use domain::eksekvering::typer::EksekveringFeil;
 
@@ -30,7 +30,7 @@ pub struct EksekverKommandoService {
     status_publisher: Box<dyn EksekveringStatusPublisher>,
     done_publisher: Box<dyn EksekveringKvitteringPublisher>,
     id_mapping: Box<dyn IdMappingRepository>,
-    status_context_resolver: Box<dyn CommandStatusContextResolver>,
+    outward_status_projector: Box<dyn CommandOutwardStatusProjector>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,7 +60,7 @@ impl EksekverKommandoService {
         status_publisher: Box<dyn EksekveringStatusPublisher>,
         done_publisher: Box<dyn EksekveringKvitteringPublisher>,
         id_mapping: Box<dyn IdMappingRepository>,
-        status_context_resolver: Box<dyn CommandStatusContextResolver>,
+        outward_status_projector: Box<dyn CommandOutwardStatusProjector>,
     ) -> Self {
         Self {
             state_repo,
@@ -68,7 +68,7 @@ impl EksekverKommandoService {
             status_publisher,
             done_publisher,
             id_mapping,
-            status_context_resolver,
+            outward_status_projector,
         }
     }
 
@@ -160,6 +160,7 @@ impl EksekverKommandoService {
                     journalpost_id,
                     dokument_id,
                     dokument_client_reference,
+                    report,
                 )
                 .await
             }

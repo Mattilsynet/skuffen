@@ -1,8 +1,25 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::plan::JournalpostType;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EksekveringsregistreringResultat {
+    Nyregistrert,
+    EksisterteUtenVenterPublisert,
+    EksisterteMedVenterPublisert,
+}
+
+impl EksekveringsregistreringResultat {
+    pub fn skal_publisere_utfores_venter(self) -> bool {
+        matches!(
+            self,
+            Self::Nyregistrert | Self::EksisterteUtenVenterPublisert
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EksekveringStatus {
@@ -36,6 +53,13 @@ pub struct SakState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SakTransition {
+    pub status: SakStatus,
+    pub opprettet: bool,
+    pub saksnummer: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalpostState {
     pub journalfoert: bool,
     pub avskrevet: bool,
@@ -52,50 +76,96 @@ pub struct DokumentState {
     pub irrecoverable_feil: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalpostOpprettetTransition {
+    pub journalpostnummer: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalpostOvergangVedJournalfoering {
+    pub journalfoert: bool,
+    pub ekspedert: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SakStateRegistration {
+    pub sak_id: SkuffenSakId,
+    pub state: SakState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalpostStateRegistration {
+    pub journalpost_id: SkuffenJournalpostId,
+    pub sak_id: SkuffenSakId,
+    pub state: JournalpostState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EksekveringssystemRegistration {
+    pub sak: Option<SakStateRegistration>,
+    pub journalpost: Option<JournalpostStateRegistration>,
+}
+
 #[async_trait]
 pub trait EksekveringStateRepository: Send + Sync {
-    async fn hent_sak_state_fra_state(
+    async fn hent_sak_state(&self, sak_id: SkuffenSakId)
+        -> Result<Option<SakState>, anyhow::Error>;
+    async fn ensure_sak_state(
         &self,
-        sak_id: Uuid,
-    ) -> Result<Option<SakState>, anyhow::Error>;
-    async fn lagre_sak_state(&self, sak_id: Uuid, state: SakState) -> Result<(), anyhow::Error>;
+        sak_id: SkuffenSakId,
+        state: SakState,
+    ) -> Result<SakState, anyhow::Error>;
+    async fn anvend_sak_transition(
+        &self,
+        sak_id: SkuffenSakId,
+        transition: SakTransition,
+    ) -> Result<SakState, anyhow::Error>;
 
-    async fn hent_journalpost_state_fra_state(
+    async fn hent_journalpost_state(
         &self,
-        journalpost_id: Uuid,
+        journalpost_id: SkuffenJournalpostId,
     ) -> Result<Option<JournalpostState>, anyhow::Error>;
-    async fn lagre_journalpost_state(
+    async fn ensure_journalpost_state(
         &self,
-        journalpost_id: Uuid,
-        sak_id: Uuid,
+        journalpost_id: SkuffenJournalpostId,
+        sak_id: SkuffenSakId,
         state: JournalpostState,
-    ) -> Result<(), anyhow::Error>;
-
-    async fn marker_journalpost_journalfoert(
+    ) -> Result<JournalpostState, anyhow::Error>;
+    async fn anvend_journalpost_opprettet(
         &self,
-        journalpost_id: Uuid,
-        journalfoert: bool,
-        ekspedert: bool,
-    ) -> Result<(), anyhow::Error>;
-
-    async fn marker_journalpost_avskrevet(&self, journalpost_id: Uuid)
-        -> Result<(), anyhow::Error>;
-
-    async fn hent_journalposter_for_sak_fra_state(
+        journalpost_id: SkuffenJournalpostId,
+        transition: JournalpostOpprettetTransition,
+    ) -> Result<JournalpostState, anyhow::Error>;
+    async fn anvend_journalpost_overgang_ved_journalfoering(
         &self,
-        sak_id: Uuid,
+        journalpost_id: SkuffenJournalpostId,
+        transition: JournalpostOvergangVedJournalfoering,
+    ) -> Result<JournalpostState, anyhow::Error>;
+    async fn anvend_journalpost_avskrevet(
+        &self,
+        journalpost_id: SkuffenJournalpostId,
+    ) -> Result<JournalpostState, anyhow::Error>;
+
+    async fn hent_journalposter_for_sak(
+        &self,
+        sak_id: SkuffenSakId,
     ) -> Result<Vec<JournalpostState>, anyhow::Error>;
 
-    async fn hent_dokument_state_fra_state(
+    async fn hent_dokument_state(
         &self,
-        dokument_id: Uuid,
+        dokument_id: SkuffenDokumentId,
     ) -> Result<Option<DokumentState>, anyhow::Error>;
-    async fn lagre_dokument_state(
+    async fn ensure_dokument_state(
         &self,
-        dokument_id: Uuid,
-        journalpost_id: Uuid,
+        dokument_id: SkuffenDokumentId,
+        journalpost_id: SkuffenJournalpostId,
         state: DokumentState,
-    ) -> Result<(), anyhow::Error>;
+    ) -> Result<DokumentState, anyhow::Error>;
+    async fn anvend_dokument_lagt_til(
+        &self,
+        dokument_id: SkuffenDokumentId,
+        journalpost_id: SkuffenJournalpostId,
+    ) -> Result<DokumentState, anyhow::Error>;
 
     async fn oppdater_eksekvering(
         &self,
@@ -109,6 +179,34 @@ pub trait EksekveringStateRepository: Send + Sync {
         &self,
         envelope: &CommandEnvelope<Command>,
     ) -> Result<bool, anyhow::Error>;
+
+    async fn ensure_registrert_i_eksekveringssystem(
+        &self,
+        registration: &EksekveringssystemRegistration,
+        envelope: &CommandEnvelope<Command>,
+    ) -> Result<EksekveringsregistreringResultat, anyhow::Error> {
+        if let Some(sak) = &registration.sak {
+            let _ = self.ensure_sak_state(sak.sak_id, sak.state.clone()).await?;
+        }
+
+        if let Some(journalpost) = &registration.journalpost {
+            let _ = self
+                .ensure_journalpost_state(
+                    journalpost.journalpost_id,
+                    journalpost.sak_id,
+                    journalpost.state.clone(),
+                )
+                .await?;
+        }
+
+        Ok(if self.registrer_kommando(envelope).await? {
+            EksekveringsregistreringResultat::Nyregistrert
+        } else {
+            EksekveringsregistreringResultat::EksisterteUtenVenterPublisert
+        })
+    }
+
+    async fn marker_utfores_venter_publisert(&self, command_id: Uuid) -> Result<(), anyhow::Error>;
 
     async fn hent_klare_kommandoer(
         &self,

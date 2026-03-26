@@ -1,6 +1,24 @@
 use async_trait::async_trait;
+use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use lib_schemas::skuffen::command::commands::Command;
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MappingEntityType {
+    Sak,
+    Journalpost,
+    Dokument,
+}
+
+impl MappingEntityType {
+    pub fn as_code(self) -> &'static str {
+        match self {
+            Self::Sak => "sak",
+            Self::Journalpost => "journalpost",
+            Self::Dokument => "dokument",
+        }
+    }
+}
 
 #[async_trait]
 pub trait IdMappingRepository: Send + Sync {
@@ -14,7 +32,7 @@ pub trait IdMappingRepository: Send + Sync {
         &self,
         command_id: Uuid,
         client_reference: Uuid,
-        skuffen_id: Uuid,
+        skuffen_id: SkuffenSakId,
         command: &Command,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error>;
@@ -23,7 +41,7 @@ pub trait IdMappingRepository: Send + Sync {
         &self,
         command_id: Uuid,
         client_reference: Uuid,
-        skuffen_id: Uuid,
+        skuffen_id: SkuffenDokumentId,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error>;
 
@@ -35,28 +53,38 @@ pub trait IdMappingRepository: Send + Sync {
 
     async fn hent_arkiv_id_fra_mapping(
         &self,
-        skuffen_id: Uuid,
+        skuffen_id: SkuffenSakId,
     ) -> Result<Option<String>, anyhow::Error>;
 
-    async fn hent_skuffen_id_fra_mapping(
+    async fn hent_sak_id_fra_mapping(
         &self,
         client_reference: Uuid,
-    ) -> Result<Option<Uuid>, anyhow::Error>;
+    ) -> Result<Option<SkuffenSakId>, anyhow::Error>;
 
-    async fn hent_skuffen_id_fra_arkiv_id_i_mapping(
+    async fn hent_journalpost_id_fra_mapping(
+        &self,
+        client_reference: Uuid,
+    ) -> Result<Option<SkuffenJournalpostId>, anyhow::Error>;
+
+    async fn hent_dokument_id_fra_mapping(
+        &self,
+        client_reference: Uuid,
+    ) -> Result<Option<SkuffenDokumentId>, anyhow::Error>;
+
+    async fn hent_sak_id_fra_arkiv_id_i_mapping(
         &self,
         arkiv_id: &str,
-    ) -> Result<Option<Uuid>, anyhow::Error>;
+    ) -> Result<Option<SkuffenSakId>, anyhow::Error>;
 
     async fn hent_eller_opprett_skuffen_id_for_arkiv_id(
         &self,
-        entity_type: &str,
+        entity_type: MappingEntityType,
         arkiv_id: &str,
-    ) -> Result<Uuid, anyhow::Error>;
+    ) -> Result<SkuffenSakId, anyhow::Error>;
 
     async fn delete_arkiv_mapping(
         &self,
-        entity_type: &str,
+        entity_type: MappingEntityType,
         arkiv_id: &str,
     ) -> Result<(), anyhow::Error>;
 }

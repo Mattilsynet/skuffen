@@ -15,9 +15,9 @@ use crate::command::adapter::nats_eksekvering_status_publisher::NatsEksekveringS
 use crate::command::adapter::nats_publisher::NatsCommandDispatcher;
 use crate::command::adapter::nats_status_publisher::NatsCommandStatusPublisher;
 use crate::command::adapter::nats_validated_publisher::NatsValidatedCommandDispatcher;
+use crate::command::adapter::outward_status_projector::IdMappingOutwardStatusProjector;
 use crate::command::adapter::sikri_arkiv_gateway::SikriArkivGateway;
 use crate::command::adapter::sikri_command_state_repo::SikriCommandStateRepository;
-use crate::command::adapter::status_context_resolver::IdMappingStatusContextResolver;
 use crate::command::media::ObjectStoreMediaStore;
 use crate::command::nats::command_listener::CommandListener;
 use crate::command::nats::eksekvering_listener::KommandoEksekveringListener;
@@ -104,7 +104,7 @@ pub fn build_validator_listener(
     id_mapping_repo: PostgresIdMappingRepository,
     use_fake_sikri: bool,
 ) -> CommandValidationListener {
-    let status_context_resolver = Box::new(IdMappingStatusContextResolver::new(Box::new(
+    let outward_status_projector = Box::new(IdMappingOutwardStatusProjector::new(Box::new(
         id_mapping_repo.clone(),
     )));
     let validator_service =
@@ -113,7 +113,7 @@ pub fn build_validator_listener(
             Box::new(id_mapping_repo),
             Box::new(NatsValidatedCommandDispatcher::new(nats.clone())),
             Box::new(NatsCommandStatusPublisher::new(nats.clone())),
-            status_context_resolver,
+            outward_status_projector,
         );
 
     CommandValidationListener::new(nats, validator_service)
@@ -129,12 +129,12 @@ pub fn build_eksekvering_components(
     KommandoEksekveringListener,
     application::command::services::eksekvering_worker::EksekveringWorker,
 ) {
-    let registrer_eksekvering_service =
-        application::command::services::registrer_eksekvering::RegistrerEksekveringService::new(
+    let registrer_i_eksekveringssystem_service =
+        application::command::services::registrer_i_eksekveringssystem::RegistrerIEksekveringssystemService::new(
             Box::new(eksekvering_state_repo.clone()),
             Box::new(id_mapping_repo.clone()),
             Box::new(NatsEksekveringStatusPublisher::new(nats.clone())),
-            Box::new(IdMappingStatusContextResolver::new(Box::new(
+            Box::new(IdMappingOutwardStatusProjector::new(Box::new(
                 id_mapping_repo.clone(),
             ))),
         );
@@ -146,13 +146,13 @@ pub fn build_eksekvering_components(
             Box::new(NatsEksekveringStatusPublisher::new(nats.clone())),
             Box::new(NatsDonePublisher::new(nats.clone())),
             Box::new(id_mapping_repo.clone()),
-            Box::new(IdMappingStatusContextResolver::new(Box::new(
+            Box::new(IdMappingOutwardStatusProjector::new(Box::new(
                 id_mapping_repo.clone(),
             ))),
         );
 
     let eksekvering_listener =
-        KommandoEksekveringListener::new(nats, Box::new(registrer_eksekvering_service));
+        KommandoEksekveringListener::new(nats, Box::new(registrer_i_eksekveringssystem_service));
     let eksekvering_worker =
         application::command::services::eksekvering_worker::EksekveringWorker::new(
             Box::new(eksekvering_state_repo),

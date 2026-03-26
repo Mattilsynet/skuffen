@@ -1,11 +1,11 @@
 use anyhow::Result;
+use application::command::ports::id_mapping_port::IdMappingRepository;
+use domain::eksekvering::id::SkuffenSakId;
 use domain::model::sak::Saksnummer;
 // use tracing::error;
 use uuid::Uuid;
 
 use std::sync::{Arc, OnceLock, RwLock};
-
-use application::command::ports::id_mapping_port::IdMappingRepository;
 
 static ID_MAPPING_REPO: OnceLock<RwLock<Option<Arc<dyn IdMappingRepository + Send + Sync>>>> =
     OnceLock::new();
@@ -31,11 +31,11 @@ fn get_repo() -> Arc<dyn IdMappingRepository + Send + Sync> {
 pub async fn lookup_skuffen_id_fra_arkiv_id(saksnummer: Saksnummer) -> Result<Uuid> {
     let repo = get_repo();
     let maybe_skuffen_id = repo
-        .hent_skuffen_id_fra_arkiv_id_i_mapping(saksnummer.as_str())
+        .hent_sak_id_fra_arkiv_id_i_mapping(saksnummer.as_str())
         .await?;
 
     match maybe_skuffen_id {
-        Some(uid) => Ok(uid),
+        Some(uid) => Ok(Uuid::from(uid)),
         None => Err(anyhow::anyhow!(
             "Skuffen ID ikke funnet for arkiv_id: {}",
             saksnummer.as_str()
@@ -45,7 +45,9 @@ pub async fn lookup_skuffen_id_fra_arkiv_id(saksnummer: Saksnummer) -> Result<Uu
 
 pub async fn lookup_arkiv_id_fra_skuffen_id(skuffen_id: Uuid) -> Result<Saksnummer> {
     let repo = get_repo();
-    let maybe_arkiv_id = repo.hent_arkiv_id_fra_mapping(skuffen_id).await?;
+    let maybe_arkiv_id = repo
+        .hent_arkiv_id_fra_mapping(SkuffenSakId::from(skuffen_id))
+        .await?;
 
     match maybe_arkiv_id {
         Some(s) => Saksnummer::new(s),

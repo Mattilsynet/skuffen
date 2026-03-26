@@ -1,9 +1,10 @@
+use domain::eksekvering::id::SkuffenSakId;
 use domain::eksekvering::regler::kan_avslutte_sak;
 use domain::eksekvering::typer::EksekveringFeil;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use uuid::Uuid;
 
-use crate::command::ports::eksekvering_state_port::{SakState, SakStatus};
+use crate::command::ports::eksekvering_state_port::{SakStatus, SakTransition};
 
 use super::execution_report::ExecutionReport;
 use super::prerequisite::Prerequisite;
@@ -15,7 +16,7 @@ impl EksekverKommandoService {
     pub(super) async fn opprett_sak(
         &self,
         envelope: &CommandEnvelope<Command>,
-        sak_id: Uuid,
+        sak_id: SkuffenSakId,
         sak_client_reference: Uuid,
         report: &mut ExecutionReport,
     ) -> Result<StepOutcome, EksekveringFeil> {
@@ -39,9 +40,9 @@ impl EksekverKommandoService {
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
         self.state_repo
-            .lagre_sak_state(
+            .anvend_sak_transition(
                 sak_id,
-                SakState {
+                SakTransition {
                     status: SakStatus::UnderBehandling,
                     opprettet: true,
                     saksnummer: Some(saksnummer.clone()),
@@ -58,7 +59,7 @@ impl EksekverKommandoService {
     pub(super) async fn avslutt_sak(
         &self,
         _envelope: &CommandEnvelope<Command>,
-        sak_id: Uuid,
+        sak_id: SkuffenSakId,
     ) -> Result<StepOutcome, EksekveringFeil> {
         let Some(state) = self.hent_sak_state(sak_id).await? else {
             return Ok(StepOutcome::blocked(
@@ -88,9 +89,9 @@ impl EksekverKommandoService {
             .map_err(|err| self.map_arkiv_feil(err))?;
 
         self.state_repo
-            .lagre_sak_state(
+            .anvend_sak_transition(
                 sak_id,
-                SakState {
+                SakTransition {
                     status: SakStatus::Avsluttet,
                     opprettet: true,
                     saksnummer: Some(saksnummer),

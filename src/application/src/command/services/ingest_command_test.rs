@@ -1,8 +1,9 @@
 use crate::command::ports::command_dispatcher_port::CommandDispatcher;
-use crate::command::ports::id_mapping_port::IdMappingRepository;
+use crate::command::ports::id_mapping_port::{IdMappingRepository, MappingEntityType};
 use crate::command::ports::status_publisher_port::CommandStatusPublisher;
 use crate::command::services::ingest_command::IngestCommandService;
 use async_trait::async_trait;
+use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::typer::CommandLifecycleEvent;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
 use lib_schemas::skuffen::command::journalpost::{
@@ -38,7 +39,7 @@ impl IdMappingRepository for FakeIdMappingRepository {
         &self,
         command_id: Uuid,
         client_reference: Uuid,
-        skuffen_id: Uuid,
+        skuffen_id: SkuffenSakId,
         command: &Command,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
@@ -56,7 +57,7 @@ impl IdMappingRepository for FakeIdMappingRepository {
             .iter()
             .find(|(_, existing_client_ref, _, _, _)| *existing_client_ref == client_reference)
         {
-            if *existing_skuffen_id != skuffen_id {
+            if *existing_skuffen_id != Uuid::from(skuffen_id) {
                 return Err(anyhow::anyhow!(
                     "client_reference is already mapped to a different skuffen_id"
                 ));
@@ -66,7 +67,7 @@ impl IdMappingRepository for FakeIdMappingRepository {
         store.push((
             command_id,
             client_reference,
-            skuffen_id,
+            Uuid::from(skuffen_id),
             entity_type.to_string(),
             arkiv_id,
         ));
@@ -77,7 +78,7 @@ impl IdMappingRepository for FakeIdMappingRepository {
         &self,
         command_id: Uuid,
         client_reference: Uuid,
-        skuffen_id: Uuid,
+        skuffen_id: SkuffenDokumentId,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
         if self.should_fail {
@@ -88,7 +89,7 @@ impl IdMappingRepository for FakeIdMappingRepository {
             .iter()
             .find(|(_, existing_client_ref, _, _, _)| *existing_client_ref == client_reference)
         {
-            if *existing_skuffen_id != skuffen_id {
+            if *existing_skuffen_id != Uuid::from(skuffen_id) {
                 return Err(anyhow::anyhow!(
                     "client_reference is already mapped to a different skuffen_id"
                 ));
@@ -98,7 +99,7 @@ impl IdMappingRepository for FakeIdMappingRepository {
         store.push((
             command_id,
             client_reference,
-            skuffen_id,
+            Uuid::from(skuffen_id),
             "dokument".to_string(),
             arkiv_id,
         ));
@@ -115,36 +116,50 @@ impl IdMappingRepository for FakeIdMappingRepository {
 
     async fn hent_arkiv_id_fra_mapping(
         &self,
-        _skuffen_id: Uuid,
+        _skuffen_id: SkuffenSakId,
     ) -> Result<Option<String>, anyhow::Error> {
         Ok(None)
     }
 
-    async fn hent_skuffen_id_fra_mapping(
+    async fn hent_sak_id_fra_mapping(
         &self,
         _client_reference: Uuid,
-    ) -> Result<Option<Uuid>, anyhow::Error> {
+    ) -> Result<Option<SkuffenSakId>, anyhow::Error> {
         Ok(None)
     }
 
-    async fn hent_skuffen_id_fra_arkiv_id_i_mapping(
+    async fn hent_journalpost_id_fra_mapping(
+        &self,
+        _client_reference: Uuid,
+    ) -> Result<Option<SkuffenJournalpostId>, anyhow::Error> {
+        Ok(None)
+    }
+
+    async fn hent_dokument_id_fra_mapping(
+        &self,
+        _client_reference: Uuid,
+    ) -> Result<Option<SkuffenDokumentId>, anyhow::Error> {
+        Ok(None)
+    }
+
+    async fn hent_sak_id_fra_arkiv_id_i_mapping(
         &self,
         _arkiv_id: &str,
-    ) -> Result<Option<Uuid>, anyhow::Error> {
+    ) -> Result<Option<SkuffenSakId>, anyhow::Error> {
         Ok(None)
     }
 
     async fn hent_eller_opprett_skuffen_id_for_arkiv_id(
         &self,
-        _entity_type: &str,
+        _entity_type: MappingEntityType,
         _arkiv_id: &str,
-    ) -> Result<Uuid, anyhow::Error> {
-        Ok(Uuid::new_v4())
+    ) -> Result<SkuffenSakId, anyhow::Error> {
+        Ok(SkuffenSakId::from(Uuid::new_v4()))
     }
 
     async fn delete_arkiv_mapping(
         &self,
-        _entity_type: &str,
+        _entity_type: MappingEntityType,
         _arkiv_id: &str,
     ) -> Result<(), anyhow::Error> {
         Ok(())

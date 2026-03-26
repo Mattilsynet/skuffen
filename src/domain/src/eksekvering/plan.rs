@@ -46,7 +46,7 @@ pub enum Steg {
         journalpost_id: Uuid,
     },
     AvsluttSak {
-        sak_id: Uuid,
+        sak_key: SakKey,
     },
 }
 
@@ -63,14 +63,11 @@ impl EksekveringsPlan {
                     sak_id: cmd.client_reference,
                 }],
             }),
-            Command::AvsluttSak(cmd) => match cmd.sak_key.clone() {
-                SakKey::ClientReference(sak_id) => Ok(Self {
-                    steg: vec![Steg::AvsluttSak { sak_id }],
-                }),
-                SakKey::ArkivId(_) => Err(EksekveringFeil::blocked(
-                    "Sak kan ikke avsluttes uten skuffen-id",
-                )),
-            },
+            Command::AvsluttSak(cmd) => Ok(Self {
+                steg: vec![Steg::AvsluttSak {
+                    sak_key: cmd.sak_key.clone(),
+                }],
+            }),
             Command::OpprettInngåendeJournalpost(cmd) => {
                 Self::valider_felles(&cmd.felles)?;
                 if cmd.avsender.trim().is_empty() {

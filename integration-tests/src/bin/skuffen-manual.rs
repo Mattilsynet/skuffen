@@ -8,7 +8,6 @@ use anyhow::Result;
 use async_nats::{jetstream, Client, ConnectOptions};
 use bytes::Bytes;
 use futures::StreamExt;
-use infrastructure::command::status_event::StatusEventMessage;
 use lib_nats::chunked_upload::protocol::{
     build_chunk_headers, split_payload, ChunkedUploadConfig, UploadMetadata,
 };
@@ -19,6 +18,7 @@ use lib_schemas::skuffen::command::journalpost::{
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::dokument::Dokument as DtoDokument;
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
+use lib_schemas::skuffen::status::SkuffenStatusEventV1;
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -404,22 +404,14 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
                 anyhow::bail!("Status consumer closed for command_id={command_id}");
             };
             let msg = msg?;
-            let event: StatusEventMessage = serde_json::from_slice(&msg.payload)?;
+            let event: SkuffenStatusEventV1 = serde_json::from_slice(&msg.payload)?;
             let attempt = event
                 .attempt
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string());
-            let detail = event.detail.as_deref().unwrap_or("-");
             println!(
-                "command_id={} status={:?} stage={} stage_status={} terminal={} attempt={} message={} detail={}",
-                event.command_id,
-                event.status,
-                event.stage,
-                event.stage_status,
-                event.terminal,
-                attempt,
-                event.message,
-                detail
+                "command_id={} status={:?} phase={:?} terminal={} attempt={} message={}",
+                event.command_id, event.status, event.phase, event.terminal, attempt, event.message
             );
             msg.ack()
                 .await

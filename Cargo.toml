@@ -25,7 +25,6 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 enum_glob_use = "deny"
 
-
 [dependencies]
 domain        = { path = "src/domain" }
 application   = { path = "src/application" }

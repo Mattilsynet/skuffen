@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use infrastructure::command::status_event::StatusEventMessage;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -9,6 +8,7 @@ use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
+use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1, SkuffenStatusPhase};
 
 use support::{
     fetch_dokument_state_for_client_reference, fetch_journalpost_state_for_client_reference,
@@ -41,6 +41,12 @@ async fn command_sequence_opprett_internt_notat_avslutt_sak() -> Result<()> {
         format!("Internt notat {}", Uuid::new_v4()),
     );
     send_command_batch(&env.nats_url, &commands).await?;
+    wait_for_command_execution_all(
+        &env.pool,
+        commands.iter().map(|command| command.command_id),
+        Duration::from_secs(20),
+    )
+    .await?;
     let events = wait_for_status_events(
         &env.nats_url,
         commands.iter().map(|command| command.command_id),
@@ -48,12 +54,6 @@ async fn command_sequence_opprett_internt_notat_avslutt_sak() -> Result<()> {
     )
     .await?;
     assert_happy_path_stages(&events, commands.iter().map(|command| command.command_id));
-    wait_for_command_execution_all(
-        &env.pool,
-        commands.iter().map(|command| command.command_id),
-        Duration::from_secs(20),
-    )
-    .await?;
 
     let sak_state =
         fetch_sak_state_for_client_reference(&env.pool, scenario.sak_client_reference).await?;
@@ -96,6 +96,12 @@ async fn command_sequence_inngaende_journalpost_flow() -> Result<()> {
     )];
     insert_arkiv_id_mapping(&env.pool, scenario.sak_skuffen_id, "sak", saksnummer).await?;
     send_command_batch(&env.nats_url, &commands).await?;
+    wait_for_command_execution_all(
+        &env.pool,
+        commands.iter().map(|command| command.command_id),
+        Duration::from_secs(20),
+    )
+    .await?;
     let events = wait_for_status_events(
         &env.nats_url,
         commands.iter().map(|command| command.command_id),
@@ -103,12 +109,6 @@ async fn command_sequence_inngaende_journalpost_flow() -> Result<()> {
     )
     .await?;
     assert_happy_path_stages(&events, commands.iter().map(|command| command.command_id));
-    wait_for_command_execution_all(
-        &env.pool,
-        commands.iter().map(|command| command.command_id),
-        Duration::from_secs(20),
-    )
-    .await?;
 
     let journalpost_state = fetch_journalpost_state_for_client_reference(
         &env.pool,
@@ -144,6 +144,12 @@ async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
     )];
     insert_arkiv_id_mapping(&env.pool, scenario.sak_skuffen_id, "sak", saksnummer).await?;
     send_command_batch(&env.nats_url, &commands).await?;
+    wait_for_command_execution_all(
+        &env.pool,
+        commands.iter().map(|command| command.command_id),
+        Duration::from_secs(20),
+    )
+    .await?;
     let events = wait_for_status_events(
         &env.nats_url,
         commands.iter().map(|command| command.command_id),
@@ -151,12 +157,6 @@ async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
     )
     .await?;
     assert_happy_path_stages(&events, commands.iter().map(|command| command.command_id));
-    wait_for_command_execution_all(
-        &env.pool,
-        commands.iter().map(|command| command.command_id),
-        Duration::from_secs(20),
-    )
-    .await?;
 
     let journalpost_state = fetch_journalpost_state_for_client_reference(
         &env.pool,
@@ -322,7 +322,7 @@ async fn avslutt_sak_blokkeres_nar_journalpost_ikke_er_ok() -> Result<()> {
         "#,
     )
     .bind(journalpost_id)
-    .bind(sak_client_reference)
+    .bind(sak_skuffen_id_for_client_reference(&env.pool, sak_client_reference).await?)
     .execute(&env.pool)
     .await?;
 
@@ -357,26 +357,104 @@ async fn avslutt_sak_blokkeres_nar_journalpost_ikke_er_ok() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn avslutt_sak_med_arkiv_id_fullfoerer_gjennom_hele_flyten() -> Result<()> {
+    let arkiv_gateway = FakeArkivGateway::new(Arc::new(FakeArkivGatewayState::new()));
+    let env = support::start_runtime(
+        Box::new(FakeArkivSakTilstandRepository),
+        Box::new(arkiv_gateway),
+        None,
+    )
+    .await?;
+
+    let saksnummer = "2026/200001";
+    let sak_skuffen_id = Uuid::new_v4();
+    insert_arkiv_id_mapping(&env.pool, sak_skuffen_id, "sak", saksnummer).await?;
+
+    let avslutt_sak = CommandEnvelope {
+        command_id: Uuid::new_v4(),
+        correlation_id: Some(Uuid::new_v4()),
+        payload: Command::AvsluttSak(AvsluttSak {
+            sak_key: DtoSakKey::ArkivId(DtoSaksnummer::new(saksnummer)?),
+        }),
+    };
+
+    send_command_batch(&env.nats_url, std::slice::from_ref(&avslutt_sak)).await?;
+    wait_for_command_execution_all(&env.pool, [avslutt_sak.command_id], Duration::from_secs(20))
+        .await?;
+
+    let status: Option<(String,)> = sqlx::query_as(
+        r#"
+        SELECT status
+        FROM command_execution
+        WHERE command_id = $1
+        "#,
+    )
+    .bind(avslutt_sak.command_id)
+    .fetch_optional(&env.pool)
+    .await?;
+    assert_eq!(status.map(|(s,)| s), Some("ok".to_string()));
+
+    let sak_state: Option<(String, bool, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT status, opprettet, saksnummer
+        FROM sak_state
+        WHERE sak_id = $1
+        "#,
+    )
+    .bind(sak_skuffen_id)
+    .fetch_optional(&env.pool)
+    .await?;
+    assert_eq!(
+        sak_state,
+        Some(("A".to_string(), true, Some(saksnummer.to_string())))
+    );
+
+    Ok(())
+}
+
+async fn sak_skuffen_id_for_client_reference(
+    pool: &sqlx::PgPool,
+    client_reference: Uuid,
+) -> Result<Uuid> {
+    let skuffen_id: Option<Uuid> = sqlx::query_scalar(
+        r#"
+        SELECT skuffen_id
+        FROM id_mapping
+        WHERE client_reference = $1
+        "#,
+    )
+    .bind(client_reference)
+    .fetch_optional(pool)
+    .await?;
+
+    skuffen_id.ok_or_else(|| anyhow::anyhow!("Missing skuffen_id for sak client_reference"))
+}
+
 fn assert_happy_path_stages(
-    events: &[StatusEventMessage],
+    events: &[SkuffenStatusEventV1],
     command_ids: impl IntoIterator<Item = Uuid>,
 ) {
     for command_id in command_ids {
-        let command_events: Vec<&StatusEventMessage> = events
+        let command_events: Vec<&SkuffenStatusEventV1> = events
             .iter()
             .filter(|event| event.command_id == command_id)
             .collect();
         assert!(command_events
             .iter()
-            .any(|event| event.message == "mottatt"));
+            .any(|event| event.phase == SkuffenStatusPhase::Ingest));
         assert!(command_events
             .iter()
-            .any(|event| event.message == "validert::ok"));
+            .any(|event| event.phase == SkuffenStatusPhase::Validate
+                && event.status == SkuffenStatus::Ok));
         assert!(command_events
             .iter()
-            .any(|event| event.message == "utfores::venter"));
+            .any(|event| event.phase == SkuffenStatusPhase::Execution
+                && event.status == SkuffenStatus::Pending));
         assert!(command_events
             .iter()
-            .any(|event| event.message == "utfores::ok" && event.terminal));
+            .any(|event| event.phase == SkuffenStatusPhase::Execution
+                && event.status == SkuffenStatus::Ok
+                && event.terminal));
     }
 }

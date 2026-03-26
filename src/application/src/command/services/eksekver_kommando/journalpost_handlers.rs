@@ -1,13 +1,15 @@
+use domain::eksekvering::id::SkuffenJournalpostId;
 use domain::eksekvering::regler::{
     kan_avskrive_journalpost, kan_journalfoere_journalpost, kan_opprette_journalpost_pa_sak,
     neste_journalpost_status_ved_journalfoering,
 };
 use domain::eksekvering::typer::EksekveringFeil;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use uuid::Uuid;
 
 use crate::command::ports::eksekvering_port::{OpprettJournalpostResultat, Utsendingsvalg};
-use crate::command::ports::eksekvering_state_port::{DokumentState, JournalpostState};
+use crate::command::ports::eksekvering_state_port::{
+    JournalpostOpprettetTransition, JournalpostOvergangVedJournalfoering,
+};
 
 use super::execution_report::ExecutionReport;
 use super::prerequisite::Prerequisite;
@@ -59,6 +61,8 @@ impl EksekverKommandoService {
             }
         };
 
+        report.set_saksnummer(saksnummer.clone());
+
         let OpprettJournalpostResultat { journalpost_id } = self
             .arkiv_gateway
             .opprett_journalpost(envelope, saksnummer.as_str(), utsending)
@@ -74,20 +78,10 @@ impl EksekverKommandoService {
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
         self.state_repo
-            .lagre_journalpost_state(
+            .anvend_journalpost_opprettet(
                 plan.journalpost_id,
-                plan.sak_id,
-                JournalpostState {
-                    journalfoert: false,
-                    avskrevet: false,
-                    ekspedert: false,
-                    har_feilede_dokumenter: false,
-                    med_utsending: matches!(
-                        plan.utsending,
-                        Some(domain::eksekvering::plan::Utsending::MedUtsending)
-                    ),
-                    journalposttype: plan.journalpost_type,
-                    journalpostnummer: Some(journalpost_id),
+                JournalpostOpprettetTransition {
+                    journalpostnummer: journalpost_id,
                 },
             )
             .await
@@ -95,19 +89,12 @@ impl EksekverKommandoService {
 
         if let Some(hoveddokument) = plan.dokumenter.first() {
             self.state_repo
-                .lagre_dokument_state(
-                    hoveddokument.dokument_id,
-                    plan.journalpost_id,
-                    DokumentState {
-                        lagt_til: true,
-                        irrecoverable_feil: false,
-                    },
-                )
+                .anvend_dokument_lagt_til(hoveddokument.dokument_id, plan.journalpost_id)
                 .await
                 .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
         }
 
-        report.set_journalpostnummer(journalpost_id);
+        report.set_journalpost_id(journalpost_id.to_string());
 
         Ok(StepOutcome::Completed)
     }
@@ -115,7 +102,7 @@ impl EksekverKommandoService {
     pub(super) async fn journalfoer_journalpost(
         &self,
         _envelope: &CommandEnvelope<Command>,
-        journalpost_id: Uuid,
+        journalpost_id: SkuffenJournalpostId,
     ) -> Result<StepOutcome, EksekveringFeil> {
         let Some(state) = self.hent_journalpost_state(journalpost_id).await? else {
             return Ok(StepOutcome::blocked(
@@ -149,10 +136,12 @@ impl EksekverKommandoService {
             .map_err(|err| self.map_arkiv_feil(err))?;
 
         self.state_repo
-            .marker_journalpost_journalfoert(
+            .anvend_journalpost_overgang_ved_journalfoering(
                 journalpost_id,
-                transition.journalfoert,
-                transition.ekspedert,
+                JournalpostOvergangVedJournalfoering {
+                    journalfoert: transition.journalfoert,
+                    ekspedert: transition.ekspedert,
+                },
             )
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
@@ -163,7 +152,7 @@ impl EksekverKommandoService {
     pub(super) async fn avskriv_journalpost(
         &self,
         _envelope: &CommandEnvelope<Command>,
-        journalpost_id: Uuid,
+        journalpost_id: SkuffenJournalpostId,
     ) -> Result<StepOutcome, EksekveringFeil> {
         let Some(state) = self.hent_journalpost_state(journalpost_id).await? else {
             return Ok(StepOutcome::blocked(
@@ -201,7 +190,7 @@ impl EksekverKommandoService {
             .map_err(|err| self.map_arkiv_feil(err))?;
 
         self.state_repo
-            .marker_journalpost_avskrevet(journalpost_id)
+            .anvend_journalpost_avskrevet(journalpost_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 

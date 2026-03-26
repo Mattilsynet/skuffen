@@ -1,18 +1,18 @@
-use domain::eksekvering::plan::{JournalpostType, Utsending};
+use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
+use domain::eksekvering::plan::Utsending;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedDocument {
-    pub dokument_id: Uuid,
+    pub dokument_id: SkuffenDokumentId,
     pub client_reference: Uuid,
 }
 
 #[derive(Debug, Clone)]
 pub struct ResolvedJournalpostPlan {
-    pub journalpost_id: Uuid,
+    pub journalpost_id: SkuffenJournalpostId,
     pub journalpost_client_reference: Uuid,
-    pub sak_id: Uuid,
-    pub journalpost_type: JournalpostType,
+    pub sak_id: SkuffenSakId,
     pub utsending: Option<Utsending>,
     pub dokumenter: Vec<ResolvedDocument>,
 }
@@ -20,25 +20,25 @@ pub struct ResolvedJournalpostPlan {
 #[derive(Debug, Clone)]
 pub enum ResolvedStep {
     OpprettSak {
-        sak_id: Uuid,
+        sak_id: SkuffenSakId,
         sak_client_reference: Uuid,
     },
     OpprettJournalpost {
         plan: ResolvedJournalpostPlan,
     },
     LeggTilDokument {
-        journalpost_id: Uuid,
-        dokument_id: Uuid,
+        journalpost_id: SkuffenJournalpostId,
+        dokument_id: SkuffenDokumentId,
         dokument_client_reference: Uuid,
     },
     Journalfoer {
-        journalpost_id: Uuid,
+        journalpost_id: SkuffenJournalpostId,
     },
     Avskriv {
-        journalpost_id: Uuid,
+        journalpost_id: SkuffenJournalpostId,
     },
     AvsluttSak {
-        sak_id: Uuid,
+        sak_id: SkuffenSakId,
     },
 }
 

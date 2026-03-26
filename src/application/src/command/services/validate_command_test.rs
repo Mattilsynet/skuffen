@@ -10,17 +10,19 @@ use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::dokument::Dokument;
 use lib_schemas::skuffen::query::queries::SakKey;
 use lib_schemas::skuffen::sak::{Ordningsverdi, Saksnummer, Sakstittel};
+use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use crate::command::ports::command_state_port::{
     ArkivSakTilstand, ArkivSakTilstandError, ArkivSakTilstandErrorKind, ArkivSakTilstandRepository,
 };
-use crate::command::ports::id_mapping_port::IdMappingRepository;
-use crate::command::ports::status_context_port::CommandStatusContextResolver;
+use crate::command::ports::id_mapping_port::{IdMappingRepository, MappingEntityType};
+use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
 use crate::command::ports::status_publisher_port::CommandStatusPublisher;
 use crate::command::ports::validated_command_dispatcher_port::ValidatedCommandDispatcher;
 use crate::command::services::validate_command::{ValidateCommandService, ValidationOutcome};
+use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 
 #[derive(Clone, Default)]
 struct FakeCommandStatusPublisher {
@@ -39,7 +41,7 @@ impl CommandStatusPublisher for FakeCommandStatusPublisher {
 struct FakeStatusContextResolver;
 
 #[async_trait]
-impl CommandStatusContextResolver for FakeStatusContextResolver {
+impl CommandOutwardStatusProjector for FakeStatusContextResolver {
     async fn resolve_context(
         &self,
         _envelope: &CommandEnvelope<Command>,
@@ -127,10 +129,11 @@ impl Default for IdMappingResponses {
 
 #[derive(Clone, Default)]
 struct IdMappingCalls {
-    hent_skuffen_id_fra_mapping: usize,
+    hent_sak_id_fra_mapping: usize,
     hent_arkiv_id_fra_mapping: usize,
     last_client_reference: Option<Uuid>,
-    last_skuffen_id: Option<Uuid>,
+    last_skuffen_id: Option<SkuffenSakId>,
+    write_calls: usize,
 }
 
 #[derive(Clone)]
@@ -165,10 +168,11 @@ impl IdMappingRepository for FakeIdMappingRepository {
         &self,
         _command_id: Uuid,
         _client_reference: Uuid,
-        _skuffen_id: Uuid,
+        _skuffen_id: SkuffenSakId,
         _command: &Command,
         _arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
+        self.calls.lock().unwrap().write_calls += 1;
         Ok(())
     }
 
@@ -176,9 +180,10 @@ impl IdMappingRepository for FakeIdMappingRepository {
         &self,
         _command_id: Uuid,
         _client_reference: Uuid,
-        _skuffen_id: Uuid,
+        _skuffen_id: SkuffenDokumentId,
         _arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
+        self.calls.lock().unwrap().write_calls += 1;
         Ok(())
     }
 
@@ -187,12 +192,13 @@ impl IdMappingRepository for FakeIdMappingRepository {
         _client_reference: Uuid,
         _arkiv_id: String,
     ) -> Result<(), anyhow::Error> {
+        self.calls.lock().unwrap().write_calls += 1;
         Ok(())
     }
 
     async fn hent_arkiv_id_fra_mapping(
         &self,
-        skuffen_id: Uuid,
+        skuffen_id: SkuffenSakId,
     ) -> Result<Option<String>, anyhow::Error> {
         let mut calls = self.calls.lock().unwrap();
         calls.hent_arkiv_id_fra_mapping += 1;
@@ -205,41 +211,57 @@ impl IdMappingRepository for FakeIdMappingRepository {
         }
     }
 
-    async fn hent_skuffen_id_fra_mapping(
+    async fn hent_sak_id_fra_mapping(
         &self,
         client_reference: Uuid,
-    ) -> Result<Option<Uuid>, anyhow::Error> {
+    ) -> Result<Option<SkuffenSakId>, anyhow::Error> {
         let mut calls = self.calls.lock().unwrap();
-        calls.hent_skuffen_id_fra_mapping += 1;
+        calls.hent_sak_id_fra_mapping += 1;
         calls.last_client_reference = Some(client_reference);
         drop(calls);
 
         match self.responses.lock().unwrap().skuffen_id.clone() {
-            SkuffenIdResponse::Ok(value) => Ok(value),
+            SkuffenIdResponse::Ok(value) => Ok(value.map(SkuffenSakId::from)),
             SkuffenIdResponse::Err(message) => Err(anyhow::anyhow!(message)),
         }
     }
 
-    async fn hent_skuffen_id_fra_arkiv_id_i_mapping(
+    async fn hent_journalpost_id_fra_mapping(
+        &self,
+        _client_reference: Uuid,
+    ) -> Result<Option<SkuffenJournalpostId>, anyhow::Error> {
+        Ok(None)
+    }
+
+    async fn hent_dokument_id_fra_mapping(
+        &self,
+        _client_reference: Uuid,
+    ) -> Result<Option<SkuffenDokumentId>, anyhow::Error> {
+        Ok(None)
+    }
+
+    async fn hent_sak_id_fra_arkiv_id_i_mapping(
         &self,
         _arkiv_id: &str,
-    ) -> Result<Option<Uuid>, anyhow::Error> {
+    ) -> Result<Option<SkuffenSakId>, anyhow::Error> {
         Ok(None)
     }
 
     async fn hent_eller_opprett_skuffen_id_for_arkiv_id(
         &self,
-        _entity_type: &str,
+        _entity_type: MappingEntityType,
         _arkiv_id: &str,
-    ) -> Result<Uuid, anyhow::Error> {
-        Ok(Uuid::new_v4())
+    ) -> Result<SkuffenSakId, anyhow::Error> {
+        self.calls.lock().unwrap().write_calls += 1;
+        Ok(SkuffenSakId::from(Uuid::new_v4()))
     }
 
     async fn delete_arkiv_mapping(
         &self,
-        _entity_type: &str,
+        _entity_type: MappingEntityType,
         _arkiv_id: &str,
     ) -> Result<(), anyhow::Error> {
+        self.calls.lock().unwrap().write_calls += 1;
         Ok(())
     }
 }
@@ -314,6 +336,7 @@ fn assert_statuses(
     final_status: CommandStatus,
     final_stage_status: CommandStageStatus,
     final_detail: Option<&str>,
+    expected_error_code: Option<SkuffenStatusErrorCode>,
 ) {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].status, final_status);
@@ -331,6 +354,7 @@ fn assert_statuses(
         Some(expected) => assert_eq!(events[0].detail.as_deref(), Some(expected)),
         None => assert!(events[0].detail.is_none()),
     }
+    assert_eq!(events[0].error_code, expected_error_code);
 }
 
 #[tokio::test]
@@ -362,9 +386,11 @@ async fn test_validate_opprett_sak_dispatches_and_emits_ok_status() {
         CommandStatus::Ok,
         CommandStageStatus::Ok,
         None,
+        None,
     );
 
     assert!(state_repo.calls.lock().unwrap().is_empty());
+    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
@@ -388,8 +414,12 @@ async fn test_validate_journalpost_missing_sak_is_irrecoverable() {
     let outcome = service.handle(envelope).await.unwrap();
 
     match outcome {
-        ValidationOutcome::Irrecoverable { message } => {
+        ValidationOutcome::Irrecoverable {
+            message,
+            error_code,
+        } => {
             assert_eq!(message, "Sak finnes ikke i Skuffen");
+            assert_eq!(error_code, SkuffenStatusErrorCode::NotFound);
         }
         _ => panic!("Expected irrecoverable validation outcome"),
     }
@@ -403,9 +433,11 @@ async fn test_validate_journalpost_missing_sak_is_irrecoverable() {
         CommandStatus::Error,
         CommandStageStatus::Error,
         Some("Sak finnes ikke i Skuffen"),
+        Some(SkuffenStatusErrorCode::NotFound),
     );
 
     assert!(state_repo.calls.lock().unwrap().is_empty());
+    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
@@ -442,9 +474,11 @@ async fn test_validate_journalpost_allows_skuffen_only_sak() {
         CommandStatus::Ok,
         CommandStageStatus::Ok,
         None,
+        None,
     );
 
     assert!(state_repo.calls.lock().unwrap().is_empty());
+    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
@@ -475,8 +509,12 @@ async fn test_validate_journalpost_blocks_closed_sak() {
     let outcome = service.handle(envelope).await.unwrap();
 
     match outcome {
-        ValidationOutcome::Irrecoverable { message } => {
+        ValidationOutcome::Irrecoverable {
+            message,
+            error_code,
+        } => {
             assert_eq!(message, "Sak er avsluttet");
+            assert_eq!(error_code, SkuffenStatusErrorCode::Conflict);
         }
         _ => panic!("Expected irrecoverable validation outcome"),
     }
@@ -490,10 +528,12 @@ async fn test_validate_journalpost_blocks_closed_sak() {
         CommandStatus::Error,
         CommandStageStatus::Error,
         Some("Sak er avsluttet"),
+        Some(SkuffenStatusErrorCode::Conflict),
     );
 
     let calls = state_repo.calls.lock().unwrap();
     assert_eq!(calls.as_slice(), ["2025/1".to_string()]);
+    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
@@ -526,10 +566,12 @@ async fn test_validate_arkiv_id_open_sak_is_ok() {
         CommandStatus::Ok,
         CommandStageStatus::Ok,
         None,
+        None,
     );
 
     let calls = state_repo.calls.lock().unwrap();
     assert_eq!(calls.as_slice(), ["2025/42".to_string()]);
+    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
@@ -558,8 +600,12 @@ async fn test_validate_arkiv_id_recoverable_error_retries() {
     let outcome = service.handle(envelope).await.unwrap();
 
     match outcome {
-        ValidationOutcome::Recoverable { message } => {
+        ValidationOutcome::Recoverable {
+            message,
+            error_code,
+        } => {
             assert_eq!(message, "Sikri timeout");
+            assert_eq!(error_code, SkuffenStatusErrorCode::TemporaryUnavailable);
         }
         _ => panic!("Expected recoverable validation outcome"),
     }
@@ -573,7 +619,9 @@ async fn test_validate_arkiv_id_recoverable_error_retries() {
         CommandStatus::Retrying,
         CommandStageStatus::Retrying,
         Some("Sikri timeout"),
+        Some(SkuffenStatusErrorCode::TemporaryUnavailable),
     );
+    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
@@ -602,8 +650,12 @@ async fn test_validate_arkiv_id_irrecoverable_error_is_error() {
     let outcome = service.handle(envelope).await.unwrap();
 
     match outcome {
-        ValidationOutcome::Irrecoverable { message } => {
+        ValidationOutcome::Irrecoverable {
+            message,
+            error_code,
+        } => {
             assert_eq!(message, "Sak finnes ikke i Sikri (2025/404)");
+            assert_eq!(error_code, SkuffenStatusErrorCode::InvalidRequest);
         }
         _ => panic!("Expected irrecoverable validation outcome"),
     }
@@ -617,7 +669,9 @@ async fn test_validate_arkiv_id_irrecoverable_error_is_error() {
         CommandStatus::Error,
         CommandStageStatus::Error,
         Some("Sak finnes ikke i Sikri (2025/404)"),
+        Some(SkuffenStatusErrorCode::InvalidRequest),
     );
+    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
@@ -631,7 +685,7 @@ async fn test_validate_client_reference_lookup_error_is_retrying() {
 
     let service = build_service(
         state_repo,
-        id_mapping,
+        id_mapping.clone(),
         dispatcher.clone(),
         status_publisher.clone(),
     );
@@ -643,8 +697,12 @@ async fn test_validate_client_reference_lookup_error_is_retrying() {
     let outcome = service.handle(envelope).await.unwrap();
 
     match outcome {
-        ValidationOutcome::Recoverable { message } => {
+        ValidationOutcome::Recoverable {
+            message,
+            error_code,
+        } => {
             assert_eq!(message, "db error");
+            assert_eq!(error_code, SkuffenStatusErrorCode::TemporaryUnavailable);
         }
         _ => panic!("Expected recoverable validation outcome"),
     }
@@ -658,7 +716,9 @@ async fn test_validate_client_reference_lookup_error_is_retrying() {
         CommandStatus::Retrying,
         CommandStageStatus::Retrying,
         Some("db error"),
+        Some(SkuffenStatusErrorCode::TemporaryUnavailable),
     );
+    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
@@ -673,7 +733,7 @@ async fn test_validate_arkiv_id_lookup_error_is_retrying() {
 
     let service = build_service(
         state_repo,
-        id_mapping,
+        id_mapping.clone(),
         dispatcher.clone(),
         status_publisher.clone(),
     );
@@ -685,8 +745,12 @@ async fn test_validate_arkiv_id_lookup_error_is_retrying() {
     let outcome = service.handle(envelope).await.unwrap();
 
     match outcome {
-        ValidationOutcome::Recoverable { message } => {
+        ValidationOutcome::Recoverable {
+            message,
+            error_code,
+        } => {
             assert_eq!(message, "lookup failed");
+            assert_eq!(error_code, SkuffenStatusErrorCode::TemporaryUnavailable);
         }
         _ => panic!("Expected recoverable validation outcome"),
     }
@@ -700,5 +764,7 @@ async fn test_validate_arkiv_id_lookup_error_is_retrying() {
         CommandStatus::Retrying,
         CommandStageStatus::Retrying,
         Some("lookup failed"),
+        Some(SkuffenStatusErrorCode::TemporaryUnavailable),
     );
+    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
 }

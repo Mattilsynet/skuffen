@@ -5,10 +5,12 @@ use lib_schemas::skuffen::dokument::Dokument;
 use uuid::Uuid;
 
 use crate::command::ports::{
-    command_dispatcher_port::CommandDispatcher, id_mapping_port::IdMappingRepository,
+    command_dispatcher_port::CommandDispatcher,
+    id_mapping_port::{IdMappingRepository, MappingEntityType},
     status_publisher_port::CommandStatusPublisher,
 };
 use crate::command::status::mottatt_event;
+use domain::eksekvering::id::{SkuffenDokumentId, SkuffenSakId};
 
 pub struct IngestCommandService {
     id_mapping: Box<dyn IdMappingRepository>,
@@ -60,7 +62,7 @@ impl IngestCommandService {
                 .register_mapping(
                     command_id,
                     client_ref,
-                    skuffen_id,
+                    SkuffenSakId::from(skuffen_id),
                     &envelope.payload,
                     None, // arkiv_id unknown yet
                 )
@@ -75,7 +77,7 @@ impl IngestCommandService {
                         .register_document_mapping(
                             command_id,
                             doc.client_reference,
-                            doc_skuffen_id,
+                            SkuffenDokumentId::from(doc_skuffen_id),
                             None,
                         )
                         .await
@@ -92,7 +94,10 @@ impl IngestCommandService {
         if let Some(arkiv_id) = self.extract_arkiv_id(&envelope.payload) {
             let _ = self
                 .id_mapping
-                .hent_eller_opprett_skuffen_id_for_arkiv_id("sak", arkiv_id.as_str())
+                .hent_eller_opprett_skuffen_id_for_arkiv_id(
+                    MappingEntityType::Sak,
+                    arkiv_id.as_str(),
+                )
                 .await;
         }
 

@@ -125,19 +125,25 @@ impl CommandValidationListener {
                     error!("Ack failed: {err}");
                 }
             }
-            ValidationOutcome::Recoverable { message: reason } => {
+            ValidationOutcome::Recoverable {
+                message: reason, ..
+            } => {
                 info!("Command recoverable, retrying later: {reason}");
                 if let Err(err) = acker.ack().await {
                     error!("Ack failed: {err}");
                 }
             }
-            ValidationOutcome::Blocked { message: reason } => {
+            ValidationOutcome::Blocked {
+                message: reason, ..
+            } => {
                 info!("Command blocked, retrying later: {reason}");
                 if let Err(err) = acker.ack().await {
                     error!("Ack failed: {err}");
                 }
             }
-            ValidationOutcome::Irrecoverable { message: reason } => {
+            ValidationOutcome::Irrecoverable {
+                message: reason, ..
+            } => {
                 info!("Command irrecoverable: {reason}");
                 if let Err(err) = acker.ack().await {
                     error!("Ack failed: {err}");

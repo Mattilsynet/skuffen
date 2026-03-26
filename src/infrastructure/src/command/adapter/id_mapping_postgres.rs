@@ -1,5 +1,6 @@
-use application::command::ports::id_mapping_port::IdMappingRepository;
+use application::command::ports::id_mapping_port::{IdMappingRepository, MappingEntityType};
 use async_trait::async_trait;
+use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use lib_schemas::skuffen::command::commands::Command;
 use sqlx::postgres::PgPool;
 use uuid::Uuid;
@@ -34,14 +35,13 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         &self,
         command_id: Uuid,
         client_reference: Uuid,
-        skuffen_id: Uuid,
+        skuffen_id: SkuffenSakId,
         command: &Command,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
-        if let Some(existing_skuffen_id) =
-            self.hent_skuffen_id_fra_mapping(client_reference).await?
-        {
-            if existing_skuffen_id != skuffen_id {
+        let skuffen_id = Uuid::from(skuffen_id);
+        if let Some(existing_skuffen_id) = self.hent_sak_id_fra_mapping(client_reference).await? {
+            if Uuid::from(existing_skuffen_id) != skuffen_id {
                 return Err(anyhow::anyhow!(
                     "client_reference is already mapped to a different skuffen_id"
                 ));
@@ -115,13 +115,14 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         &self,
         command_id: Uuid,
         client_reference: Uuid,
-        skuffen_id: Uuid,
+        skuffen_id: SkuffenDokumentId,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
+        let skuffen_id = Uuid::from(skuffen_id);
         if let Some(existing_skuffen_id) =
-            self.hent_skuffen_id_fra_mapping(client_reference).await?
+            self.hent_dokument_id_fra_mapping(client_reference).await?
         {
-            if existing_skuffen_id != skuffen_id {
+            if Uuid::from(existing_skuffen_id) != skuffen_id {
                 return Err(anyhow::anyhow!(
                     "client_reference is already mapped to a different skuffen_id"
                 ));
@@ -209,7 +210,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
 
     async fn hent_arkiv_id_fra_mapping(
         &self,
-        skuffen_id: Uuid,
+        skuffen_id: SkuffenSakId,
     ) -> Result<Option<String>, anyhow::Error> {
         let arkiv_id: Option<(Option<String>,)> = sqlx::query_as(
             r#"
@@ -218,17 +219,17 @@ impl IdMappingRepository for PostgresIdMappingRepository {
             WHERE skuffen_id = $1
             "#,
         )
-        .bind(skuffen_id)
+        .bind(Uuid::from(skuffen_id))
         .fetch_optional(&self.pool)
         .await?;
 
         Ok(arkiv_id.and_then(|(arkiv_id,)| arkiv_id))
     }
 
-    async fn hent_skuffen_id_fra_mapping(
+    async fn hent_sak_id_fra_mapping(
         &self,
         client_reference: Uuid,
-    ) -> Result<Option<Uuid>, anyhow::Error> {
+    ) -> Result<Option<SkuffenSakId>, anyhow::Error> {
         let skuffen_id: Option<Uuid> = sqlx::query_scalar(
             r#"
             SELECT skuffen_id
@@ -240,32 +241,69 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(skuffen_id)
+        Ok(skuffen_id.map(SkuffenSakId::from))
     }
 
-    async fn hent_skuffen_id_fra_arkiv_id_i_mapping(
+    async fn hent_journalpost_id_fra_mapping(
         &self,
-        arkiv_id: &str,
-    ) -> Result<Option<Uuid>, anyhow::Error> {
+        client_reference: Uuid,
+    ) -> Result<Option<SkuffenJournalpostId>, anyhow::Error> {
         let skuffen_id: Option<Uuid> = sqlx::query_scalar(
             r#"
             SELECT skuffen_id
             FROM id_mapping
-            WHERE arkiv_id = $1
+            WHERE client_reference = $1 AND entity_type = 'journalpost'
+            "#,
+        )
+        .bind(client_reference)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(skuffen_id.map(SkuffenJournalpostId::from))
+    }
+
+    async fn hent_dokument_id_fra_mapping(
+        &self,
+        client_reference: Uuid,
+    ) -> Result<Option<SkuffenDokumentId>, anyhow::Error> {
+        let skuffen_id: Option<Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT skuffen_id
+            FROM id_mapping
+            WHERE client_reference = $1 AND entity_type = 'dokument'
+            "#,
+        )
+        .bind(client_reference)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(skuffen_id.map(SkuffenDokumentId::from))
+    }
+
+    async fn hent_sak_id_fra_arkiv_id_i_mapping(
+        &self,
+        arkiv_id: &str,
+    ) -> Result<Option<SkuffenSakId>, anyhow::Error> {
+        let skuffen_id: Option<Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT skuffen_id
+            FROM id_mapping
+            WHERE arkiv_id = $1 AND entity_type = 'sak'
             "#,
         )
         .bind(arkiv_id)
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(skuffen_id)
+        Ok(skuffen_id.map(SkuffenSakId::from))
     }
 
     async fn hent_eller_opprett_skuffen_id_for_arkiv_id(
         &self,
-        entity_type: &str,
+        entity_type: MappingEntityType,
         arkiv_id: &str,
-    ) -> Result<Uuid, anyhow::Error> {
+    ) -> Result<SkuffenSakId, anyhow::Error> {
+        let entity_type_code = entity_type.as_code();
         let existing: Option<Uuid> = sqlx::query_scalar(
             r#"
             SELECT skuffen_id
@@ -273,13 +311,13 @@ impl IdMappingRepository for PostgresIdMappingRepository {
             WHERE entity_type = $1::entity_type AND arkiv_id = $2
             "#,
         )
-        .bind(entity_type)
+        .bind(entity_type_code)
         .bind(arkiv_id)
         .fetch_optional(&self.pool)
         .await?;
 
         if let Some(skuffen_id) = existing {
-            return Ok(skuffen_id);
+            return Ok(SkuffenSakId::from(skuffen_id));
         }
 
         let skuffen_id = Uuid::now_v7();
@@ -291,7 +329,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
             "#,
         )
         .bind(skuffen_id)
-        .bind(entity_type)
+        .bind(entity_type_code)
         .bind(arkiv_id)
         .execute(&self.pool)
         .await?;
@@ -306,15 +344,15 @@ impl IdMappingRepository for PostgresIdMappingRepository {
             WHERE entity_type = $1::entity_type AND arkiv_id = $2
             "#,
         )
-        .bind(entity_type)
+        .bind(entity_type_code)
         .bind(arkiv_id)
         .fetch_optional(&self.pool)
         .await?;
 
-        skuffen_id.ok_or_else(|| {
+        skuffen_id.map(SkuffenSakId::from).ok_or_else(|| {
             anyhow::anyhow!(
                 "Fant ikke id_mapping for entity_type {} arkiv_id {}",
-                entity_type,
+                entity_type_code,
                 arkiv_id
             )
         })
@@ -322,16 +360,17 @@ impl IdMappingRepository for PostgresIdMappingRepository {
 
     async fn delete_arkiv_mapping(
         &self,
-        entity_type: &str,
+        entity_type: MappingEntityType,
         arkiv_id: &str,
     ) -> Result<(), anyhow::Error> {
+        let entity_type_code = entity_type.as_code();
         sqlx::query(
             r#"
             DELETE FROM id_mapping
             WHERE entity_type = $1::entity_type AND arkiv_id = $2
             "#,
         )
-        .bind(entity_type)
+        .bind(entity_type_code)
         .bind(arkiv_id)
         .execute(&self.pool)
         .await?;

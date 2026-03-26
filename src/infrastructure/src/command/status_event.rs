@@ -1,83 +1,130 @@
-use domain::eksekvering::typer::{CommandLifecycleContext, CommandLifecycleEvent};
-use lib_schemas::skuffen::command::commands::CommandStatus;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use domain::eksekvering::typer::{CommandLifecycleEvent, CommandStage, CommandStageStatus};
+use lib_schemas::skuffen::journalpost::JournalpostId;
+use lib_schemas::skuffen::sak::Saksnummer;
+use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1, SkuffenStatusPhase};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct StatusEventContext {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sak_client_reference: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub saksnummer: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub journalpost_client_reference: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub journalpost_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dokument_client_references: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dokument_ids: Vec<String>,
-}
-
-impl From<&CommandLifecycleContext> for StatusEventContext {
-    fn from(context: &CommandLifecycleContext) -> Self {
-        Self {
-            sak_client_reference: context.sak_client_reference.clone(),
-            saksnummer: context.saksnummer.clone(),
-            journalpost_client_reference: context.journalpost_client_reference.clone(),
-            journalpost_id: context.journalpost_id.clone(),
-            dokument_client_references: context.dokument_client_references.clone(),
-            dokument_ids: context.dokument_ids.clone(),
-        }
+fn phase_for(stage: CommandStage) -> SkuffenStatusPhase {
+    match stage {
+        CommandStage::Mottatt => SkuffenStatusPhase::Ingest,
+        CommandStage::Validert => SkuffenStatusPhase::Validate,
+        CommandStage::Utfores => SkuffenStatusPhase::Execution,
     }
 }
 
-impl StatusEventContext {
-    pub fn is_empty(&self) -> bool {
-        self.sak_client_reference.is_none()
-            && self.saksnummer.is_none()
-            && self.journalpost_client_reference.is_none()
-            && self.journalpost_id.is_none()
-            && self.dokument_client_references.is_empty()
-            && self.dokument_ids.is_empty()
+fn status_for(stage_status: CommandStageStatus) -> SkuffenStatus {
+    match stage_status {
+        CommandStageStatus::Venter => SkuffenStatus::Pending,
+        CommandStageStatus::Ok => SkuffenStatus::Ok,
+        CommandStageStatus::Blocked => SkuffenStatus::Blocked,
+        CommandStageStatus::Retrying => SkuffenStatus::Retrying,
+        CommandStageStatus::Error => SkuffenStatus::Error,
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StatusEventMessage {
-    pub command_id: Uuid,
-    pub command_type: String,
-    pub entity_type: String,
-    pub status: CommandStatus,
-    pub stage: String,
-    pub stage_status: String,
-    pub terminal: bool,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context: Option<StatusEventContext>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attempt: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<String>,
+pub fn to_public_status_event(event: &CommandLifecycleEvent) -> SkuffenStatusEventV1 {
+    SkuffenStatusEventV1 {
+        command_id: event.command_id,
+        correlation_id: event.correlation_id,
+        phase: phase_for(event.stage),
+        status: status_for(event.stage_status),
+        terminal: event.terminal,
+        error_code: event.error_code.clone(),
+        message: event.outward_message.clone().unwrap_or_else(|| {
+            event
+                .detail
+                .clone()
+                .unwrap_or_else(|| event.message.clone())
+        }),
+        attempt: event.attempt,
+        saksnummer: event
+            .context
+            .saksnummer
+            .as_ref()
+            .and_then(|value| Saksnummer::new(value.clone()).ok()),
+        journalpost_id: event
+            .context
+            .journalpost_id
+            .as_ref()
+            .map(|value| JournalpostId(value.clone())),
+        dokument_id: (!event.context.dokument_ids.is_empty()).then(|| {
+            event
+                .context
+                .dokument_ids
+                .iter()
+                .cloned()
+                .map(lib_schemas::skuffen::dokument::DokumentId)
+                .collect()
+        }),
+        timestamp: event.timestamp.clone(),
+    }
 }
 
-impl From<&CommandLifecycleEvent> for StatusEventMessage {
-    fn from(event: &CommandLifecycleEvent) -> Self {
-        Self {
-            command_id: event.command_id,
-            command_type: event.command_type.as_code().to_string(),
-            entity_type: event.entity_type.as_code().to_string(),
-            status: event.status.clone(),
-            stage: event.stage.as_code().to_string(),
-            stage_status: event.stage_status.as_code().to_string(),
-            terminal: event.terminal,
-            message: event.message.clone(),
-            detail: event.detail.clone(),
-            context: (!event.context.is_empty()).then(|| StatusEventContext::from(&event.context)),
-            attempt: event.attempt,
-            timestamp: event.timestamp.clone(),
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use domain::eksekvering::typer::{
+        CommandEntityType, CommandLifecycleContext, CommandLifecycleMetadata, CommandTypeCode,
+    };
+    use lib_schemas::skuffen::command::commands::CommandStatus;
+    use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
+    use uuid::Uuid;
+
+    #[test]
+    fn converts_execution_ok_to_public_status_event() {
+        let event = CommandLifecycleEvent::new(
+            CommandLifecycleMetadata::new(
+                Uuid::parse_str("123e4567-e89b-12d3-a456-426614174100").unwrap(),
+                CommandTypeCode::OpprettSak,
+                CommandEntityType::Sak,
+            ),
+            Some(Uuid::parse_str("123e4567-e89b-12d3-a456-426614174101").unwrap()),
+            CommandStatus::Ok,
+            CommandStage::Utfores,
+            CommandStageStatus::Ok,
+            None,
+            Some("Sak opprettet.".to_string()),
+            CommandLifecycleContext {
+                saksnummer: Some("2026/123".to_string()),
+                ..Default::default()
+            },
+            Some(1),
+        );
+
+        let outward = to_public_status_event(&event);
+
+        assert_eq!(outward.phase, SkuffenStatusPhase::Execution);
+        assert_eq!(outward.status, SkuffenStatus::Ok);
+        assert!(outward.terminal);
+        assert_eq!(outward.error_code, None);
+        assert_eq!(outward.message, "Sak opprettet.");
+        assert_eq!(outward.saksnummer.unwrap().as_str(), "2026/123");
+    }
+
+    #[test]
+    fn converts_blocked_to_client_safe_error_code() {
+        let event = CommandLifecycleEvent::new(
+            CommandLifecycleMetadata::new(
+                Uuid::new_v4(),
+                CommandTypeCode::OpprettInterntNotatJournalpost,
+                CommandEntityType::Journalpost,
+            ),
+            None,
+            CommandStatus::Blocked,
+            CommandStage::Utfores,
+            CommandStageStatus::Blocked,
+            Some(SkuffenStatusErrorCode::PrerequisitePending),
+            Some("Saksnummer mangler".to_string()),
+            CommandLifecycleContext::default(),
+            Some(2),
+        );
+
+        let outward = to_public_status_event(&event);
+
+        assert_eq!(outward.status, SkuffenStatus::Blocked);
+        assert_eq!(
+            outward.error_code,
+            Some(SkuffenStatusErrorCode::PrerequisitePending)
+        );
+        assert!(!outward.terminal);
     }
 }

@@ -1,8 +1,7 @@
+use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId};
 use domain::eksekvering::typer::EksekveringFeil;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use uuid::Uuid;
-
-use crate::command::ports::eksekvering_state_port::DokumentState;
 
 use super::prerequisite::Prerequisite;
 use super::step_outcome::StepOutcome;
@@ -12,9 +11,10 @@ impl EksekverKommandoService {
     pub(super) async fn legg_til_dokument(
         &self,
         envelope: &CommandEnvelope<Command>,
-        journalpost_id: Uuid,
-        dokument_id: Uuid,
+        journalpost_id: SkuffenJournalpostId,
+        dokument_id: SkuffenDokumentId,
         dokument_client_reference: Uuid,
+        report: &mut super::execution_report::ExecutionReport,
     ) -> Result<StepOutcome, EksekveringFeil> {
         let Some(journalpost_state) = self.hent_journalpost_state(journalpost_id).await? else {
             return Ok(StepOutcome::blocked(
@@ -55,17 +55,11 @@ impl EksekverKommandoService {
                 )
                 .await
                 .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+            report.add_dokument_id(arkiv_id.to_string());
         }
 
         self.state_repo
-            .lagre_dokument_state(
-                dokument_id,
-                journalpost_id,
-                DokumentState {
-                    lagt_til: true,
-                    irrecoverable_feil: false,
-                },
-            )
+            .anvend_dokument_lagt_til(dokument_id, journalpost_id)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 

@@ -4,15 +4,15 @@ use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use tracing::{Span, error, info};
 
 use crate::nats::client::NatsClient;
-use application::command::ports::registrer_eksekvering_port::RegistrerEksekveringUseCase;
+use application::command::ports::registrer_i_eksekveringssystem_port::RegistrerIEksekveringssystemUseCase;
 
 pub struct KommandoEksekveringListener {
     client: NatsClient,
-    use_case: Box<dyn RegistrerEksekveringUseCase>,
+    use_case: Box<dyn RegistrerIEksekveringssystemUseCase>,
 }
 
 impl KommandoEksekveringListener {
-    pub fn new(client: NatsClient, use_case: Box<dyn RegistrerEksekveringUseCase>) -> Self {
+    pub fn new(client: NatsClient, use_case: Box<dyn RegistrerIEksekveringssystemUseCase>) -> Self {
         Self { client, use_case }
     }
 
