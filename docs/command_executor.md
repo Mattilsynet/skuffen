@@ -8,7 +8,7 @@ Execution skal kunne forklares slik:
 
 1. En validert kommando registreres i execution-systemet.
 2. Skuffen materialiserer lokal snapshot-state for sak, journalpost og dokument.
-3. Skuffen vurderer om kommandoen er **klar** eller **venter**.
+3. Skuffen vurderer om kommandoen er **klar**, **venter** eller terminal **feil**.
 4. Én executor plukker neste kjørbare kommando og kjører den stegvis mot Sikri.
 5. Etter hvert steg oppdateres snapshot-state og command execution state eksplisitt.
 6. Kommandoen ender i `ok`, `retry_venter`, `venter` eller `feil`.
@@ -22,6 +22,7 @@ Det er ingen skjult workflow engine. Snapshot-state beskriver fakta. `command_ex
 3. Bruk én eksplisitt readiness-vurderer for å avgjøre om kommandoen er:
    - `klar`
    - `venter`
+   - `feil`
 4. Executor starter, tar singleton-lock og resetter eventuelle hengende `kjorer`-rader tilbake til `klar`.
 5. Executor plukker neste kjørbare kommando fra DB.
 6. Executor kjører planen steg for steg:
@@ -29,7 +30,7 @@ Det er ingen skjult workflow engine. Snapshot-state beskriver fakta. `command_ex
    - steg kaller Sikri
    - steg oppdaterer snapshot-state og command execution state
 7. Status-eventer publiseres på `arkiv.status.<commandId>`.
-8. Når kommandoen er terminal, publiseres `arkiv.command.done.<entity>.<commandId>`.
+8. Når execution-path publiserer en terminal status, publiseres også `arkiv.command.done.<entity>.<commandId>`.
 
 ## Arkivfaglige regler (oppsummering)
 
@@ -107,6 +108,8 @@ Semantikk:
 - `retry_venter` = recoverable teknisk feil; styres av `retry_ready_at`
 - `feil` = terminal, inkludert irrecoverable stegfeil
 
+`utfores_venter_publisert_at` brukes for idempotent publisering av `utfores::venter` ved replay eller re-registrering av samme kommando.
+
 ### Historikk: `command_execution_attempt`
 
 Historikk per forsøk brukes for audit/debug og startup recovery. Denne tabellen er ikke scheduler-state.
@@ -141,7 +144,9 @@ Historikk per forsøk brukes for audit/debug og startup recovery. Denne tabellen
 ### Opprett journalpost
 Krav:
 - Sak finnes og er ikke avsluttet.
-- Hvis `SakKey::ClientReference` mangler arkiv_id, kan eksekvering fortsette på skuffen‑state (best effort). Journalpost blir registrert lokalt og avventer arkiv_id.
+- Ved `SakKey::ClientReference` registreres journalpostkommandoen lokalt, men blir `venter` til saken er opprettet i snapshot-state.
+- Journalpostkommando venter også på `saksnummer` hvis saken finnes, men fortsatt mangler dette.
+- Ved `SakKey::ArkivId` seedes saken som opprettet med kjent `saksnummer`.
 
 ### Legg til dokument
 Krav:
@@ -172,6 +177,7 @@ Hvis krav ikke er oppfylt, blir kommandoen enten:
 
 - Planen ligger i RAM, men **hvert steg skal være gated av lokal snapshot-state**.
 - Ved startup resettes `kjorer` til `klar`, og executor kan kjøre kommandoen på nytt.
+- Åpne rader i `command_execution_attempt` markeres samtidig som `avbrutt` før `kjorer` resettes.
 - Allerede fullførte steg skal skippe basert på snapshot-state.
 - `command_execution_attempt` brukes til å se hva som skjedde før restart.
 
@@ -185,6 +191,7 @@ Hvis krav ikke er oppfylt, blir kommandoen enten:
 ## Feilsemantikk
 
 - Hvis ett steg i en kommando feiler irrecoverably, feiler **hele kommandoen**.
+- En kommando kan også bli terminal `feil` allerede ved registrering hvis readiness-vurdereren ser at prerequisites ikke kan bli oppfylt.
 - `venter` brukes bare når kommandoen faktisk kan komme videre av senere state-endringer i Skuffen.
 - `retry_venter` brukes bare for tekniske feil som kan forsøkes igjen senere.
 
@@ -197,7 +204,9 @@ Samme readiness-vurderer brukes:
 - ved wake-up
 
 Wake-up kan flytte en kommando fra `venter` til `klar` eller terminal `feil`.
-Ved `venter -> feil` publiseres også outward error-status og `done`.
+Ved `venter -> feil` publiseres outward error-status, og `done` publiseres bare hvis `utfores::venter` tidligere faktisk ble publisert for kommandoen.
+
+Wake-up trigges også etter persistert irrecoverable dokumentfeil, fordi dette kan gjøre ventende kommandoer for samme journalpost eller sak terminalt umulige.
 
 Hvis et step allerede er fullfort og execution derfor skiper med `AlreadyCompleted`, skal relevante wake-up scopes fortsatt trigges, slik at tidligere tapte wake-ups kan hentes inn igjen.
 

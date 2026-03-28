@@ -1,6 +1,6 @@
 # Execution v2 design
 
-Dette dokumentet låser modellen for execution v2 før implementasjon.
+Dette dokumentet beskriver den implementerte modellen for execution v2.
 
 ## Mål
 
@@ -12,7 +12,7 @@ Dette dokumentet låser modellen for execution v2 før implementasjon.
 
 1. `command_execution` eier workflow/progresjon for en kommando.
 2. `sak_state`, `journalpost_state` og `dokument_state` eier snapshot-facts.
-3. `EksekveringsklarhetVurderer` er eneste sted som vurderer prerequisites for `klar` vs `venter`.
+3. `EksekveringsklarhetVurderer` er eneste sted som vurderer om en kommando er `klar`, `venter` eller terminal `feil` før execution.
 4. Step handlers eier idempotency/skip og step-lokal sikkerhet, men ikke separat prerequisite-policy.
 5. `retry_venter` er kun for recoverable tekniske feil.
 6. `venter` er kun for prerequisites som kan bli oppfylt av videre fremdrift i Skuffen.
@@ -34,6 +34,7 @@ Tillatte overganger:
 - `klar -> kjorer`
 - `retry_venter -> kjorer` når `retry_ready_at <= now()`
 - `venter -> klar` når prerequisite reevalueres som oppfylt
+- `venter -> feil` når wake-up reevaluerer prerequisite som terminalt umulig
 - `kjorer -> ok`
 - `kjorer -> venter`
 - `kjorer -> retry_venter`
@@ -66,6 +67,7 @@ Eier prerequisite-vurdering for om kommandoen er:
 
 - `klar`
 - `venter`
+- `feil`
 
 Brukes ved:
 
@@ -93,11 +95,17 @@ Step handlers skal ikke innføre en konkurrerende generell prerequisite-policy v
 
 Dette er bevisst: facts og workflow-resultat er to forskjellige ting.
 
+## Registrering og replay
+
+- Registrering er idempotent per `command_id`.
+- Hvis `command_execution` allerede finnes, men `utfores_venter_publisert_at` mangler, kan registrering publisere `utfores::venter` på nytt uten å materialisere ny snapshot-state.
+- Registrering kan også ende direkte i terminal `feil` hvis readiness-vurdereren ser at prerequisites ikke kan bli oppfylt.
+
 ## Wake-up contract
 
 Ventende kommandoer skal reevalueres når relevant snapshot-state endres.
 
-I første versjon reevalueres på scope:
+Per i dag reevalueres på scope:
 
 - `sak_id`
 - `journalpost_id`
@@ -112,7 +120,7 @@ Triggere i application flow:
 
 Wake-up skal bruke samme `EksekveringsklarhetVurderer` som registrering.
 
-Hvis wake-up reevaluerer en ventende kommando til terminal `feil`, skal Skuffen også publisere terminal outward status og `done`, slik at workflow-state og observerbar lifecycle ikke driver fra hverandre.
+Hvis wake-up reevaluerer en ventende kommando til terminal `feil`, skal Skuffen også publisere terminal outward status. `done` publiseres bare hvis kommandoen allerede har observert outward `utfores::venter`.
 
 Wake-up må også være retry-tolerant: hvis et step allerede er fullfort i snapshot-state og senere execution derfor returnerer `AlreadyCompleted`, skal relevante wake-up scopes fortsatt trigges pa nytt.
 
@@ -122,15 +130,16 @@ Wake-up må også være retry-tolerant: hvis et step allerede er fullfort i snap
 - Executor tar en global Postgres advisory lock ved startup.
 - Advisory lock holdes på en dedikert session/connection som lever like lenge som executor.
 - Hvis lock ikke fås, skal executor ikke starte.
+- Åpne `command_execution_attempt` markeres som `avbrutt` ved startup recovery.
 - Ved startup resettes alle `kjorer` til `klar`.
 
 Dette er tilstrekkelig fordi systemet har nøyaktig én executor.
 
 ## Step idempotency og reconcile-strategi
 
-Execution v2 baserer seg i første omgang på lokal snapshot-state for replay/skip.
+Execution v2 baserer seg per i dag på lokal snapshot-state for replay/skip.
 
-Det låses nå at:
+Systemet bruker følgende skip-regler:
 
 - `opprett_sak` skiper hvis `sak_state.opprettet` allerede er sann
 - `opprett_journalpost` skiper hvis `journalpostnummer` allerede finnes
@@ -139,7 +148,7 @@ Det låses nå at:
 - `avskriv` skiper hvis `avskrevet` allerede er sann
 - `avslutt_sak` skiper hvis sak allerede er avsluttet
 
-Mer avansert reconcile mot Sikri er ikke del av denne iterasjonen.
+Mer avansert reconcile mot Sikri er foreløpig ikke implementert.
 
 ## Dokumentfeil
 
@@ -153,11 +162,12 @@ Mer avansert reconcile mot Sikri er ikke del av denne iterasjonen.
 - `utfores::venter` beholdes som ikke-terminal queued/venter-status.
 - Execution `venter` mapes fortsatt til outward blocked/pending semantics der det er riktig, men intern modell styres ikke av outward naming.
 
-## Første clean schema-beslutninger
+## Implementerte schema-beslutninger
 
 - `command_execution_attempt` tas med fra start.
 - `wait_kind` lagres på `command_execution`-raden, ikke i egen tabell.
 - `command_execution` skal ha streng nullability/checks for `retry_ready_at`, `wait_kind`, `finished_at`.
+- `utfores_venter_publisert_at` lagres på `command_execution`-raden for idempotent replay av outward `utfores::venter`.
 - Snapshot-state keyed av stabile interne `skuffen_id`.
 - `har_feilede_dokumenter` beholdes foreløpig som lagret felt, men må oppdateres eksplisitt og konsekvent.
 - `id_mapping.client_reference` beholdes globalt unik i denne iterasjonen.
