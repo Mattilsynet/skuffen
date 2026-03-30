@@ -1583,7 +1583,7 @@ dependencies = [
 [[package]]
 name = "lib-sql"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git?tag=1.5.2#ebab461f74c91980169121ddd918716cf79c100e"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git?tag=1.5.4#a8be2a358595c1ddda1bbeaa87d09bbabea17c60"
 dependencies = [
  "secrecy",
  "sqlx",
