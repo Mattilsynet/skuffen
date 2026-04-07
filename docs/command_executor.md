@@ -1,5 +1,7 @@
 # Eksekvering av kommandoer mot Sikri
 
+Se også ADR: `docs/adr/0001-execution-v2-og-opprydding-av-legacy-state-seams.md`.
+
 Dette dokumentet beskriver execution v2 i Skuffen. Målet er robusthet og pålitelighet mot et upålitelig arkiv-API, men med en så tydelig modell at fremtidige endringer fortsatt er trygge.
 
 ## Mental modell
