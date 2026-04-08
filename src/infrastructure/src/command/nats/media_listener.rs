@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::command::media::{MediaFile, MediaStore};
 use crate::nats::client::NatsClient;
 use crate::nats::nats_response::NatsResponse;
+use crate::nats::supervisor::TaskSupervisor;
 
 pub struct MediaListener {
     client: NatsClient,
@@ -22,6 +23,11 @@ impl MediaListener {
 
     #[tracing::instrument(skip_all, name = "nats.media_listener")]
     pub async fn run(&self) -> anyhow::Result<()> {
+        let supervisor = TaskSupervisor::critical("media_listener", 3);
+        supervisor.run(|| self.run_once()).await
+    }
+
+    async fn run_once(&self) -> anyhow::Result<()> {
         let subject = "arkiv.arkiver.media";
         info!("Listening for media uploads on '{}'", subject);
 
@@ -37,7 +43,9 @@ impl MediaListener {
             self.process_message(&mut assembler, message).await;
         }
 
-        Ok(())
+        Err(anyhow::anyhow!(
+            "media listener subscription ended unexpectedly"
+        ))
     }
 
     #[tracing::instrument(

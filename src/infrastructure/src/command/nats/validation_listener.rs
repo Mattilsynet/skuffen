@@ -1,9 +1,14 @@
-use async_nats::jetstream::{self, consumer};
+use async_nats::jetstream::{self, AckKind};
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use tracing::{Span, error, info};
+use tracing::{Span, error, info, warn};
 
 use crate::nats::client::NatsClient;
+use crate::nats::jetstream_setup::{
+    command_inbox_stream_config, command_ready_stream_config, ensure_pull_consumer, ensure_stream,
+    validator_consumer_config,
+};
+use crate::nats::supervisor::TaskSupervisor;
 use application::command::services::validate_command::{ValidateCommandService, ValidationOutcome};
 
 pub struct CommandValidationListener {
@@ -18,64 +23,26 @@ impl CommandValidationListener {
 
     #[tracing::instrument(skip_all, name = "nats.validation_listener")]
     pub async fn run(&self) -> anyhow::Result<()> {
+        let supervisor = TaskSupervisor::background("validation_listener");
+        supervisor.run(|| self.run_once()).await
+    }
+
+    async fn run_once(&self) -> anyhow::Result<()> {
         let jetstream = jetstream::new(self.client.inner().clone());
-        let stream = match jetstream
-            .get_or_create_stream(jetstream::stream::Config {
-                name: "arkiv_command_inbox".to_string(),
-                subjects: vec!["arkiv.command.inbox.>".to_string()],
-                max_age: std::time::Duration::from_secs(60 * 60 * 24 * 180),
-                ..Default::default()
-            })
-            .await
-        {
-            Ok(stream) => stream,
-            Err(err) => return Err(anyhow::anyhow!("JetStream stream error: {err}")),
-        };
+        let stream = ensure_stream(&jetstream, command_inbox_stream_config()).await?;
+        ensure_stream(&jetstream, command_ready_stream_config()).await?;
+        let consumer =
+            ensure_pull_consumer(&stream, "validator", validator_consumer_config()).await?;
+        let mut messages = consumer.messages().await?;
 
-        let _ = match jetstream
-            .get_or_create_stream(jetstream::stream::Config {
-                name: "arkiv_command_ready".to_string(),
-                subjects: vec!["arkiv.command.ready.>".to_string()],
-                max_age: std::time::Duration::from_secs(60 * 60 * 24 * 180),
-                ..Default::default()
-            })
-            .await
-        {
-            Ok(stream) => stream,
-            Err(err) => return Err(anyhow::anyhow!("JetStream ready stream error: {err}")),
-        };
-
-        let consumer = match stream
-            .get_or_create_consumer(
-                "validator",
-                consumer::pull::Config {
-                    durable_name: Some("validator".to_string()),
-                    ack_policy: consumer::AckPolicy::Explicit,
-                    ..Default::default()
-                },
-            )
-            .await
-        {
-            Ok(consumer) => consumer,
-            Err(err) => return Err(anyhow::anyhow!("JetStream consumer create error: {err}")),
-        };
-
-        let mut messages = match consumer.messages().await {
-            Ok(messages) => messages,
-            Err(err) => return Err(anyhow::anyhow!("JetStream consumer error: {err}")),
-        };
         while let Some(message) = messages.next().await {
-            let message = match message {
-                Ok(msg) => msg,
-                Err(err) => {
-                    error!("JetStream error: {err}");
-                    continue;
-                }
-            };
-            self.process_message(message).await;
+            let message = message.map_err(|err| anyhow::anyhow!("JetStream error: {err}"))?;
+            self.process_message(message).await?;
         }
 
-        Ok(())
+        Err(anyhow::anyhow!(
+            "validation listener message stream ended unexpectedly"
+        ))
     }
 
     #[tracing::instrument(
@@ -87,7 +54,7 @@ impl CommandValidationListener {
             traceparent = tracing::field::Empty
         )
     )]
-    async fn process_message(&self, message: jetstream::Message) {
+    async fn process_message(&self, message: jetstream::Message) -> anyhow::Result<()> {
         let (payload, acker) = message.split();
         crate::telemetry::record_traceparent_from_headers(payload.headers.as_ref());
 
@@ -95,10 +62,8 @@ impl CommandValidationListener {
             Ok(cmd) => cmd,
             Err(err) => {
                 error!("Failed to deserialize command: {err}");
-                if let Err(err) = acker.ack().await {
-                    error!("Ack failed: {err}");
-                }
-                return;
+                ack_terminal(&acker).await?;
+                return Ok(());
             }
         };
 
@@ -112,43 +77,49 @@ impl CommandValidationListener {
             Ok(outcome) => outcome,
             Err(err) => {
                 error!("Validator failed: {err}");
-                if let Err(err) = acker.ack().await {
-                    error!("Ack failed: {err}");
-                }
-                return;
+                nak_retryable(&acker).await?;
+                return Ok(());
             }
         };
 
         match outcome {
             ValidationOutcome::Ok => {
-                if let Err(err) = acker.ack().await {
-                    error!("Ack failed: {err}");
-                }
+                ack_terminal(&acker).await?;
             }
             ValidationOutcome::Recoverable {
                 message: reason, ..
             } => {
-                info!("Command recoverable, retrying later: {reason}");
-                if let Err(err) = acker.ack().await {
-                    error!("Ack failed: {err}");
-                }
+                warn!("Command recoverable, requesting redelivery: {reason}");
+                nak_retryable(&acker).await?;
             }
             ValidationOutcome::Blocked {
                 message: reason, ..
             } => {
-                info!("Command blocked, retrying later: {reason}");
-                if let Err(err) = acker.ack().await {
-                    error!("Ack failed: {err}");
-                }
+                warn!("Command blocked, requesting redelivery: {reason}");
+                nak_retryable(&acker).await?;
             }
             ValidationOutcome::Irrecoverable {
                 message: reason, ..
             } => {
                 info!("Command irrecoverable: {reason}");
-                if let Err(err) = acker.ack().await {
-                    error!("Ack failed: {err}");
-                }
+                ack_terminal(&acker).await?;
             }
         }
+
+        Ok(())
     }
+}
+
+async fn ack_terminal(acker: &jetstream::message::Acker) -> anyhow::Result<()> {
+    acker
+        .ack()
+        .await
+        .map_err(|err| anyhow::anyhow!("ack failed: {err}"))
+}
+
+async fn nak_retryable(acker: &jetstream::message::Acker) -> anyhow::Result<()> {
+    acker
+        .ack_with(AckKind::Nak(None))
+        .await
+        .map_err(|err| anyhow::anyhow!("nak failed: {err}"))
 }

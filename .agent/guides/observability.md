@@ -9,6 +9,12 @@ Subjects and flows:
 - `arkiv.command.done.<entity>.<command_id>` (JetStream): terminal execution result
 - `arkiv.status.<commandId>` (JetStream): status events from validation + execution
 
+Durability and availability:
+- `arkiv_command_inbox`, `arkiv_command_ready`, `arkiv_command_done`, `arkiv_status` and `arkiv_media` are configured with `num_replicas = 3`.
+- Durable consumers `validator` and `executor` use explicit ack and `num_replicas = 3`.
+- `validation_listener` and `eksekvering_listener` run in restart loops that recreate stream/consumer state after NATS disruptions.
+- `command_listener` and `media_listener` are intake-critical and will crash the process after exhausting a restart budget, so Cloud Run can replace the instance.
+
 Database state:
 - `id_mapping`: client_reference -> skuffen_id (+ optional arkiv_id)
 - `sak_state`: skuffen_id keyed sak state

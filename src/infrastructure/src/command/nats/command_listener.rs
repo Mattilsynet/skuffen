@@ -1,6 +1,7 @@
 use crate::command::media::MediaStore;
 use crate::nats::client::NatsClient;
 use crate::nats::nats_response::NatsResponse;
+use crate::nats::supervisor::TaskSupervisor;
 use application::command::services::ingest_command::IngestCommandService;
 use async_nats::Message;
 use futures::StreamExt;
@@ -28,6 +29,11 @@ impl CommandListener {
 
     #[tracing::instrument(skip_all, name = "nats.command_listener")]
     pub async fn run(&self) -> anyhow::Result<()> {
+        let supervisor = TaskSupervisor::critical("command_listener", 3);
+        supervisor.run(|| self.run_once()).await
+    }
+
+    async fn run_once(&self) -> anyhow::Result<()> {
         let subject = "arkiv.arkiver";
         info!("Listening for command batches on '{}'", subject);
 
@@ -41,7 +47,10 @@ impl CommandListener {
         while let Some(msg) = sub.next().await {
             self.process_message(msg).await;
         }
-        Ok(())
+
+        Err(anyhow::anyhow!(
+            "command listener subscription ended unexpectedly"
+        ))
     }
 
     #[tracing::instrument(

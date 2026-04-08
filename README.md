@@ -228,11 +228,16 @@ Request-reply:
 JetStream (til klienter):
 - Stream: `arkiv_status` (subject: `arkiv.status.<commandId>`). Payload: `CommandStatusEvent`. Retention: 180 dager.
 - Payload inkluderer ogsaa `phase` med verdi `validation` eller `execution`.
+- Alle JetStream-streams og `arkiv_media` object store konfigureres med `num_replicas = 3`.
 
 Interne JetStreams (med `commandId` i subject for enklere debugging, retention 180 dager):
 - Stream: `arkiv_command_inbox` (subject: `arkiv.command.inbox.<entity>.<commandId>`)
 - Stream: `arkiv_command_ready` (subject: `arkiv.command.ready.<entity>.<commandId>`)
 - Stream: `arkiv_command_done` (subject: `arkiv.command.done.<entity>.<commandId>`)
+
+Durable consumers:
+- `validator` leser `arkiv_command_inbox` med explicit ack og `num_replicas = 3`.
+- `executor` leser `arkiv_command_ready` med explicit ack og `num_replicas = 3`.
 
 `<entity>` er `sak` eller `journalpost`.
 
@@ -245,9 +250,15 @@ Se design og domenelogikk i `docs/command_executor.md`.
 ## Retry- og eksekveringsmodell
 
 - NATS `arkiv.command.ready.*` brukes kun til innlesing. Meldingen ACKes når kommandoen er lagret i `command_execution`.
+- NATS `arkiv.command.inbox.*` brukes til validering. Meldingen ACKes kun når validation er ferdig; recoverable/blocked utfall blir NAKet for redelivery.
 - Eksekvering og retries styres av en intern worker som poller DB etter `pending/retrying/blocked` hvor `next_retry_at <= now()`.
 - Worker tar lås med `FOR UPDATE SKIP LOCKED` slik at flere workere ikke tar samme kommando.
 - `command_execution.payload` er den varige kilden; planen bygges på nytt for hvert forsøk.
+
+## Runtime-prioritering
+
+- `command_listener`, `media_listener` og `health_check` regnes som kritiske for opptak. De restartes internt, men hvis de stopper eller feiler mer enn 3 ganger på rad, avsluttes prosessen slik at Cloud Run kan restarte instansen.
+- `validation_listener`, `eksekvering_listener`, `eksekvering_worker`, query listeners og `ready_replier` regnes som degradérbare. De restartes med backoff, men stopper ikke hele prosessen alene.
 
 ---
 

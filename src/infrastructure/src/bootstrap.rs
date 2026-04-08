@@ -24,6 +24,7 @@ use crate::command::nats::eksekvering_listener::KommandoEksekveringListener;
 use crate::command::nats::validation_listener::CommandValidationListener;
 use crate::http::health_check::health_check;
 use crate::nats::client::NatsClient;
+use crate::nats::jetstream_setup::ensure_media_object_store;
 use crate::nats::setup::setup_nats;
 use crate::query::adapter::fake_journalpost_repository::FakeJournalpostRepository;
 use crate::query::adapter::fake_sak_repository::FakeSakRepository;
@@ -46,7 +47,7 @@ pub async fn prepare_runtime() -> anyhow::Result<RuntimeDeps> {
     let health_check_handle = health_check().await?;
     let use_fake_sikri = use_fake_sikri();
 
-    let db_pool = crate::database::setup::stup_database().await?;
+    let db_pool = crate::database::setup::setup_database().await?;
     crate::database::setup::run_migrations(&db_pool).await?;
 
     let id_mapping_repo = PostgresIdMappingRepository::new(db_pool.clone());
@@ -187,17 +188,7 @@ async fn setup_media_store(
     nats: NatsClient,
 ) -> anyhow::Result<std::sync::Arc<ObjectStoreMediaStore>> {
     let jetstream = jetstream::new(nats.inner().clone());
-    let store = match jetstream.get_object_store("arkiv_media").await {
-        Ok(store) => store,
-        Err(_) => {
-            jetstream
-                .create_object_store(jetstream::object_store::Config {
-                    bucket: "arkiv_media".to_string(),
-                    ..Default::default()
-                })
-                .await?
-        }
-    };
+    let store = ensure_media_object_store(&jetstream).await?;
     Ok(std::sync::Arc::new(ObjectStoreMediaStore::new(store)))
 }
 

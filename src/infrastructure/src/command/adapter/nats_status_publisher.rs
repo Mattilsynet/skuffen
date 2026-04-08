@@ -1,5 +1,6 @@
 use crate::command::status_event::to_public_status_event;
 use crate::nats::client::NatsClient;
+use crate::nats::jetstream_setup::{ensure_stream, status_stream_config};
 use application::command::ports::status_publisher_port::CommandStatusPublisher;
 use async_nats::HeaderMap;
 use async_nats::jetstream::{self, message::PublishMessage};
@@ -38,14 +39,7 @@ impl CommandStatusPublisher for NatsCommandStatusPublisher {
         let message_id = event.message_id();
         let jetstream = jetstream::new(self.client.inner().clone());
         Span::current().record("subject", tracing::field::display(subject.as_str()));
-        jetstream
-            .get_or_create_stream(jetstream::stream::Config {
-                name: "arkiv_status".to_string(),
-                subjects: vec!["arkiv.status.*".to_string()],
-                max_age: std::time::Duration::from_secs(60 * 60 * 24 * 180),
-                ..Default::default()
-            })
-            .await?;
+        ensure_stream(&jetstream, status_stream_config()).await?;
         let mut message = PublishMessage::build().payload(payload.into());
         if let Some(trace_parent) = crate::telemetry::current_trace_parent() {
             let mut headers = HeaderMap::new();

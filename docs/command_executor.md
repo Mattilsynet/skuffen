@@ -34,6 +34,12 @@ Det er ingen skjult workflow engine. Snapshot-state beskriver fakta. `command_ex
 7. Status-eventer publiseres på `arkiv.status.<commandId>`.
 8. Når execution-path publiserer en terminal status, publiseres også `arkiv.command.done.<entity>.<commandId>`.
 
+JetStream-operasjonelt:
+- Streamene `arkiv_command_inbox`, `arkiv_command_ready`, `arkiv_command_done` og `arkiv_status` konfigureres med `num_replicas = 3`.
+- `arkiv_media` object store konfigureres med `num_replicas = 3`.
+- Durable consumer `validator` og `executor` konfigureres med explicit ack og `num_replicas = 3`.
+- Listenerne for validation og execution kjører i en supervisor-loop som reoppretter stream/consumer/messages etter NATS-avbrudd.
+
 ## Arkivfaglige regler (oppsummering)
 
 Hent detaljer fra arkivfag‑ressurser:
@@ -189,6 +195,7 @@ Hvis krav ikke er oppfylt, blir kommandoen enten:
 - Recoverable feil fører til `retry_venter` og planlagt `retry_ready_at` i DB.
 - Irrecoverable stegfeil betyr at **hele kommandoen feiler**.
 - NATS redelivery brukes kun hvis registrering i Skuffen feiler, ikke for execution retry.
+- Validation bruker explicit ack per melding: `Ok` og `Irrecoverable` ACKes, mens `Recoverable` og `Blocked` NAKes for redelivery.
 
 ## Feilsemantikk
 
@@ -226,5 +233,10 @@ Eksempel:
 - Input: `arkiv.command.ready.<entity>.<commandId>`
 - Status: `arkiv.status.<commandId>` (stream `arkiv_status`)
 - Done: `arkiv.command.done.<entity>.<commandId>`
+
+## Runtime og prioritet
+
+- Inntak (`command_listener`) og media-opplasting (`media_listener`) er kritiske for opptak og har restartbudsjett på 3 forsøk før prosessen avsluttes.
+- Validation, execution registration og execution worker kan være midlertidig degradert. De restartes med backoff og skal hente igjen backlog når NATS/infra er tilbake.
 
 `<entity>` er `sak` eller `journalpost`.

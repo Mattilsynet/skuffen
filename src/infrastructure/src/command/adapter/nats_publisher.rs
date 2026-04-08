@@ -1,4 +1,5 @@
 use crate::nats::client::NatsClient;
+use crate::nats::jetstream_setup::{command_inbox_stream_config, ensure_stream};
 use application::command::ports::command_dispatcher_port::CommandDispatcher;
 use async_nats::HeaderMap;
 use async_nats::jetstream::{self, message::PublishMessage};
@@ -44,14 +45,7 @@ impl CommandDispatcher for NatsCommandDispatcher {
         Span::current().record("subject", tracing::field::display(subject.as_str()));
 
         let jetstream = jetstream::new(self.client.inner().clone());
-        jetstream
-            .get_or_create_stream(jetstream::stream::Config {
-                name: "arkiv_command_inbox".to_string(),
-                subjects: vec!["arkiv.command.inbox.>".to_string()],
-                max_age: std::time::Duration::from_secs(60 * 60 * 24 * 180),
-                ..Default::default()
-            })
-            .await?;
+        ensure_stream(&jetstream, command_inbox_stream_config()).await?;
         let mut message = PublishMessage::build().payload(payload.into());
         if let Some(trace_parent) = crate::telemetry::current_trace_parent() {
             let mut headers = HeaderMap::new();
