@@ -126,7 +126,7 @@ impl EksekverKommandoService {
 
         for steg in plan.steg {
             let outcome = self
-                .execute_step(envelope, steg, &mut report)
+                .execute_steg(envelope, steg, &mut report)
                 .await
                 .map_err(|err| ExecutionFailure::new(err, report.clone()))?;
 
@@ -146,7 +146,7 @@ impl EksekverKommandoService {
         Ok(report)
     }
 
-    async fn execute_step(
+    async fn execute_steg(
         &self,
         envelope: &CommandEnvelope<Command>,
         steg: ResolvedStep,
