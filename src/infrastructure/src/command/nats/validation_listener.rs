@@ -29,10 +29,11 @@ impl CommandValidationListener {
 
     async fn run_once(&self) -> anyhow::Result<()> {
         let jetstream = jetstream::new(self.client.inner().clone());
-        let stream = ensure_stream(&jetstream, command_inbox_stream_config()).await?;
-        ensure_stream(&jetstream, command_ready_stream_config()).await?;
+        let replicas = self.client.jetstream_replicas();
+        let stream = ensure_stream(&jetstream, command_inbox_stream_config(replicas)).await?;
+        ensure_stream(&jetstream, command_ready_stream_config(replicas)).await?;
         let consumer =
-            ensure_pull_consumer(&stream, "validator", validator_consumer_config()).await?;
+            ensure_pull_consumer(&stream, "validator", validator_consumer_config(replicas)).await?;
         let mut messages = consumer.messages().await?;
 
         while let Some(message) = messages.next().await {

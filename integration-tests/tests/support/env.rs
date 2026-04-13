@@ -106,6 +106,7 @@ fn start_skuffen_process(
             std::env::set_var("APP_APPLICATION__PORT", "0");
             std::env::set_var("BASE_URL_SIKRI", base_url_sikri);
             std::env::set_var("APP_APPLICATION__PROJECT_ID", project_id);
+            std::env::set_var("APP_NATS_JETSTREAM_REPLICAS", "1");
             std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", otel_endpoint);
             std::env::remove_var("APP_NATS_CREDENTIALS");
             std::env::set_var("APP_NATS_CREDENTIALS", " ");

@@ -188,7 +188,7 @@ async fn setup_media_store(
     nats: NatsClient,
 ) -> anyhow::Result<std::sync::Arc<ObjectStoreMediaStore>> {
     let jetstream = jetstream::new(nats.inner().clone());
-    let store = ensure_media_object_store(&jetstream).await?;
+    let store = ensure_media_object_store(&jetstream, nats.jetstream_replicas()).await?;
     Ok(std::sync::Arc::new(ObjectStoreMediaStore::new(store)))
 }
 

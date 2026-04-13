@@ -47,7 +47,11 @@ impl ValidatedCommandDispatcher for NatsValidatedCommandDispatcher {
         Span::current().record("subject", tracing::field::display(subject.as_str()));
 
         let jetstream = jetstream::new(self.client.inner().clone());
-        ensure_stream(&jetstream, command_ready_stream_config()).await?;
+        ensure_stream(
+            &jetstream,
+            command_ready_stream_config(self.client.jetstream_replicas()),
+        )
+        .await?;
         let mut message = PublishMessage::build().payload(payload.into());
         if let Some(trace_parent) = crate::telemetry::current_trace_parent() {
             let mut headers = HeaderMap::new();

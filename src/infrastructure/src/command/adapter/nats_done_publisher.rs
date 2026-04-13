@@ -37,7 +37,11 @@ impl EksekveringKvitteringPublisher for NatsDonePublisher {
         let payload = serde_json::to_vec(command)?;
         let jetstream = jetstream::new(self.client.inner().clone());
         Span::current().record("subject", tracing::field::display(subject));
-        ensure_stream(&jetstream, command_done_stream_config()).await?;
+        ensure_stream(
+            &jetstream,
+            command_done_stream_config(self.client.jetstream_replicas()),
+        )
+        .await?;
         let mut message = PublishMessage::build().payload(payload.into());
         if let Some(trace_parent) = crate::telemetry::current_trace_parent() {
             let mut headers = HeaderMap::new();

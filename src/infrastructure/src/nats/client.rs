@@ -7,6 +7,7 @@ use super::config::NatsConfig;
 #[derive(Clone, Debug)]
 pub struct NatsClient {
     client: Client,
+    jetstream_replicas: usize,
 }
 
 impl NatsClient {
@@ -29,10 +30,17 @@ impl NatsClient {
             config.server_url
         );
 
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            jetstream_replicas: config.jetstream_replicas,
+        })
     }
 
     pub fn inner(&self) -> &Client {
         &self.client
+    }
+
+    pub fn jetstream_replicas(&self) -> usize {
+        self.jetstream_replicas
     }
 }
