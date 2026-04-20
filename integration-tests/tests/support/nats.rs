@@ -257,4 +257,26 @@ async fn request_via_nats<T: serde::Serialize>(
     Ok(response_json)
 }
 
-// request_nats removed; queries use handlers directly in tests.
+pub fn extract_saksnummer(
+    events: &[SkuffenStatusEventV1],
+    command_id: uuid::Uuid,
+) -> Option<String> {
+    events
+        .iter()
+        .find(|e| {
+            e.command_id == command_id
+                && e.terminal
+                && e.status == lib_schemas::skuffen::status::SkuffenStatus::Ok
+        })
+        .and_then(|e| e.saksnummer.as_ref().map(|s| s.as_str().to_string()))
+}
+
+pub async fn hent_sak_via_nats_by_arkiv_id(
+    nats_url: &str,
+    saksnummer: &str,
+) -> Result<serde_json::Value> {
+    let query = HentSakQuery {
+        key: DtoSakKey::ArkivId(lib_schemas::skuffen::sak::Saksnummer::new(saksnummer)?),
+    };
+    request_via_nats(nats_url, "sak.hent", &query).await
+}

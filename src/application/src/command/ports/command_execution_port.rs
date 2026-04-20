@@ -1,12 +1,10 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use domain::eksekvering::execution::{EksekveringStatus, Ventegrunn};
+use domain::eksekvering::execution::EksekveringStatus;
 use domain::eksekvering::id::{SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::typer::CommandTypeCode;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use uuid::Uuid;
-
-use crate::command::ports::execution_registration_port::EksekveringssystemRegistration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EksekveringsregistreringResultat {
@@ -31,7 +29,6 @@ pub struct NyKommandoEksekvering {
     pub sak_id: Option<SkuffenSakId>,
     pub journalpost_id: Option<SkuffenJournalpostId>,
     pub status: EksekveringStatus,
-    pub ventegrunn: Option<Ventegrunn>,
     pub last_detail: Option<String>,
 }
 
@@ -49,7 +46,6 @@ pub trait CommandExecutionRepository: Send + Sync {
 
     async fn opprett(
         &self,
-        registration: &EksekveringssystemRegistration,
         ny: NyKommandoEksekvering,
     ) -> Result<EksekveringsregistreringResultat, anyhow::Error>;
 
@@ -76,11 +72,10 @@ pub trait CommandExecutionRepository: Send + Sync {
         retry_ready_at: DateTime<Utc>,
     ) -> Result<(), anyhow::Error>;
 
-    async fn marker_venter(
+    async fn marker_blokkert_venter(
         &self,
         command_id: Uuid,
         attempt_no: i32,
-        grunn: &Ventegrunn,
         detalj: &str,
     ) -> Result<(), anyhow::Error>;
 
@@ -98,24 +93,14 @@ pub trait CommandExecutionRepository: Send + Sync {
         detalj: &str,
     ) -> Result<(), anyhow::Error>;
 
-    async fn hent_ventende_for_sak(
+    async fn hent_blokkert_venter_for_sak(
         &self,
         sak_id: SkuffenSakId,
     ) -> Result<Vec<EksekveringKommando>, anyhow::Error>;
 
-    async fn hent_ventende_for_journalpost(
-        &self,
-        journalpost_id: SkuffenJournalpostId,
-    ) -> Result<Vec<EksekveringKommando>, anyhow::Error>;
+    async fn marker_blokkert_venter_til_klar(&self, command_id: Uuid) -> Result<(), anyhow::Error>;
 
     async fn oppdater_til_klar(&self, command_id: Uuid) -> Result<(), anyhow::Error>;
-
-    async fn oppdater_venter(
-        &self,
-        command_id: Uuid,
-        grunn: &Ventegrunn,
-        detalj: &str,
-    ) -> Result<(), anyhow::Error>;
 
     async fn oppdater_til_feil(&self, command_id: Uuid, detalj: &str) -> Result<(), anyhow::Error>;
 

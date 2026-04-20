@@ -4,147 +4,102 @@ use domain::eksekvering::typer::{
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
 
-use crate::command::lifecycle::LifecycleDecision;
 use crate::command::status::{
     utfores_blocked_event, utfores_error_event, utfores_ok_event, utfores_retrying_event,
 };
 
-use super::execution_report::ExecutionReport;
 use super::{EksekverKommandoService, ExecutionOutcome};
 
 impl EksekverKommandoService {
-    fn execution_lifecycle_decision(
+    pub(super) async fn publish_success(
         &self,
-        err: &EksekveringFeil,
-        report: &ExecutionReport,
-    ) -> LifecycleDecision {
-        let detail = report.detail.clone().unwrap_or_else(|| err.melding.clone());
+        envelope: &CommandEnvelope<Command>,
+        attempt: u32,
+    ) -> Result<ExecutionOutcome, anyhow::Error> {
+        let context = self.resolve_execution_context(envelope).await?;
+        let event = utfores_ok_event(envelope, None, context, Some(attempt));
+        self.publish_status(event, envelope).await?;
+        Ok(ExecutionOutcome::Ok)
+    }
+
+    pub(super) async fn publish_blocked(
+        &self,
+        envelope: &CommandEnvelope<Command>,
+        attempt: u32,
+    ) -> Result<ExecutionOutcome, anyhow::Error> {
+        let context = self.resolve_execution_context(envelope).await?;
+        let detail = "Kommando venter på at prerequisite fullføres".to_string();
+        let event = utfores_blocked_event(
+            envelope,
+            &detail,
+            Some(SkuffenStatusErrorCode::PrerequisitePending),
+            context,
+            Some(attempt),
+        );
+        self.publish_status(event, envelope).await?;
+        Ok(ExecutionOutcome::BlokkertVenter {
+            last_error: Some(detail),
+        })
+    }
+
+    pub(super) async fn map_feil_til_outcome(
+        &self,
+        envelope: &CommandEnvelope<Command>,
+        err: EksekveringFeil,
+        attempt: u32,
+    ) -> Result<ExecutionOutcome, anyhow::Error> {
+        let context = self.resolve_execution_context(envelope).await?;
 
         match err.feiltype {
-            EksekveringFeiltype::Recoverable => LifecycleDecision::retrying(
-                detail,
-                Some(SkuffenStatusErrorCode::TemporaryUnavailable),
-            ),
-            EksekveringFeiltype::Irrecoverable => {
-                LifecycleDecision::error(detail, Some(SkuffenStatusErrorCode::ProcessingFailed))
+            EksekveringFeiltype::Recoverable => {
+                let event = utfores_retrying_event(
+                    envelope,
+                    &err.melding,
+                    Some(SkuffenStatusErrorCode::TemporaryUnavailable),
+                    context,
+                    Some(attempt),
+                );
+                self.publish_status(event, envelope).await?;
+                Ok(ExecutionOutcome::Retrying {
+                    last_error: Some(err.melding),
+                })
             }
-            EksekveringFeiltype::Blocked => LifecycleDecision::blocked(
-                detail,
-                report
-                    .blocked_by
-                    .as_ref()
-                    .map(|prerequisite| prerequisite.as_error_code()),
-            ),
+            EksekveringFeiltype::Irrecoverable => {
+                let event = utfores_error_event(
+                    envelope,
+                    &err.melding,
+                    Some(SkuffenStatusErrorCode::ProcessingFailed),
+                    context,
+                    Some(attempt),
+                );
+                self.publish_status(event, envelope).await?;
+                Ok(ExecutionOutcome::Feil {
+                    last_error: Some(err.melding),
+                })
+            }
+            EksekveringFeiltype::Blocked => {
+                let event = utfores_blocked_event(
+                    envelope,
+                    &err.melding,
+                    Some(SkuffenStatusErrorCode::PrerequisitePending),
+                    context,
+                    Some(attempt),
+                );
+                self.publish_status(event, envelope).await?;
+                Ok(ExecutionOutcome::BlokkertVenter {
+                    last_error: Some(err.melding),
+                })
+            }
         }
     }
 
     async fn resolve_execution_context(
         &self,
         envelope: &CommandEnvelope<Command>,
-        report: &ExecutionReport,
     ) -> Result<CommandLifecycleContext, anyhow::Error> {
-        let report_context = report.clone().into_context();
-        if !report_context.is_empty() {
-            let projected_context = self
-                .outward_status_projector
-                .resolve_context(envelope)
-                .await?;
-
-            return Ok(report.clone().merge_context_over(projected_context));
-        }
-
-        let projected_context = self
-            .outward_status_projector
+        self.outward_status_projector
             .resolve_context(envelope)
-            .await?;
-
-        Ok(projected_context)
-    }
-
-    pub(super) async fn publish_success(
-        &self,
-        envelope: &CommandEnvelope<Command>,
-        attempt: u32,
-        report: ExecutionReport,
-    ) -> Result<ExecutionOutcome, anyhow::Error> {
-        let context = self.resolve_execution_context(envelope, &report).await?;
-        let decision = LifecycleDecision::ok(report.detail.clone());
-        let event = utfores_ok_event(envelope, decision.detail, context, Some(attempt));
-        self.publish_status(event, envelope).await?;
-        Ok(ExecutionOutcome::Ok)
-    }
-
-    pub(super) async fn avslutt_med_feil(
-        &self,
-        envelope: &CommandEnvelope<Command>,
-        err: EksekveringFeil,
-        attempt: u32,
-        report: ExecutionReport,
-    ) -> Result<ExecutionOutcome, anyhow::Error> {
-        let context = self.resolve_execution_context(envelope, &report).await?;
-        let decision = self.execution_lifecycle_decision(&err, &report);
-
-        let event = match decision.stage_status {
-            domain::eksekvering::typer::CommandStageStatus::Retrying => utfores_retrying_event(
-                envelope,
-                decision
-                    .detail
-                    .clone()
-                    .unwrap_or_else(|| err.melding.clone()),
-                decision.error_code.clone(),
-                context,
-                Some(attempt),
-            ),
-            domain::eksekvering::typer::CommandStageStatus::Error => utfores_error_event(
-                envelope,
-                decision
-                    .detail
-                    .clone()
-                    .unwrap_or_else(|| err.melding.clone()),
-                decision.error_code.clone(),
-                context,
-                Some(attempt),
-            ),
-            domain::eksekvering::typer::CommandStageStatus::Blocked => utfores_blocked_event(
-                envelope,
-                decision
-                    .detail
-                    .clone()
-                    .unwrap_or_else(|| err.melding.clone()),
-                decision.error_code.clone(),
-                context,
-                Some(attempt),
-            ),
-            domain::eksekvering::typer::CommandStageStatus::Ok
-            | domain::eksekvering::typer::CommandStageStatus::Venter => {
-                unreachable!("execution failure must map to non-ok lifecycle decision")
-            }
-        };
-        self.publish_status(event, envelope).await?;
-
-        let detail = decision.detail.unwrap_or_else(|| err.melding.clone());
-
-        Ok(match decision.stage_status {
-            domain::eksekvering::typer::CommandStageStatus::Retrying => {
-                ExecutionOutcome::Retrying {
-                    last_error: Some(detail),
-                }
-            }
-            domain::eksekvering::typer::CommandStageStatus::Error => ExecutionOutcome::Error {
-                last_error: Some(detail),
-            },
-            domain::eksekvering::typer::CommandStageStatus::Blocked => ExecutionOutcome::Blocked {
-                grunn: report
-                    .blocked_by
-                    .as_ref()
-                    .map(|prerequisite| prerequisite.as_ventegrunn()),
-                last_error: Some(detail),
-            },
-            domain::eksekvering::typer::CommandStageStatus::Ok
-            | domain::eksekvering::typer::CommandStageStatus::Venter => {
-                unreachable!("execution failure must map to non-ok lifecycle outcome")
-            }
-        })
+            .await
     }
 
     async fn publish_status(

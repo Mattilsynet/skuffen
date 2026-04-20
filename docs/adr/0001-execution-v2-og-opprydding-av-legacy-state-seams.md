@@ -150,3 +150,20 @@ Ulemper:
 
 - `docs/command_executor.md`
 - `docs/execution_v2_design.md`
+
+---
+
+## Oppdatering 2026-04-20
+
+ADR 0001 beskriver execution v2-målene. Entity state machine execution-modellen (implementert 2026-04-20) er den realiserte implementasjonen av disse målene.
+
+Konkrete endringer fra ADR-teksten:
+
+- **Tabellnavn:** Snapshot-tabellene (`sak_state`, `journalpost_state`, `dokument_state`) er erstattet av tilstandsmaskin-tabeller (`sak_tilstand`, `journalpost_tilstand`, `dokument_tilstand`) med eksplisitte `tilstand`/`oensket_tilstand`-kolonner og tilhørende `tilstand_historikk`-tabell for audit trail.
+- **Port:** `EksekveringSnapshotRepository` er erstattet av `EntityTilstandRepository`.
+- **Klarhetsvurdering:** `EksekveringsklarhetVurderer` er erstattet av `evaluer_klarhet()` i `RegistrerIEksekveringssystemService`. Samme funksjon brukes ved registrering og ved wake-up via `ReevaluerVentendeKommandoerService`.
+- **Status rename:** `venter` er omdøpt til `blokkert_venter` i `command_execution` for klarhet. `wait_kind`/`wait_sak_id`/`wait_journalpost_id`-kolonnene er fjernet — blokkering er nå implisitt via entity tilstand.
+- **Dokumentfeil:** `FeiletPermanent` dokument gir terminal `feil` for kommandoen (ikke `blokkert_venter`). Et permanent-feilet dokument kan aldri hentes og skal ikke blokkere for alltid.
+- **Eksekveringsmodell:** Ingen in-memory plan. `neste_handling(command_type, &SakMedBarn)` er en ren domenefunksjon som inspiserer entity tilstand og returnerer neste nødvendige `ArkivOperasjon`. `EksekverKommandoService.handle()` kaller denne i løkke.
+
+Se `.agent/decisions/entity-state-machine-execution.md` for full beslutningsdokumentasjon.

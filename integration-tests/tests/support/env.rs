@@ -1,17 +1,12 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Result;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::PgPool;
 use testcontainers::{
     core::ContainerPort, runners::AsyncRunner, ContainerAsync, ContainerRequest, GenericImage,
     ImageExt,
 };
 use testcontainers_modules::postgres::Postgres;
-
-use application::command::ports::command_state_port::ArkivSakTilstandRepository;
-use application::command::ports::eksekvering_port::ArkivGateway;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use crate::support::nats::{wait_for_nats_ready, wait_for_ready};
@@ -21,9 +16,16 @@ const NATS_TAG: &str = "2.10.7";
 const NATS_PORT: u16 = 4222;
 const NATS_MONITOR_PORT: u16 = 8222;
 
+struct DbConnectOptions {
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+    database: String,
+}
+
 pub struct TestEnv {
     pub nats_url: String,
-    pub pool: PgPool,
     _postgres: ContainerAsync<Postgres>,
     _nats: ContainerAsync<GenericImage>,
     _skuffen: tokio::task::JoinHandle<anyhow::Result<()>>,
@@ -36,9 +38,9 @@ impl Drop for TestEnv {
     }
 }
 
-fn runtime_lock() -> &'static Arc<Mutex<()>> {
-    static LOCK: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
-    LOCK.get_or_init(|| Arc::new(Mutex::new(())))
+fn runtime_lock() -> &'static std::sync::Arc<Mutex<()>> {
+    static LOCK: OnceLock<std::sync::Arc<Mutex<()>>> = OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Arc::new(Mutex::new(())))
 }
 
 fn default_nats_args() -> Vec<String> {
@@ -58,15 +60,16 @@ fn nats_image() -> ContainerRequest<GenericImage> {
         .with_cmd(default_nats_args())
 }
 
-async fn setup_postgres() -> Result<(ContainerAsync<Postgres>, PgConnectOptions)> {
+async fn setup_postgres() -> Result<(ContainerAsync<Postgres>, DbConnectOptions)> {
     let container = Postgres::default().start().await?;
     let port = container.get_host_port_ipv4(5432).await?;
-    let options = PgConnectOptions::new()
-        .host("127.0.0.1")
-        .port(port)
-        .username("postgres")
-        .password("postgres")
-        .database("postgres");
+    let options = DbConnectOptions {
+        host: "127.0.0.1".to_string(),
+        port,
+        username: "postgres".to_string(),
+        password: "postgres".to_string(),
+        database: "postgres".to_string(),
+    };
     Ok((container, options))
 }
 
@@ -79,16 +82,17 @@ async fn setup_nats() -> Result<(ContainerAsync<GenericImage>, String)> {
 
 fn start_skuffen_process(
     nats_url: &str,
-    db_options: &PgConnectOptions,
+    db_options: &DbConnectOptions,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
     let base_url_sikri = "http://127.0.0.1:1";
     let project_id = "local-test";
     let otel_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
         .unwrap_or_else(|_| "http://127.0.0.1:4317".to_string());
-    let db_host = db_options.get_host().to_string();
-    let db_port = db_options.get_port().to_string();
-    let db_user = db_options.get_username().to_string();
-    let db_name = db_options.get_database().unwrap_or("postgres").to_string();
+    let db_host = db_options.host.clone();
+    let db_port = db_options.port.to_string();
+    let db_user = db_options.username.clone();
+    let db_name = db_options.database.clone();
+    let db_password = db_options.password.clone();
     let nats_url = nats_url.to_string();
 
     tokio::spawn(async move {
@@ -99,7 +103,7 @@ fn start_skuffen_process(
             std::env::set_var("DATABASE_HOST", db_host);
             std::env::set_var("DATABASE_PORT", db_port);
             std::env::set_var("DATABASE_USER", db_user);
-            std::env::set_var("DATABASE_PASSWORD", "postgres");
+            std::env::set_var("DATABASE_PASSWORD", db_password);
             std::env::set_var("DATABASE_NAME", db_name);
             std::env::set_var("NATS_URL", nats_url);
             std::env::set_var("APP_APPLICATION__HOST", "127.0.0.1");
@@ -116,19 +120,14 @@ fn start_skuffen_process(
     })
 }
 
-pub async fn start_runtime(
-    _command_state_repo: Box<dyn ArkivSakTilstandRepository>,
-    _arkiv_gateway: Box<dyn ArkivGateway>,
-    _query_repos: Option<Arc<dyn std::any::Any + Send + Sync>>,
-) -> Result<TestEnv> {
+pub async fn start_runtime() -> Result<TestEnv> {
     let guard = runtime_lock().clone().lock_owned().await;
 
     eprintln!("start_runtime: starting postgres container");
     let (_postgres, db_options) = setup_postgres().await?;
     eprintln!(
         "start_runtime: postgres ready on {}:{}",
-        db_options.get_host(),
-        db_options.get_port()
+        db_options.host, db_options.port
     );
     eprintln!("start_runtime: starting nats container");
     let (_nats, nats_url) = setup_nats().await?;
@@ -136,13 +135,6 @@ pub async fn start_runtime(
     wait_for_nats_ready(&nats_url, Duration::from_secs(15)).await?;
     eprintln!("start_runtime: nats ready at {}", nats_url);
 
-    eprintln!("start_runtime: connecting postgres pool");
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect_with(db_options.clone())
-        .await
-        .map_err(|err| anyhow::anyhow!("connect test postgres: {err}"))?;
-    let pool = pool.clone();
     eprintln!("start_runtime: spawning skuffen process");
     let skuffen = start_skuffen_process(&nats_url, &db_options);
     eprintln!("start_runtime: waiting for skuffen ready");
@@ -151,7 +143,6 @@ pub async fn start_runtime(
 
     Ok(TestEnv {
         nats_url,
-        pool,
         _guard: guard,
         _postgres,
         _nats,

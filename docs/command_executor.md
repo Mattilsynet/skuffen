@@ -9,28 +9,28 @@ Dette dokumentet beskriver execution v2 i Skuffen. Målet er robusthet og pålit
 Execution skal kunne forklares slik:
 
 1. En validert kommando registreres i execution-systemet.
-2. Skuffen materialiserer lokal snapshot-state for sak, journalpost og dokument.
-3. Skuffen vurderer om kommandoen er **klar**, **venter** eller terminal **feil**.
-4. Én executor plukker neste kjørbare kommando og kjører den stegvis mot Sikri.
-5. Etter hvert steg oppdateres snapshot-state og command execution state eksplisitt.
-6. Kommandoen ender i `ok`, `retry_venter`, `venter` eller `feil`.
+2. `RegistrerIEksekveringssystemService` oppretter entity tilstand-rader for sak, journalpost og dokument og evaluerer klarhet via `evaluer_klarhet()`.
+3. Skuffen vurderer om kommandoen er **klar**, **blokkert_venter** eller terminal **feil**.
+4. Én executor plukker neste kjørbare kommando og kjører den mot Sikri ved å kalle `neste_handling` i løkke.
+5. Etter hvert steg oppdateres entity tilstand og command execution state eksplisitt.
+6. Kommandoen ender i `ok`, `retry_venter`, `blokkert_venter` eller `feil`.
 
-Det er ingen skjult workflow engine. Snapshot-state beskriver fakta. `command_execution` beskriver progresjon.
+Det er ingen skjult workflow engine. Entity tilstand beskriver fakta per domeneentitet. `command_execution` beskriver progresjon.
 
 ## Flyt
 
 1. Lytt på `arkiv.command.ready.<entity>.<commandId>` (JetStream, retention 180 dager).
-2. Registrer kommandoen i `command_execution` og seed snapshot-state i samme use case.
-3. Bruk én eksplisitt readiness-vurderer for å avgjøre om kommandoen er:
+2. Registrer kommandoen i `command_execution` og seed entity tilstand-rader i samme use case via `RegistrerIEksekveringssystemService`.
+3. Bruk `evaluer_klarhet()` for å avgjøre om kommandoen er:
    - `klar`
-   - `venter`
+   - `blokkert_venter`
    - `feil`
 4. Executor starter, tar singleton-lock og resetter eventuelle hengende `kjorer`-rader tilbake til `klar`.
 5. Executor plukker neste kjørbare kommando fra DB.
-6. Executor kjører planen steg for steg:
-   - guard leser snapshot-state
-   - steg kaller Sikri
-   - steg oppdaterer snapshot-state og command execution state
+6. Executor kaller `neste_handling(command_type, &SakMedBarn)` i løkke:
+   - `neste_handling` leser entity tilstand og returnerer neste nødvendige `ArkivOperasjon`, eller `None` når alt er ferdig
+   - executor utfører operasjonen mot Sikri
+   - entity tilstand og command execution state oppdateres eksplisitt
 7. Status-eventer publiseres på `arkiv.status.<commandId>`.
 8. Når execution-path publiserer en terminal status, publiseres også `arkiv.command.done.<entity>.<commandId>`.
 
@@ -58,9 +58,9 @@ Kjernekrav:
  Utgående uten utsending:
 - Opprett i `R`, sett til `J`.
 
-## Eksekveringsplan (parse + typebasert validering)
+## Eksekveringsplan (neste_handling gap-closer)
 
-Kommandoer blir oversatt til en plan av steg. Typebasert validering brukes for å sikre at steg har nødvendige felt før de kan kjøres (f.eks. at utgående har mottaker og hoveddokument).
+Kommandoer drives av den rene domenefunksjonen `neste_handling(command_type, &SakMedBarn) -> Result<Option<ArkivOperasjon>, EksekveringFeil>`. Den inspiserer entity tilstand og returnerer neste nødvendige operasjon. `EksekverKommandoService.handle()` kaller denne i løkke til `None` returneres (ferdig) eller en feil oppstår.
 
 ### Opprett sak
 Steg:
@@ -82,7 +82,7 @@ Steg:
 Execution v2 skiller bevisst mellom:
 
 - **workflow-state**: hvor langt kommandoen har kommet
-- **snapshot-state**: arkivfaglige fakta som guarder og regler leser
+- **entity tilstand**: tilstandsmaskiner per domeneentitet (sak, journalpost, dokument)
 
 ### Workflow-state: `command_execution`
 
@@ -97,8 +97,6 @@ Felt på høyt nivå:
 - `status`
 - `attempt_no`
 - `retry_ready_at`
-- `wait_kind`
-- `wait_sak_id`, `wait_journalpost_id`
 - `last_detail`
 - `utfores_venter_publisert_at`
 - `created_at`, `updated_at`, `started_at`, `finished_at`
@@ -106,13 +104,13 @@ Felt på høyt nivå:
 Statusene er:
 - `klar`
 - `kjorer`
-- `venter`
+- `blokkert_venter`
 - `retry_venter`
 - `ok`
 - `feil`
 
 Semantikk:
-- `venter` = prerequisite mangler i Skuffen-state; ingen timer
+- `blokkert_venter` = prerequisite mangler i Skuffen entity tilstand; ingen timer
 - `retry_venter` = recoverable teknisk feil; styres av `retry_ready_at`
 - `feil` = terminal, inkludert irrecoverable stegfeil
 
@@ -122,37 +120,42 @@ Semantikk:
 
 Historikk per forsøk brukes for audit/debug og startup recovery. Denne tabellen er ikke scheduler-state.
 
-### Snapshot-state (arkivfaglige fakta)
+### Entity tilstand (arkivfaglige fakta)
 
-### SakState
-- `sak_id` (skuffen_id)
+Entity tilstand er persisterte tilstandsmaskiner per domeneentitet, keyed av stabile interne `skuffen_id`.
+
+#### `sak_tilstand`
+- `sak_id`
+- `tilstand` (`ikke_realisert` | `opprettet` | `avsluttet`)
+- `oensket_tilstand`
+- `sikri_id` (nullable)
 - `saksnummer` (nullable)
-- `status` (B/F/A)
-- `opprettet` bool
 
-### JournalpostState
-- `journalpost_id` (skuffen_id)
+#### `journalpost_tilstand`
+- `journalpost_id`
 - `sak_id` (FK)
+- `tilstand` (`ikke_realisert` | `opprettet` | `dokumenter_under_arbeid` | `klar_for_journalforing` | `journalfoert` | `avskrevet` | `venter_paa_utsending`)
+- `oensket_tilstand`
+- `journalposttype`
+- `med_utsending` bool
+- `sikri_id` (nullable)
 - `journalpostnummer` (nullable)
-- `type` (I/U/X)
-- `med_utsending` bool (kun U)
-- `journalført` bool
-- `avskrevet` bool (kun I)
-- `ekspedert` bool (kun U, kun ved utsending)
-- `har_feilede_dokumenter` bool
 
-### DokumentState
-- `dokument_id` (skuffen_id)
+#### `dokument_tilstand`
+- `dokument_id`
 - `journalpost_id` (FK)
-- `lagt_til` bool
-- `irrecoverable_feil` bool
+- `tilstand` (`ikke_realisert` | `ok` | `feilet_permanent`)
+
+#### `tilstand_historikk`
+
+Audit trail for alle tilstandsoverganger på tvers av entitetstyper.
 
 ## Rekkefølge og blokkering
 
 ### Opprett journalpost
 Krav:
 - Sak finnes og er ikke avsluttet.
-- Ved `SakKey::ClientReference` registreres journalpostkommandoen lokalt, men blir `venter` til saken er opprettet i snapshot-state.
+- Ved `SakKey::ClientReference` registreres journalpostkommandoen lokalt, men blir `blokkert_venter` til saken er opprettet i entity tilstand.
 - Journalpostkommando venter også på `saksnummer` hvis saken finnes, men fortsatt mangler dette.
 - Ved `SakKey::ArkivId` seedes saken som opprettet med kjent `saksnummer`.
 
@@ -178,15 +181,15 @@ Krav:
 
 Hvis krav ikke er oppfylt, blir kommandoen enten:
 
-- `venter`, hvis prerequisite kan bli oppfylt av videre Skuffen-fremdrift
+- `blokkert_venter`, hvis prerequisite kan bli oppfylt av videre Skuffen-fremdrift
 - `feil`, hvis tilstanden er irrecoverable for denne kommandoen
 
 ## Hva hvis prosessen dør midt i planen?
 
-- Planen ligger i RAM, men **hvert steg skal være gated av lokal snapshot-state**.
+- `neste_handling` er en ren domenefunksjon som leser **entity tilstand** for å avgjøre neste operasjon.
 - Ved startup resettes `kjorer` til `klar`, og executor kan kjøre kommandoen på nytt.
 - Åpne rader i `command_execution_attempt` markeres samtidig som `avbrutt` før `kjorer` resettes.
-- Allerede fullførte steg skal skippe basert på snapshot-state.
+- Allerede fullførte steg hoppes over fordi `neste_handling` ser at entity tilstand allerede er i riktig tilstand.
 - `command_execution_attempt` brukes til å se hva som skjedde før restart.
 
 ## Timeout/feil fra arkivet
@@ -200,22 +203,23 @@ Hvis krav ikke er oppfylt, blir kommandoen enten:
 ## Feilsemantikk
 
 - Hvis ett steg i en kommando feiler irrecoverably, feiler **hele kommandoen**.
-- En kommando kan også bli terminal `feil` allerede ved registrering hvis readiness-vurdereren ser at prerequisites ikke kan bli oppfylt.
-- `venter` brukes bare når kommandoen faktisk kan komme videre av senere state-endringer i Skuffen.
+- En kommando kan også bli terminal `feil` allerede ved registrering hvis `evaluer_klarhet()` ser at prerequisites ikke kan bli oppfylt.
+- `blokkert_venter` brukes bare når kommandoen faktisk kan komme videre av senere tilstandsendringer i Skuffen.
 - `retry_venter` brukes bare for tekniske feil som kan forsøkes igjen senere.
+- Et dokument med `feilet_permanent` tilstand gir `EksekveringFeil::irrecoverable(...)` — kommandoen avsluttes med terminal `feil`, ikke `blokkert_venter`. Et permanent-feilet dokument kan aldri hentes og skal ikke blokkere for alltid.
 
 ## Wake-up av ventende kommandoer
 
-`venter` er ikke timer-basert. Når relevant snapshot-state endres, reevaluerer Skuffen ventende kommandoer for samme sak eller journalpost.
+`blokkert_venter` er ikke timer-basert. Når relevant entity tilstand endres, reevaluerer `ReevaluerVentendeKommandoerService` ventende kommandoer for samme sak eller journalpost.
 
-Samme readiness-vurderer brukes:
+Samme `evaluer_klarhet()` brukes:
 - ved registrering
 - ved wake-up
 
-Wake-up kan flytte en kommando fra `venter` til `klar` eller terminal `feil`.
-Ved `venter -> feil` publiseres outward error-status, og `done` publiseres bare hvis `utfores::venter` tidligere faktisk ble publisert for kommandoen.
+Wake-up kan flytte en kommando fra `blokkert_venter` til `klar` eller terminal `feil`.
+Ved `blokkert_venter -> feil` publiseres outward error-status, og `done` publiseres bare hvis `utfores::venter` tidligere faktisk ble publisert for kommandoen.
 
-Wake-up trigges også etter persistert irrecoverable dokumentfeil, fordi dette kan gjøre ventende kommandoer for samme journalpost eller sak terminalt umulige.
+Wake-up trigges også etter persistert irrecoverable dokumentfeil, fordi `feilet_permanent` på et dokument gir umiddelbar terminal `feil` for kommandoen — ikke videre blokkering.
 
 Hvis et step allerede er fullfort og execution derfor skiper med `AlreadyCompleted`, skal relevante wake-up scopes fortsatt trigges, slik at tidligere tapte wake-ups kan hentes inn igjen.
 

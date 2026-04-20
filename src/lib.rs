@@ -61,6 +61,7 @@ pub async fn run() -> anyhow::Result<()> {
             runtime.nats.clone(),
             runtime.id_mapping_repo,
             runtime.execution_store,
+            runtime.entity_tilstand_store,
             runtime.media_store,
             runtime.use_fake_sikri,
         );

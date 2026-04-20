@@ -1,0 +1,87 @@
+use async_trait::async_trait;
+use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
+use domain::eksekvering::tilstand::JournalpostType;
+use domain::eksekvering::tilstand::{
+    DokumentTilstand, JournalpostTilstand, SakMedBarn, SakTilstand,
+};
+use uuid::Uuid;
+
+#[allow(clippy::too_many_arguments)]
+#[async_trait]
+pub trait EntityTilstandRepository: Send + Sync {
+    // Sak
+    async fn opprett_sak_tilstand(
+        &self,
+        sak_id: SkuffenSakId,
+        oensket_tilstand: SakTilstand,
+        command_id: Uuid,
+    ) -> Result<(), anyhow::Error>;
+
+    async fn oppdater_sak_tilstand(
+        &self,
+        sak_id: SkuffenSakId,
+        tilstand: SakTilstand,
+        sikri_id: Option<i64>,
+        saksnummer: Option<&str>,
+        feil_detalj: Option<&str>,
+    ) -> Result<(), anyhow::Error>;
+
+    async fn oppdater_sak_oensket_tilstand(
+        &self,
+        sak_id: SkuffenSakId,
+        oensket_tilstand: SakTilstand,
+    ) -> Result<(), anyhow::Error>;
+
+    // Journalpost
+    async fn opprett_journalpost_tilstand(
+        &self,
+        journalpost_id: SkuffenJournalpostId,
+        sak_id: SkuffenSakId,
+        journalposttype: JournalpostType,
+        med_utsending: bool,
+        oensket_tilstand: JournalpostTilstand,
+        command_id: Uuid,
+    ) -> Result<(), anyhow::Error>;
+
+    async fn oppdater_journalpost_tilstand(
+        &self,
+        journalpost_id: SkuffenJournalpostId,
+        tilstand: JournalpostTilstand,
+        sikri_id: Option<i64>,
+        journalpostnummer: Option<i32>,
+        feil_detalj: Option<&str>,
+    ) -> Result<(), anyhow::Error>;
+
+    // Dokument
+    async fn opprett_dokument_tilstand(
+        &self,
+        dokument_id: SkuffenDokumentId,
+        journalpost_id: SkuffenJournalpostId,
+        command_id: Uuid,
+    ) -> Result<(), anyhow::Error>;
+
+    async fn oppdater_dokument_tilstand(
+        &self,
+        dokument_id: SkuffenDokumentId,
+        tilstand: DokumentTilstand,
+        feil_detalj: Option<&str>,
+    ) -> Result<(), anyhow::Error>;
+
+    // Aggregat-henting
+    async fn hent_sak_med_barn(
+        &self,
+        sak_id: SkuffenSakId,
+    ) -> Result<Option<SakMedBarn>, anyhow::Error>;
+
+    // Historikk
+    async fn logg_overgang(
+        &self,
+        entity_type: &str,
+        entity_id: Uuid,
+        command_id: Uuid,
+        fra_tilstand: &str,
+        til_tilstand: &str,
+        operasjon: &str,
+        feil_detalj: Option<&str>,
+    ) -> Result<(), anyhow::Error>;
+}

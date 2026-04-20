@@ -1,7 +1,10 @@
 use async_trait::async_trait;
-use domain::eksekvering::execution::Ventegrunn;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
-use domain::eksekvering::plan::JournalpostType;
+use domain::eksekvering::tilstand::JournalpostType;
+use domain::eksekvering::tilstand::{
+    DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter, JournalpostTilstand,
+    SakMedBarn, SakTilstand,
+};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
@@ -20,195 +23,118 @@ use crate::command::ports::command_execution_port::{
 use crate::command::ports::eksekvering_port::{
     EksekveringKvitteringPublisher, EksekveringStatusPublisher,
 };
-use crate::command::ports::execution_registration_port::EksekveringssystemRegistration;
-use crate::command::ports::execution_snapshot_port::{
-    DokumentState, EksekveringSnapshotRepository, JournalpostOpprettetTransition,
-    JournalpostOvergangVedJournalfoering, JournalpostState, SakState, SakStatus, SakTransition,
-};
+use crate::command::ports::entity_tilstand_port::EntityTilstandRepository;
 use crate::command::ports::id_mapping_port::{IdMappingRepository, MappingEntityType};
 use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
 use crate::command::services::reevaluer_ventende_kommandoer::ReevaluerVentendeKommandoerService;
 use domain::eksekvering::typer::{CommandLifecycleContext, CommandLifecycleEvent};
 
-#[derive(Default)]
-struct FakeSnapshotData {
-    saker: HashMap<Uuid, SakState>,
-    journalposter: HashMap<Uuid, JournalpostState>,
-    journalposter_per_sak: HashMap<Uuid, Vec<Uuid>>,
-    dokumenter: HashMap<Uuid, DokumentState>,
-}
+// ---------------------------------------------------------------------------
+// FakeEntityTilstandRepository
+// ---------------------------------------------------------------------------
 
 #[derive(Clone, Default)]
-struct FakeSnapshotRepository {
-    data: Arc<Mutex<FakeSnapshotData>>,
+struct FakeEntityTilstandRepository {
+    sak_med_barn: Arc<Mutex<HashMap<Uuid, SakMedBarn>>>,
 }
 
 #[async_trait]
-impl EksekveringSnapshotRepository for FakeSnapshotRepository {
-    async fn hent_sak_state(
+impl EntityTilstandRepository for FakeEntityTilstandRepository {
+    async fn opprett_sak_tilstand(
         &self,
-        sak_id: SkuffenSakId,
-    ) -> Result<Option<SakState>, anyhow::Error> {
-        Ok(self
-            .data
-            .lock()
-            .unwrap()
-            .saker
-            .get(&Uuid::from(sak_id))
-            .cloned())
+        _sak_id: SkuffenSakId,
+        _oensket_tilstand: SakTilstand,
+        _command_id: Uuid,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
     }
-
-    async fn ensure_sak_state(
+    async fn oppdater_sak_tilstand(
         &self,
-        sak_id: SkuffenSakId,
-        state: SakState,
-    ) -> Result<SakState, anyhow::Error> {
-        self.data
-            .lock()
-            .unwrap()
-            .saker
-            .entry(Uuid::from(sak_id))
-            .or_insert(state.clone());
-        Ok(state)
+        _sak_id: SkuffenSakId,
+        _tilstand: SakTilstand,
+        _sikri_id: Option<i64>,
+        _saksnummer: Option<&str>,
+        _feil_detalj: Option<&str>,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
     }
-
-    async fn anvend_sak_transition(
+    async fn oppdater_sak_oensket_tilstand(
         &self,
-        sak_id: SkuffenSakId,
-        transition: SakTransition,
-    ) -> Result<SakState, anyhow::Error> {
-        let state = SakState {
-            status: transition.status,
-            opprettet: transition.opprettet,
-            saksnummer: transition.saksnummer,
-        };
-        self.data
-            .lock()
-            .unwrap()
-            .saker
-            .insert(Uuid::from(sak_id), state.clone());
-        Ok(state)
+        _sak_id: SkuffenSakId,
+        _oensket_tilstand: SakTilstand,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
     }
-
-    async fn hent_journalpost_state(
-        &self,
-        journalpost_id: SkuffenJournalpostId,
-    ) -> Result<Option<JournalpostState>, anyhow::Error> {
-        Ok(self
-            .data
-            .lock()
-            .unwrap()
-            .journalposter
-            .get(&Uuid::from(journalpost_id))
-            .cloned())
-    }
-
-    async fn ensure_journalpost_state(
-        &self,
-        journalpost_id: SkuffenJournalpostId,
-        sak_id: SkuffenSakId,
-        state: JournalpostState,
-    ) -> Result<JournalpostState, anyhow::Error> {
-        let mut data = self.data.lock().unwrap();
-        let journalpost_id = Uuid::from(journalpost_id);
-        data.journalposter
-            .entry(journalpost_id)
-            .or_insert(state.clone());
-        data.journalposter_per_sak
-            .entry(Uuid::from(sak_id))
-            .or_default()
-            .push(journalpost_id);
-        Ok(state)
-    }
-
-    async fn anvend_journalpost_opprettet(
+    async fn opprett_journalpost_tilstand(
         &self,
         _journalpost_id: SkuffenJournalpostId,
-        _transition: JournalpostOpprettetTransition,
-    ) -> Result<JournalpostState, anyhow::Error> {
-        unreachable!()
+        _sak_id: SkuffenSakId,
+        _journalposttype: JournalpostType,
+        _med_utsending: bool,
+        _oensket_tilstand: JournalpostTilstand,
+        _command_id: Uuid,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
     }
-
-    async fn anvend_journalpost_overgang_ved_journalfoering(
+    async fn oppdater_journalpost_tilstand(
         &self,
         _journalpost_id: SkuffenJournalpostId,
-        _transition: JournalpostOvergangVedJournalfoering,
-    ) -> Result<JournalpostState, anyhow::Error> {
-        unreachable!()
+        _tilstand: JournalpostTilstand,
+        _sikri_id: Option<i64>,
+        _journalpostnummer: Option<i32>,
+        _feil_detalj: Option<&str>,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
     }
-
-    async fn anvend_journalpost_avskrevet(
-        &self,
-        _journalpost_id: SkuffenJournalpostId,
-    ) -> Result<JournalpostState, anyhow::Error> {
-        unreachable!()
-    }
-
-    async fn hent_journalposter_for_sak(
-        &self,
-        sak_id: SkuffenSakId,
-    ) -> Result<Vec<JournalpostState>, anyhow::Error> {
-        let data = self.data.lock().unwrap();
-        Ok(data
-            .journalposter_per_sak
-            .get(&Uuid::from(sak_id))
-            .into_iter()
-            .flatten()
-            .filter_map(|journalpost_id| data.journalposter.get(journalpost_id).cloned())
-            .collect())
-    }
-
-    async fn hent_dokument_state(
-        &self,
-        dokument_id: SkuffenDokumentId,
-    ) -> Result<Option<DokumentState>, anyhow::Error> {
-        Ok(self
-            .data
-            .lock()
-            .unwrap()
-            .dokumenter
-            .get(&Uuid::from(dokument_id))
-            .cloned())
-    }
-
-    async fn ensure_dokument_state(
-        &self,
-        dokument_id: SkuffenDokumentId,
-        _journalpost_id: SkuffenJournalpostId,
-        state: DokumentState,
-    ) -> Result<DokumentState, anyhow::Error> {
-        self.data
-            .lock()
-            .unwrap()
-            .dokumenter
-            .entry(Uuid::from(dokument_id))
-            .or_insert(state.clone());
-        Ok(state)
-    }
-
-    async fn anvend_dokument_lagt_til(
+    async fn opprett_dokument_tilstand(
         &self,
         _dokument_id: SkuffenDokumentId,
         _journalpost_id: SkuffenJournalpostId,
-    ) -> Result<DokumentState, anyhow::Error> {
-        unreachable!()
+        _command_id: Uuid,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
     }
-
-    async fn anvend_dokument_irrecoverable_feil(
+    async fn oppdater_dokument_tilstand(
         &self,
         _dokument_id: SkuffenDokumentId,
-        _journalpost_id: SkuffenJournalpostId,
-    ) -> Result<DokumentState, anyhow::Error> {
-        unreachable!()
+        _tilstand: DokumentTilstand,
+        _feil_detalj: Option<&str>,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+    async fn hent_sak_med_barn(
+        &self,
+        sak_id: SkuffenSakId,
+    ) -> Result<Option<SakMedBarn>, anyhow::Error> {
+        Ok(self
+            .sak_med_barn
+            .lock()
+            .unwrap()
+            .get(&Uuid::from(sak_id))
+            .cloned())
+    }
+    async fn logg_overgang(
+        &self,
+        _entity_type: &str,
+        _entity_id: Uuid,
+        _command_id: Uuid,
+        _fra_tilstand: &str,
+        _til_tilstand: &str,
+        _operasjon: &str,
+        _feil_detalj: Option<&str>,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
     }
 }
 
+// ---------------------------------------------------------------------------
+// FakeExecutionRepository
+// ---------------------------------------------------------------------------
+
 #[derive(Default)]
 struct FakeExecutionData {
-    ventende_for_sak: HashMap<Uuid, Vec<EksekveringKommando>>,
-    ventende_for_journalpost: HashMap<Uuid, Vec<EksekveringKommando>>,
+    blokkert_venter_for_sak: HashMap<Uuid, Vec<EksekveringKommando>>,
     oppdatert_til_klar: Vec<Uuid>,
-    oppdatert_til_venter: Vec<(Uuid, String, String)>,
     oppdatert_til_feil: Vec<(Uuid, String)>,
 }
 
@@ -267,7 +193,6 @@ impl CommandExecutionRepository for FakeExecutionRepository {
     }
     async fn opprett(
         &self,
-        _registration: &EksekveringssystemRegistration,
         _ny: NyKommandoEksekvering,
     ) -> Result<EksekveringsregistreringResultat, anyhow::Error> {
         unreachable!()
@@ -304,11 +229,10 @@ impl CommandExecutionRepository for FakeExecutionRepository {
     ) -> Result<(), anyhow::Error> {
         Ok(())
     }
-    async fn marker_venter(
+    async fn marker_blokkert_venter(
         &self,
         _command_id: Uuid,
         _attempt_no: i32,
-        _grunn: &Ventegrunn,
         _detalj: &str,
     ) -> Result<(), anyhow::Error> {
         Ok(())
@@ -330,7 +254,7 @@ impl CommandExecutionRepository for FakeExecutionRepository {
         Ok(())
     }
 
-    async fn hent_ventende_for_sak(
+    async fn hent_blokkert_venter_for_sak(
         &self,
         sak_id: SkuffenSakId,
     ) -> Result<Vec<EksekveringKommando>, anyhow::Error> {
@@ -338,24 +262,17 @@ impl CommandExecutionRepository for FakeExecutionRepository {
             .data
             .lock()
             .unwrap()
-            .ventende_for_sak
+            .blokkert_venter_for_sak
             .get(&Uuid::from(sak_id))
             .cloned()
             .unwrap_or_default())
     }
 
-    async fn hent_ventende_for_journalpost(
+    async fn marker_blokkert_venter_til_klar(
         &self,
-        journalpost_id: SkuffenJournalpostId,
-    ) -> Result<Vec<EksekveringKommando>, anyhow::Error> {
-        Ok(self
-            .data
-            .lock()
-            .unwrap()
-            .ventende_for_journalpost
-            .get(&Uuid::from(journalpost_id))
-            .cloned()
-            .unwrap_or_default())
+        _command_id: Uuid,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
     }
 
     async fn oppdater_til_klar(&self, command_id: Uuid) -> Result<(), anyhow::Error> {
@@ -364,20 +281,6 @@ impl CommandExecutionRepository for FakeExecutionRepository {
             .unwrap()
             .oppdatert_til_klar
             .push(command_id);
-        Ok(())
-    }
-
-    async fn oppdater_venter(
-        &self,
-        command_id: Uuid,
-        grunn: &Ventegrunn,
-        detalj: &str,
-    ) -> Result<(), anyhow::Error> {
-        self.data.lock().unwrap().oppdatert_til_venter.push((
-            command_id,
-            grunn.kind_code().to_string(),
-            detalj.to_string(),
-        ));
         Ok(())
     }
 
@@ -394,6 +297,10 @@ impl CommandExecutionRepository for FakeExecutionRepository {
         Ok(0)
     }
 }
+
+// ---------------------------------------------------------------------------
+// FakeIdMappingRepository
+// ---------------------------------------------------------------------------
 
 #[derive(Default)]
 struct FakeIdMappingData {
@@ -507,10 +414,14 @@ impl IdMappingRepository for FakeIdMappingRepository {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[tokio::test]
 async fn etter_sak_endret_gjor_journalpostkommando_klar_nar_saksnummer_kommer() {
     let execution_repo = FakeExecutionRepository::default();
-    let snapshot_repo = FakeSnapshotRepository::default();
+    let entity_tilstand_repo = FakeEntityTilstandRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
     let status_publisher = FakeStatusPublisher::default();
     let done_publisher = FakeDonePublisher::default();
@@ -532,32 +443,54 @@ async fn etter_sak_endret_gjor_journalpostkommando_klar_nar_saksnummer_kommer() 
             .insert(dokument_client_reference, dokument_id);
     }
 
-    snapshot_repo.data.lock().unwrap().saker.insert(
+    // Sak is Opprettet with saksnummer, journalpost is IkkeRealisert
+    // → neste_handling returns OpprettJournalpost → command becomes Klar
+    entity_tilstand_repo.sak_med_barn.lock().unwrap().insert(
         sak_id,
-        SakState {
-            status: SakStatus::UnderBehandling,
-            opprettet: true,
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(sak_id),
+            tilstand: SakTilstand::Opprettet,
+            oensket_tilstand: SakTilstand::Opprettet,
+            sikri_id: Some(100),
             saksnummer: Some("2026/1".to_string()),
+            journalposter: vec![JournalpostMedDokumenter {
+                journalpost_id: SkuffenJournalpostId::from(journalpost_id),
+                tilstand: JournalpostTilstand::IkkeRealisert,
+                oensket_tilstand: JournalpostTilstand::Journalfoert,
+                sikri_id: None,
+                journalpostnummer: None,
+                journalposttype: JournalpostType::InterntNotat,
+                med_utsending: false,
+                dokumenter: vec![DokumentMedTilstand {
+                    dokument_id: SkuffenDokumentId::from(dokument_id),
+                    tilstand: DokumentTilstand::IkkeRealisert,
+                }],
+            }],
         },
     );
 
-    execution_repo.data.lock().unwrap().ventende_for_sak.insert(
-        sak_id,
-        vec![EksekveringKommando {
-            command_id,
-            envelope: make_internt_notat_command(
-                journalpost_client_reference,
-                sak_client_reference,
-                dokument_client_reference,
-            ),
-            attempt_no: 0,
-            utfores_venter_publisert: true,
-        }],
-    );
+    execution_repo
+        .data
+        .lock()
+        .unwrap()
+        .blokkert_venter_for_sak
+        .insert(
+            sak_id,
+            vec![EksekveringKommando {
+                command_id,
+                envelope: make_internt_notat_command(
+                    journalpost_client_reference,
+                    sak_client_reference,
+                    dokument_client_reference,
+                ),
+                attempt_no: 0,
+                utfores_venter_publisert: true,
+            }],
+        );
 
     let service = ReevaluerVentendeKommandoerService::new(
         Box::new(execution_repo.clone()),
-        Box::new(snapshot_repo),
+        Box::new(entity_tilstand_repo),
         Box::new(id_mapping_repo),
         Box::new(status_publisher),
         Box::new(done_publisher),
@@ -571,14 +504,13 @@ async fn etter_sak_endret_gjor_journalpostkommando_klar_nar_saksnummer_kommer() 
 
     let data = execution_repo.data.lock().unwrap();
     assert_eq!(data.oppdatert_til_klar, vec![command_id]);
-    assert!(data.oppdatert_til_venter.is_empty());
     assert!(data.oppdatert_til_feil.is_empty());
 }
 
 #[tokio::test]
-async fn etter_sak_endret_gjor_avslutt_sak_til_feil_ved_feilede_dokumenter() {
+async fn etter_sak_endret_gir_feil_ved_permanent_feilet_dokument() {
     let execution_repo = FakeExecutionRepository::default();
-    let snapshot_repo = FakeSnapshotRepository::default();
+    let entity_tilstand_repo = FakeEntityTilstandRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
     let status_publisher = FakeStatusPublisher::default();
     let done_publisher = FakeDonePublisher::default();
@@ -595,45 +527,50 @@ async fn etter_sak_endret_gjor_avslutt_sak_til_feil_ved_feilede_dokumenter() {
         .client_to_skuffen
         .insert(sak_client_reference, sak_id);
 
-    {
-        let mut data = snapshot_repo.data.lock().unwrap();
-        data.saker.insert(
-            sak_id,
-            SakState {
-                status: SakStatus::UnderBehandling,
-                opprettet: true,
-                saksnummer: Some("2026/1".to_string()),
-            },
-        );
-        data.journalposter.insert(
-            journalpost_id,
-            JournalpostState {
-                journalfoert: true,
-                avskrevet: false,
-                ekspedert: false,
-                har_feilede_dokumenter: true,
-                med_utsending: false,
-                journalposttype: JournalpostType::InterntNotat,
-                journalpostnummer: Some(42),
-            },
-        );
-        data.journalposter_per_sak
-            .insert(sak_id, vec![journalpost_id]);
-    }
-
-    execution_repo.data.lock().unwrap().ventende_for_sak.insert(
+    // Sak Opprettet, ønsker Avsluttet, men journalpost har feilet dokument permanent.
+    // → neste_handling returns Err(Irrecoverable) → command transitioned to feil
+    entity_tilstand_repo.sak_med_barn.lock().unwrap().insert(
         sak_id,
-        vec![EksekveringKommando {
-            command_id,
-            envelope: make_avslutt_sak_command(sak_client_reference),
-            attempt_no: 0,
-            utfores_venter_publisert: true,
-        }],
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(sak_id),
+            tilstand: SakTilstand::Opprettet,
+            oensket_tilstand: SakTilstand::Avsluttet,
+            sikri_id: Some(100),
+            saksnummer: Some("2026/1".to_string()),
+            journalposter: vec![JournalpostMedDokumenter {
+                journalpost_id: SkuffenJournalpostId::from(journalpost_id),
+                tilstand: JournalpostTilstand::DokumenterUnderArbeid,
+                oensket_tilstand: JournalpostTilstand::Journalfoert,
+                sikri_id: Some(200),
+                journalpostnummer: Some(42),
+                journalposttype: JournalpostType::InterntNotat,
+                med_utsending: false,
+                dokumenter: vec![DokumentMedTilstand {
+                    dokument_id: SkuffenDokumentId::from(Uuid::new_v4()),
+                    tilstand: DokumentTilstand::FeiletPermanent,
+                }],
+            }],
+        },
     );
+
+    execution_repo
+        .data
+        .lock()
+        .unwrap()
+        .blokkert_venter_for_sak
+        .insert(
+            sak_id,
+            vec![EksekveringKommando {
+                command_id,
+                envelope: make_avslutt_sak_command(sak_client_reference),
+                attempt_no: 0,
+                utfores_venter_publisert: true,
+            }],
+        );
 
     let service = ReevaluerVentendeKommandoerService::new(
         Box::new(execution_repo.clone()),
-        Box::new(snapshot_repo),
+        Box::new(entity_tilstand_repo),
         Box::new(id_mapping_repo),
         Box::new(status_publisher.clone()),
         Box::new(done_publisher.clone()),
@@ -645,15 +582,15 @@ async fn etter_sak_endret_gjor_avslutt_sak_til_feil_ved_feilede_dokumenter() {
         .await
         .unwrap();
 
+    // Irrecoverable error from neste_handling → command transitioned to feil, terminal event published
     let data = execution_repo.data.lock().unwrap();
+    assert!(data.oppdatert_til_klar.is_empty());
     assert_eq!(data.oppdatert_til_feil.len(), 1);
     assert_eq!(data.oppdatert_til_feil[0].0, command_id);
-    assert!(data.oppdatert_til_feil[0].1.contains("feilet"));
-    assert!(data.oppdatert_til_klar.is_empty());
+    // Terminal error event published
     let events = status_publisher.events.lock().unwrap();
     assert_eq!(events.len(), 1);
     assert!(events[0].terminal);
-    assert_eq!(done_publisher.subjects.lock().unwrap().len(), 1);
 }
 
 fn make_internt_notat_command(

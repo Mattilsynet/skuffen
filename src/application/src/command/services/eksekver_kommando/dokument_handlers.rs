@@ -1,48 +1,37 @@
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId};
-use domain::eksekvering::typer::EksekveringFeil;
+use domain::eksekvering::tilstand::{DokumentTilstand, SakMedBarn};
+use domain::eksekvering::typer::{EksekveringFeil, EksekveringFeiltype};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use uuid::Uuid;
 
-use super::prerequisite::Prerequisite;
-use super::step_outcome::StepOutcome;
-use super::EksekverKommandoService;
+use super::{extract_dokument_client_references, EksekverKommandoService};
 
 impl EksekverKommandoService {
     pub(super) async fn legg_til_dokument(
         &self,
         envelope: &CommandEnvelope<Command>,
+        sak: &SakMedBarn,
         journalpost_id: SkuffenJournalpostId,
         dokument_id: SkuffenDokumentId,
-        dokument_client_reference: Uuid,
-        report: &mut super::execution_report::ExecutionReport,
-    ) -> Result<StepOutcome, EksekveringFeil> {
-        let Some(journalpost_state) = self.hent_journalpost_state(journalpost_id).await? else {
-            return Ok(StepOutcome::blocked(
-                Some(Prerequisite::JournalpostOpprettet { journalpost_id }),
-                "Kan ikke legge til dokument: journalpost finnes ikke i state ennå",
-            ));
-        };
-
-        if self
-            .hent_dokument_state(dokument_id)
-            .await?
-            .is_some_and(|existing| existing.lagt_til)
-        {
-            let outcome = StepOutcome::AlreadyCompleted;
-            self.maybe_wake_after_dokument_step(envelope, journalpost_id, &outcome)
-                .await?;
-            return Ok(outcome);
-        }
-
-        let journalpostnummer = match journalpost_state.journalpostnummer {
-            Some(journalpostnummer) => journalpostnummer,
-            None => {
-                return Ok(StepOutcome::blocked(
-                    Some(Prerequisite::JournalpostnummerTildelt { journalpost_id }),
-                    "Journalpostnummer mangler",
+    ) -> Result<(), EksekveringFeil> {
+        let jp = sak
+            .journalposter
+            .iter()
+            .find(|jp| jp.journalpost_id == journalpost_id)
+            .ok_or_else(|| {
+                EksekveringFeil::recoverable(format!(
+                    "Fant ikke journalpost {} i sak {}",
+                    journalpost_id.0, sak.sak_id.0
                 ))
-            }
-        };
+            })?;
+
+        let journalpostnummer = jp.journalpostnummer.ok_or_else(|| {
+            EksekveringFeil::blocked("Journalpostnummer mangler for legg_til_dokument")
+        })?;
+
+        let dokument_client_reference = self
+            .resolve_dokument_client_reference(envelope, dokument_id)
+            .await?;
 
         let resp = match self
             .arkiv_gateway
@@ -52,36 +41,28 @@ impl EksekverKommandoService {
             Ok(resp) => resp,
             Err(err) => {
                 let err = self.map_arkiv_feil(err);
-                if matches!(
-                    err.feiltype,
-                    domain::eksekvering::typer::EksekveringFeiltype::Irrecoverable
-                ) {
-                    self.snapshot_repo
-                        .anvend_dokument_irrecoverable_feil(dokument_id, journalpost_id)
-                        .await
-                        .map_err(|persist_err| {
-                            EksekveringFeil::recoverable(format!(
-                                "Klarte ikke a persistere irrecoverable dokumentfeil: {}",
-                                persist_err
-                            ))
-                        })?;
+                if matches!(err.feiltype, EksekveringFeiltype::Irrecoverable) {
+                    let _ = self
+                        .entity_tilstand_repo
+                        .oppdater_dokument_tilstand(
+                            dokument_id,
+                            DokumentTilstand::FeiletPermanent,
+                            Some(&err.melding),
+                        )
+                        .await;
 
-                    self.wake_journalpost(journalpost_id)
-                        .await
-                        .map_err(|wake_err| {
-                            EksekveringFeil::recoverable(format!(
-                                "Klarte ikke wake ventende kommandoer etter dokumentfeil: {}",
-                                wake_err.melding
-                            ))
-                        })?;
-                    self.wake_sak_for_journalpost_envelope(envelope)
-                        .await
-                        .map_err(|wake_err| {
-                            EksekveringFeil::recoverable(format!(
-                                "Klarte ikke wake sak-scope etter dokumentfeil: {}",
-                                wake_err.melding
-                            ))
-                        })?;
+                    let _ = self
+                        .entity_tilstand_repo
+                        .logg_overgang(
+                            "dokument",
+                            dokument_id.0,
+                            envelope.command_id,
+                            "ikke_realisert",
+                            "feilet_permanent",
+                            "legg_til_dokument",
+                            Some(&err.melding),
+                        )
+                        .await;
                 }
                 return Err(err);
             }
@@ -95,17 +76,49 @@ impl EksekverKommandoService {
                 )
                 .await
                 .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-            report.add_dokument_id(arkiv_id.to_string());
         }
 
-        self.snapshot_repo
-            .anvend_dokument_lagt_til(dokument_id, journalpost_id)
+        self.entity_tilstand_repo
+            .oppdater_dokument_tilstand(dokument_id, DokumentTilstand::Ok, None)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
-        let outcome = StepOutcome::Completed;
-        self.maybe_wake_after_dokument_step(envelope, journalpost_id, &outcome)
-            .await?;
-        Ok(outcome)
+        self.entity_tilstand_repo
+            .logg_overgang(
+                "dokument",
+                dokument_id.0,
+                envelope.command_id,
+                "ikke_realisert",
+                "ok",
+                "legg_til_dokument",
+                None,
+            )
+            .await
+            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn resolve_dokument_client_reference(
+        &self,
+        envelope: &CommandEnvelope<Command>,
+        dokument_id: SkuffenDokumentId,
+    ) -> Result<Uuid, EksekveringFeil> {
+        let client_references = extract_dokument_client_references(envelope);
+        for client_ref in client_references {
+            let resolved = self
+                .id_mapping
+                .hent_dokument_id_fra_mapping(client_ref)
+                .await
+                .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+            if resolved == Some(dokument_id) {
+                return Ok(client_ref);
+            }
+        }
+
+        Err(EksekveringFeil::recoverable(format!(
+            "Fant ikke client_reference for dokument {}",
+            dokument_id.0
+        )))
     }
 }

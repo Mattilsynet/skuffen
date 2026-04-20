@@ -325,7 +325,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
             r#"
             INSERT INTO id_mapping (skuffen_id, entity_type, client_reference, arkiv_id)
             VALUES ($1, $2::entity_type, NULL, $3)
-            ON CONFLICT (entity_type, arkiv_id) DO NOTHING
+            ON CONFLICT (entity_type, arkiv_id) WHERE arkiv_id IS NOT NULL DO NOTHING
             "#,
         )
         .bind(skuffen_id)

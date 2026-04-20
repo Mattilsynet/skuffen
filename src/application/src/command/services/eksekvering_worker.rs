@@ -67,7 +67,7 @@ impl EksekveringWorker {
                     .marker_ok(command_id, attempt_no)
                     .await?;
             }
-            ExecutionOutcome::Error { last_error } => {
+            ExecutionOutcome::Feil { last_error } => {
                 self.execution_repo
                     .marker_feil(
                         command_id,
@@ -76,14 +76,11 @@ impl EksekveringWorker {
                     )
                     .await?;
             }
-            ExecutionOutcome::Blocked { grunn, last_error } => {
-                let grunn =
-                    grunn.ok_or_else(|| anyhow::anyhow!("Blocked outcome mangler ventegrunn"))?;
+            ExecutionOutcome::BlokkertVenter { last_error } => {
                 self.execution_repo
-                    .marker_venter(
+                    .marker_blokkert_venter(
                         command_id,
                         attempt_no,
-                        &grunn,
                         last_error
                             .as_deref()
                             .unwrap_or("kommando venter på prerequisite"),
