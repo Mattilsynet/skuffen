@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 pub struct CommandScenario {
     pub sak_client_reference: Uuid,
+    #[allow(dead_code)]
     pub sak_skuffen_id: Uuid,
     pub journalpost_inngaende_client_reference: Uuid,
     pub journalpost_utgaaende_client_reference: Uuid,

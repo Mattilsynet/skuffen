@@ -215,6 +215,7 @@ async fn nats_server_ping(nats_url: &str) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn hent_sak_via_nats(
     nats_url: &str,
     skuffen_id: uuid::Uuid,
