@@ -24,5 +24,5 @@ serde_json = "1"
 tracing = "0.1"
 
 # CVC
-aws-lc-sys = "0.39.0"
+aws-lc-sys = "0.40.0"
 aws-lc-rs = "1.16.2"

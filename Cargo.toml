@@ -42,5 +42,5 @@ rustls = { version = "0.23.37", features = ["aws_lc_rs"] }
 thiserror = "2.0.16"
 
 # CVC
-aws-lc-sys = "0.39.0"
+aws-lc-sys = "0.40.0"
 aws-lc-rs = "1.16.2"
