@@ -32,15 +32,15 @@ infrastructure = { path = "src/infrastructure" }
 lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", features = ["skuffen"] }
 lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats" }
 dotenvy = "0.15.7"
-anyhow = "1.0.100"
-tokio = { version = "1", features = ["full"] }
+anyhow = "1.0.102"
+tokio = { version = "1.52.1", features = ["full"] }
 async-trait = "0.1.89"
-tracing = "0.1.41"
+tracing = "0.1.44"
 
-serde = { version = "1", features = ["derive"] }
-rustls = { version = "0.23.37", features = ["aws_lc_rs"] }
-thiserror = "2.0.16"
+serde = { version = "1.0.228", features = ["derive"] }
+rustls = { version = "0.23.38", features = ["aws_lc_rs"] }
+thiserror = "2.0.18"
 
 # CVC
-aws-lc-sys = "0.39.0"
-aws-lc-rs = "1.16.2"
+aws-lc-sys = "0.40.0"
+aws-lc-rs = "1.16.3"
