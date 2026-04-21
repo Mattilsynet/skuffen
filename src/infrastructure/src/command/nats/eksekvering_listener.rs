@@ -1,7 +1,7 @@
 use async_nats::jetstream::{self, AckKind};
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use tracing::{Span, error, info};
+use tracing::{Span, error, warn};
 
 use crate::nats::client::NatsClient;
 use crate::nats::jetstream_setup::{
@@ -81,9 +81,9 @@ impl KommandoEksekveringListener {
                     .map_err(|err| anyhow::anyhow!("ack failed: {err}"))?;
             }
             Err(err) => {
-                info!("Kunne ikke lagre kommando: {err}");
+                warn!("Kunne ikke lagre kommando: {err:#}");
                 message
-                    .ack_with(AckKind::Nak(None))
+                    .ack_with(AckKind::Nak(Some(std::time::Duration::from_secs(30))))
                     .await
                     .map_err(|nak_err| anyhow::anyhow!("nak failed: {nak_err}"))?;
             }

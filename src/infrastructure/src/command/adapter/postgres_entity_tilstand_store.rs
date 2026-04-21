@@ -123,6 +123,7 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
             r#"
             INSERT INTO sak_tilstand (sak_id, tilstand, oensket_tilstand, opprettet_av_command_id)
             VALUES ($1, 'ikke_realisert', $2, $3)
+            ON CONFLICT (sak_id) DO NOTHING
             "#,
         )
         .bind(Uuid::from(sak_id))
