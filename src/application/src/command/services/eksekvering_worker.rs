@@ -27,12 +27,15 @@ impl EksekveringWorker {
     }
 
     pub async fn run(&self) -> anyhow::Result<()> {
-        if !self
-            .execution_repo
-            .try_acquire_executor_lock(&self.worker_id)
-            .await?
-        {
-            return Ok(());
+        loop {
+            let acquired = self
+                .execution_repo
+                .try_acquire_executor_lock(&self.worker_id)
+                .await?;
+            if acquired {
+                break;
+            }
+            sleep(self.poll_interval).await;
         }
 
         let _ = self.execution_repo.reset_kjorer_til_klar().await?;
