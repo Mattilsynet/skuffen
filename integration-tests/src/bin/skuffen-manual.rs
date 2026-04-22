@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
@@ -360,10 +359,11 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
         anyhow::bail!("watch-status requires at least one COMMAND_ID");
     }
 
-    let pending: HashSet<Uuid> = command_ids
+    let ids: Vec<Uuid> = command_ids
         .iter()
         .map(|id| Uuid::parse_str(id))
-        .collect::<std::result::Result<HashSet<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
     let client = connect_client(config).await?;
     let js = jetstream::new(client);
     let stream = js
@@ -375,8 +375,39 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
         })
         .await?;
 
+    // Track final archive IDs per command for the summary.
+    struct CommandSummary {
+        command_id: Uuid,
+        correlation_id: Option<Uuid>,
+        saksnummer: Option<String>,
+        journalpost_id: Option<String>,
+        dokument_ids: Vec<String>,
+        final_status: Option<String>,
+        final_message: Option<String>,
+        error_code: Option<String>,
+    }
+
+    let mut summaries: Vec<CommandSummary> = ids
+        .iter()
+        .map(|&id| CommandSummary {
+            command_id: id,
+            correlation_id: None,
+            saksnummer: None,
+            journalpost_id: None,
+            dokument_ids: vec![],
+            final_status: None,
+            final_message: None,
+            error_code: None,
+        })
+        .collect();
+
     let timeout = Duration::from_secs(90);
-    for command_id in pending {
+
+    for summary in &mut summaries {
+        let command_id = summary.command_id;
+        println!();
+        println!("── {command_id} ──────────────────────────────────────");
+
         let subject = format!("arkiv.status.{command_id}");
         let consumer = stream
             .create_consumer(jetstream::consumer::pull::Config {
@@ -405,14 +436,63 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
             };
             let msg = msg?;
             let event: SkuffenStatusEventV1 = serde_json::from_slice(&msg.payload)?;
+
+            // Accumulate archive IDs — later events may fill them in.
+            if let Some(ref c) = event.correlation_id {
+                summary.correlation_id = Some(*c);
+            }
+            if let Some(ref s) = event.saksnummer {
+                summary.saksnummer = Some(s.as_str().to_string());
+            }
+            if let Some(ref jp) = event.journalpost_id {
+                summary.journalpost_id = Some(jp.0.clone());
+            }
+            if let Some(ref docs) = event.dokument_id {
+                summary.dokument_ids = docs.iter().map(|d| d.0.clone()).collect();
+            }
+            if event.terminal {
+                summary.final_status = Some(format!("{:?}", event.status));
+                summary.final_message = Some(event.message.clone());
+                summary.error_code = event.error_code.as_ref().map(|e| format!("{e:?}"));
+            }
+
+            // Print this event line.
+            let ts = event.timestamp.as_deref().unwrap_or("-");
             let attempt = event
                 .attempt
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string());
+                .map(|v| format!("attempt={v}"))
+                .unwrap_or_default();
+            let error = event
+                .error_code
+                .as_ref()
+                .map(|e| format!("  error_code={e:?}"))
+                .unwrap_or_default();
+            let terminal_marker = if event.terminal { " ✓" } else { "" };
             println!(
-                "command_id={} status={:?} phase={:?} terminal={} attempt={} message={}",
-                event.command_id, event.status, event.phase, event.terminal, attempt, event.message
+                "  [{ts}] {phase:?} › {status:?}{terminal_marker}  {attempt}  {msg_text}{error}",
+                phase = event.phase,
+                status = event.status,
+                msg_text = event.message,
             );
+
+            // Print archive IDs inline as soon as they arrive.
+            if event.saksnummer.is_some()
+                || event.journalpost_id.is_some()
+                || event.dokument_id.is_some()
+            {
+                if let Some(ref s) = event.saksnummer {
+                    println!("    saksnummer     = {}", s.as_str());
+                }
+                if let Some(ref jp) = event.journalpost_id {
+                    println!("    journalpost_id = {}", jp.0);
+                }
+                if let Some(ref docs) = event.dokument_id {
+                    for doc in docs {
+                        println!("    dokument_id    = {}", doc.0);
+                    }
+                }
+            }
+
             msg.ack()
                 .await
                 .map_err(|err| anyhow::anyhow!(err.to_string()))?;
@@ -420,7 +500,36 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
         }
     }
 
-    println!("All tracked command IDs reached terminal status (history included).");
+    // ── Final summary ─────────────────────────────────────────────────────
+    println!();
+    println!("══════════════════════════════════════════════════════");
+    println!("  SUMMARY");
+    println!("══════════════════════════════════════════════════════");
+    for s in &summaries {
+        println!();
+        println!("  command_id     = {}", s.command_id);
+        if let Some(ref c) = s.correlation_id {
+            println!("  correlation_id = {c}");
+        }
+        if let Some(ref status) = s.final_status {
+            let msg = s.final_message.as_deref().unwrap_or("");
+            println!("  status         = {status}  ({msg})");
+        }
+        if let Some(ref e) = s.error_code {
+            println!("  error_code     = {e}");
+        }
+        if let Some(ref s) = s.saksnummer {
+            println!("  saksnummer     = {s}");
+        }
+        if let Some(ref jp) = s.journalpost_id {
+            println!("  journalpost_id = {jp}");
+        }
+        for doc in &s.dokument_ids {
+            println!("  dokument_id    = {doc}");
+        }
+    }
+    println!();
+    println!("All tracked command IDs reached terminal status.");
     Ok(())
 }
 
