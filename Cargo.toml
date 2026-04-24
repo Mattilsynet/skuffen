@@ -38,7 +38,7 @@ async-trait = "0.1.89"
 tracing = "0.1.44"
 
 serde = { version = "1.0.228", features = ["derive"] }
-rustls = { version = "0.23.38", features = ["aws_lc_rs"] }
+rustls = { version = "0.23.39", features = ["aws_lc_rs"] }
 thiserror = "2.0.18"
 
 # CVC
