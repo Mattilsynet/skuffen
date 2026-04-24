@@ -95,6 +95,11 @@ if command -v cargo >/dev/null 2>&1; then
       cargo clippy --all-targets --all-features -- -D warnings
       cargo test
       cargo test -p skuffen-integration-tests
+      if command -v cargo-audit >/dev/null 2>&1; then
+        cargo audit
+      else
+        echo "pre-push: cargo-audit not installed; skipping audit" >&2
+      fi
     else
       echo "pre-push: no Rust changes in push range; skipping fmt/check/test" >&2
     fi
