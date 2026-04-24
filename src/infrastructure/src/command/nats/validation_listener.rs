@@ -1,7 +1,7 @@
 use async_nats::jetstream::{self, AckKind};
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use tracing::{Span, error, info, warn};
+use tracing::{Span, error, warn};
 
 use crate::nats::client::NatsClient;
 use crate::nats::jetstream_setup::{
@@ -52,17 +52,20 @@ impl CommandValidationListener {
         fields(
             command_id = tracing::field::Empty,
             correlation_id = tracing::field::Empty,
-            traceparent = tracing::field::Empty
         )
     )]
     async fn process_message(&self, message: jetstream::Message) -> anyhow::Result<()> {
         let (payload, acker) = message.split();
-        crate::telemetry::record_traceparent_from_headers(payload.headers.as_ref());
+        crate::telemetry::set_parent_from_nats_headers(payload.headers.as_ref());
 
         let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&payload.payload) {
             Ok(cmd) => cmd,
             Err(err) => {
-                error!("Failed to deserialize command: {err}");
+                error!(
+                    error_type = "deserialization",
+                    payload_size = payload.payload.len(),
+                    "Failed to deserialize command: {err}"
+                );
                 ack_terminal(&acker).await?;
                 return Ok(());
             }
@@ -102,7 +105,10 @@ impl CommandValidationListener {
             ValidationOutcome::Irrecoverable {
                 message: reason, ..
             } => {
-                info!("Command irrecoverable: {reason}");
+                error!(
+                    error_category = "irrecoverable",
+                    "Command irrecoverable: {reason}"
+                );
                 ack_terminal(&acker).await?;
             }
         }

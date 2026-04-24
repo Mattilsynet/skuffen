@@ -50,16 +50,19 @@ impl KommandoEksekveringListener {
         fields(
             command_id = tracing::field::Empty,
             correlation_id = tracing::field::Empty,
-            traceparent = tracing::field::Empty
         )
     )]
     async fn process_message(&self, message: jetstream::Message) -> anyhow::Result<()> {
-        crate::telemetry::record_traceparent_from_headers(message.headers.as_ref());
+        crate::telemetry::set_parent_from_nats_headers(message.headers.as_ref());
 
         let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&message.payload) {
             Ok(cmd) => cmd,
             Err(err) => {
-                error!("Failed to deserialize command: {err}");
+                error!(
+                    error_type = "deserialization",
+                    payload_size = message.payload.len(),
+                    "Failed to deserialize command: {err}"
+                );
                 message.ack().await.map_err(|ack_err| {
                     anyhow::anyhow!("ack failed after deserialize error: {ack_err}")
                 })?;

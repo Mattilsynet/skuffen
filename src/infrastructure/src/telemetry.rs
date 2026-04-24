@@ -1,16 +1,15 @@
 use async_nats::HeaderMap;
 use opentelemetry::KeyValue;
 use opentelemetry::global;
-use opentelemetry::propagation::Injector;
-use opentelemetry::propagation::TextMapCompositePropagator;
+use opentelemetry::propagation::{Extractor, Injector, TextMapCompositePropagator};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::propagation::{BaggagePropagator, TraceContextPropagator};
 use opentelemetry_sdk::trace::SdkTracerProvider;
-use tracing::{Span, Subscriber, field, subscriber::set_global_default};
+use tracing::{Span, Subscriber, subscriber::set_global_default};
 use tracing_log::LogTracer;
-use tracing_opentelemetry::OpenTelemetryLayer;
+use tracing_opentelemetry::{OpenTelemetryLayer, OpenTelemetrySpanExt};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
@@ -28,7 +27,7 @@ pub fn get_subscriber() -> impl Subscriber + Sync + Send {
         .ok()
         .or_else(|| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok())
         .unwrap_or_else(|| "http://127.0.0.1:4317".to_string());
-    eprintln!("telemetry: OTLP exporter enabled at {otlp_endpoint}");
+    tracing::info!("telemetry: OTLP exporter enabled at {otlp_endpoint}");
 
     let otlp_span_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
@@ -101,15 +100,30 @@ pub fn current_trace_parent() -> Option<String> {
     injector.value
 }
 
-pub fn record_traceparent(traceparent: Option<&str>) {
-    if let Some(traceparent) = traceparent {
-        Span::current().record("traceparent", field::display(traceparent));
+// ---------------------------------------------------------------------------
+// Inbound trace context extraction
+// ---------------------------------------------------------------------------
+
+struct HeaderMapExtractor<'a>(&'a HeaderMap);
+
+impl Extractor for HeaderMapExtractor<'_> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).map(|v| v.as_str())
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        vec!["traceparent", "tracestate", "baggage"]
     }
 }
 
-pub fn record_traceparent_from_headers(headers: Option<&HeaderMap>) {
-    let traceparent = headers
-        .and_then(|headers| headers.get("traceparent"))
-        .map(|traceparent| traceparent.as_str());
-    record_traceparent(traceparent);
+/// Extracts the OTel trace context from inbound NATS headers and sets it as
+/// the parent of the current tracing span. Must be called as the first
+/// statement inside `#[instrument]`-annotated message handlers, before any
+/// nested spans or log statements are created.
+pub fn set_parent_from_nats_headers(headers: Option<&HeaderMap>) {
+    let ctx = match headers {
+        Some(h) => global::get_text_map_propagator(|prop| prop.extract(&HeaderMapExtractor(h))),
+        None => opentelemetry::Context::new(),
+    };
+    let _ = Span::current().set_parent(ctx);
 }

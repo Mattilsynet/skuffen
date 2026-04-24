@@ -1,6 +1,5 @@
 use anyhow::{Result, anyhow};
 use sikri_client::domain::sak::SakRespons as SikriSak;
-use tracing::info;
 
 use crate::query::mapping::{
     fra_sikri_til_domene::journalpost::from_sikri_journalpost_to_domain_journalpost,
@@ -45,7 +44,6 @@ pub async fn from_sikri_sak_to_domain_sak(sikri_sak: SikriSak) -> Result<domain:
         journalposter,
         ordningsverdi: domain::model::sak::Ordningsverdi::new(sikri_sak.ordningsverdi)?,
     };
-    info!("{:?}", sak_response);
     Ok(sak_response)
 }
 

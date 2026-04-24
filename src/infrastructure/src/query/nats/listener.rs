@@ -6,7 +6,7 @@ use lib_schemas::skuffen::query::{
     queries::{HentJournalpostQuery, HentSakQuery},
     responses::{JournalpostResponse, SakResponse},
 };
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::nats::{client::NatsClient, nats_response::NatsResponse};
 use crate::query::mapping::fra_domene_til_dto::{
@@ -93,63 +93,79 @@ where
     Req: serde::de::DeserializeOwned + Send + Debug,
     Res: serde::Serialize + Send + Debug,
 {
-    #[tracing::instrument()]
+    #[tracing::instrument(skip_all)]
     pub async fn run(&self) -> anyhow::Result<()> {
         info!("Lytter etter meldinger på subject '{}'", self.subject);
         let mut sub = self.client.inner().subscribe(self.subject.clone()).await?;
 
         while let Some(msg) = sub.next().await {
-            info!("Mottok et query på subject {}", self.subject);
-
-            let reply_subject = match msg.reply {
-                Some(r) => r,
-                None => {
-                    error!("NATS request has no reply subject. Ignoring message.");
-                    continue;
-                }
-            };
-
-            let req: Req = match serde_json::from_slice(&msg.payload) {
-                Ok(r) => r,
-                Err(e) => {
-                    error!("Failed to deserialize request payload: {e}");
-                    // Always reply with JSON error
-                    let err = NatsResponse::<Res>::Error {
-                        message: format!("Bad request: {e}"),
-                    };
-                    let bytes = serde_json::to_vec(&err)?;
-                    self.client
-                        .inner()
-                        .publish(reply_subject, bytes.into())
-                        .await?;
-                    continue;
-                }
-            };
-
-            let nats_response: NatsResponse<Res> = match self.use_case.handle(req).await {
-                Ok(payload) => NatsResponse::Ok(payload),
-                Err(e) => {
-                    error!("Use case returned error: {e:?}");
-                    NatsResponse::Error {
-                        message: e.to_string(),
-                    }
-                }
-            };
-
-            let bytes = serde_json::to_vec(&nats_response)?;
-
-            if let Err(e) = self
-                .client
-                .inner()
-                .publish(reply_subject, bytes.into())
-                .await
-            {
-                error!("Failed to publish reply: {:?}", e);
-            } else {
-                tracing::info!("Successfully replied with JSON NatsResponse");
-            }
+            self.process_message(msg).await;
         }
 
         Ok(())
+    }
+
+    #[tracing::instrument(skip_all, name = "query.handle", fields(subject = %self.subject))]
+    async fn process_message(&self, msg: async_nats::Message) {
+        crate::telemetry::set_parent_from_nats_headers(msg.headers.as_ref());
+        debug!("Mottok et query på subject {}", self.subject);
+
+        let reply_subject = match msg.reply {
+            Some(r) => r,
+            None => {
+                error!("NATS request has no reply subject. Ignoring message.");
+                return;
+            }
+        };
+
+        let req: Req = match serde_json::from_slice(&msg.payload) {
+            Ok(r) => r,
+            Err(_) => {
+                error!(
+                    payload_size = msg.payload.len(),
+                    "Failed to deserialize request payload"
+                );
+                let err = NatsResponse::<Res>::Error {
+                    message: "Invalid request format".to_string(),
+                };
+                if let Ok(bytes) = serde_json::to_vec(&err) {
+                    let _ = self
+                        .client
+                        .inner()
+                        .publish(reply_subject, bytes.into())
+                        .await;
+                }
+                return;
+            }
+        };
+
+        let nats_response: NatsResponse<Res> = match self.use_case.handle(req).await {
+            Ok(payload) => NatsResponse::Ok(payload),
+            Err(e) => {
+                error!(error = %e, "Use case returned error");
+                NatsResponse::Error {
+                    message: "Internal error".to_string(),
+                }
+            }
+        };
+
+        let bytes = match serde_json::to_vec(&nats_response) {
+            Ok(b) => b,
+            Err(e) => {
+                error!(error = %e, "Failed to serialize response");
+                return;
+            }
+        };
+
+        if let Err(e) = self
+            .client
+            .inner()
+            .publish(reply_subject, bytes.into())
+            .await
+        {
+            error!("Failed to publish reply: {:?}", e);
+        } else {
+            debug!("Successfully replied with JSON NatsResponse");
+        }
     }
 }

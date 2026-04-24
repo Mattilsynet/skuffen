@@ -51,7 +51,7 @@ impl MediaListener {
     #[tracing::instrument(
         skip_all,
         name = "media.assemble",
-        fields(subject = %message.subject, traceparent = tracing::field::Empty)
+        fields(subject = %message.subject)
     )]
     async fn process_message(&self, assembler: &mut ChunkedUploadAssembler, message: Message) {
         let reply_subject = match message.reply.clone() {
@@ -62,14 +62,14 @@ impl MediaListener {
             }
         };
 
-        crate::telemetry::record_traceparent_from_headers(message.headers.as_ref());
+        crate::telemetry::set_parent_from_nats_headers(message.headers.as_ref());
 
         let payload = match assembler.push(&message) {
             Ok(Some(payload)) => payload,
             Ok(None) => return,
             Err(err) => {
                 error!("Chunk assembly failed: {err}");
-                self.publish_error(&reply_subject, err.to_string()).await;
+                self.publish_error(&reply_subject, "Internal error").await;
                 return;
             }
         };
@@ -93,7 +93,7 @@ impl MediaListener {
 
         if let Err(err) = self.store.save(file).await {
             error!("Failed to store media: {err}");
-            self.publish_error(&reply_subject, err.to_string()).await;
+            self.publish_error(&reply_subject, "Internal error").await;
             return;
         }
 

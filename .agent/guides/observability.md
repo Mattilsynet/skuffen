@@ -36,12 +36,64 @@ Application/domain errors should provide:
 - short error code (stable identifier)
 - human-readable message
 
+Log level rules:
+- `info!`: nominal pipeline progress (message received, dispatched, acknowledged)
+- `warn!`: retryable failures, blocked commands awaiting redelivery
+- `error!`: irrecoverable failures, terminal command drops, infrastructure errors
+- `debug!`: detailed diagnostics (Sikri response parsing, query replies)
+- Never log full request/response payloads at `info!` or above
+- Never log domain structs that may contain PII at any default level
+
 ## Error taxonomy
 
 Use error classification consistently across layers:
 - `blocked`: domain rule prevents progress (retry only if external state changes)
 - `recoverable`: transient errors (network, 5xx, rate limit)
 - `irrecoverable`: invalid input, missing resources, or rule violations
+
+## Trace context propagation
+
+All NATS listeners extract the incoming `traceparent` header into the OpenTelemetry
+context using `set_parent_from_nats_headers()` in `telemetry.rs`. This must be
+the first statement in each `#[instrument]`-annotated message handler, before any
+nested spans or log statements.
+
+The pattern:
+1. Inbound: `crate::telemetry::set_parent_from_nats_headers(headers)` — extracts
+   OTel context from NATS headers and reparents the current span.
+2. Outbound: `crate::telemetry::current_trace_parent()` — injects the current
+   trace context as a `traceparent` header on published NATS messages.
+
+This enables end-to-end trace visibility in GCP Trace Explorer: a command
+batch flows through `nats.command_batch` → `command.validate` →
+`command.register_execution` → `sikri.*` as a single connected trace.
+
+Listeners using this pattern:
+- `command_listener` (`nats.command_batch`)
+- `validation_listener` (`command.validate`)
+- `eksekvering_listener` (`command.register_execution`)
+- `media_listener` (`media.assemble`)
+- `NatsReplier` (`query.handle`)
+
+## Span coverage
+
+Infrastructure spans (all use `#[tracing::instrument]`):
+- NATS listeners: per-message spans with `command_id`, `correlation_id`, `subject`
+- Sikri HTTP client: per-function spans (`sikri.get_sak`, `sikri.create_sak`, etc.)
+  with safe fields only (`saksnr`, `journalpost_id`, `method`, `url`)
+- NATS publishers: per-publish spans with `entity_type`, `subject`
+
+Application layer does not use tracing (per repo rule: no I/O or tracing in
+Domain/Application). Application service execution time is visible as the gap
+between the listener span start and the first infrastructure child span.
+
+## Error reply sanitization
+
+NATS error replies to callers must not echo internal details:
+- Deserialization failures: reply with "Invalid payload format" / "Invalid request format"
+- Use case errors: reply with "Internal error"
+- Sikri HTTP errors: the `ensure_success` function logs response metadata but does
+  not echo response bodies to callers
 
 ## Test logging
 

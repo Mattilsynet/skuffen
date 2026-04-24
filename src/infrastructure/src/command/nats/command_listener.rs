@@ -60,11 +60,10 @@ impl CommandListener {
             subject = %msg.subject,
             reply_subject = ?msg.reply,
             command_count = tracing::field::Empty,
-            traceparent = tracing::field::Empty
         )
     )]
     async fn process_message(&self, msg: Message) {
-        crate::telemetry::record_traceparent_from_headers(msg.headers.as_ref());
+        crate::telemetry::set_parent_from_nats_headers(msg.headers.as_ref());
         info!("Received command batch");
 
         let reply_subject = match msg.reply.clone() {
@@ -78,9 +77,13 @@ impl CommandListener {
         let commands: Vec<CommandEnvelope<Command>> = match serde_json::from_slice(&msg.payload) {
             Ok(c) => c,
             Err(e) => {
-                error!("Failed to deserialize commands: {e}");
+                error!(
+                    error_type = "deserialization",
+                    payload_size = msg.payload.len(),
+                    "Failed to deserialize commands: {e}"
+                );
                 let response = NatsResponse::<()>::Error {
-                    message: format!("Invalid payload: {e}"),
+                    message: "Invalid payload format".to_string(),
                 };
                 let payload = serde_json::to_vec(&response).unwrap_or_default();
                 let _ = self
@@ -95,7 +98,7 @@ impl CommandListener {
         if let Err(err) = self.validate_media(&commands).await {
             error!("Media validation failed: {err}");
             let response = NatsResponse::<()>::Error {
-                message: format!("Media validation failed: {err}"),
+                message: "Media validation failed".to_string(),
             };
             let payload = serde_json::to_vec(&response).unwrap_or_default();
             let _ = self
@@ -112,7 +115,7 @@ impl CommandListener {
             Err(e) => {
                 error!("Invalid command sequence: {e}");
                 let response = NatsResponse::<()>::Error {
-                    message: format!("Invalid sequence: {e}"),
+                    message: "Invalid command sequence".to_string(),
                 };
                 let payload = serde_json::to_vec(&response).unwrap_or_default();
                 let _ = self
@@ -126,13 +129,7 @@ impl CommandListener {
 
         Span::current().record("command_count", tracing::field::display(command_count));
 
-        let traceparent = msg
-            .headers
-            .as_ref()
-            .and_then(|headers| headers.get("traceparent"))
-            .map(|traceparent| traceparent.as_str().to_owned());
-
-        match self.ingest_sequence(sequence, traceparent).await {
+        match self.ingest_sequence(sequence).await {
             Ok(()) => {
                 let response = NatsResponse::Ok(());
                 let payload = serde_json::to_vec(&response).unwrap_or_default();
@@ -145,7 +142,7 @@ impl CommandListener {
             Err(e) => {
                 error!("Failed to process commands: {e}");
                 let response = NatsResponse::<()>::Error {
-                    message: e.to_string(),
+                    message: "Internal error".to_string(),
                 };
                 let payload = serde_json::to_vec(&response).unwrap_or_default();
                 let _ = self
@@ -157,13 +154,8 @@ impl CommandListener {
         }
     }
 
-    #[tracing::instrument(skip_all, name = "command.ingest", fields(traceparent = tracing::field::Empty))]
-    async fn ingest_sequence(
-        &self,
-        sequence: CommandSequence,
-        traceparent: Option<String>,
-    ) -> anyhow::Result<()> {
-        crate::telemetry::record_traceparent(traceparent.as_deref());
+    #[tracing::instrument(skip_all, name = "command.ingest")]
+    async fn ingest_sequence(&self, sequence: CommandSequence) -> anyhow::Result<()> {
         self.service.handle(sequence).await
     }
 

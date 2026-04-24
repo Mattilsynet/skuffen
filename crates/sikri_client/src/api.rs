@@ -7,9 +7,8 @@ use crate::error_mapping::{classify_http_error, marker_for, user_message_for_htt
 use crate::secret::get_secret;
 use anyhow::{Context, Result};
 use reqwest::Client;
-use serde::Serialize;
 use std::env;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 fn base_url() -> String {
     env::var("BASE_URL_SIKRI").unwrap_or_else(|_| {
@@ -33,41 +32,25 @@ async fn ensure_success(
         .await
         .unwrap_or_else(|err| format!("<klarte ikke lese respons-body: {err}>"));
     let body = body.trim();
-    let body = if body.len() > 2000 {
+    let body_for_log = if body.len() > 2000 {
         format!("{}...<truncated>", &body[..2000])
     } else {
         body.to_string()
     };
-    let recoverability = classify_http_error(status, Some(&body));
+    let recoverability = classify_http_error(status, Some(&body_for_log));
     let marker = marker_for(recoverability);
-    let user_message = user_message_for_http_error(status, Some(&body));
+    let user_message = user_message_for_http_error(status, Some(&body_for_log));
 
     error!(
         target: "sikri.http",
         method,
         url,
         status = %status,
-        response_body = %body,
+        response_length = body.len(),
         "Sikri response returned error status"
     );
 
     anyhow::bail!("{marker} {user_message} (method={method}, url={url}, status={status})");
-}
-
-fn truncate_for_log(raw: &str, max_len: usize) -> String {
-    let trimmed = raw.trim();
-    if trimmed.len() <= max_len {
-        return trimmed.to_string();
-    }
-
-    format!("{}...<truncated>", &trimmed[..max_len])
-}
-
-fn payload_for_log<T: Serialize>(payload: &T) -> String {
-    match serde_json::to_string(payload) {
-        Ok(json) => truncate_for_log(&json, 2000),
-        Err(err) => format!("<failed to serialize payload: {err}>"),
-    }
 }
 
 async fn hent_brukernavn_passord_sikri() -> Result<(String, String)> {
@@ -81,6 +64,7 @@ async fn hent_brukernavn_passord_sikri() -> Result<(String, String)> {
     Ok((username, password))
 }
 
+#[tracing::instrument(skip_all, name = "sikri.alive")]
 pub async fn alive() -> Result<()> {
     let (username, password) = hent_brukernavn_passord_sikri()
         .await
@@ -101,6 +85,7 @@ pub async fn alive() -> Result<()> {
     Ok(())
 }
 
+#[tracing::instrument(skip_all, name = "sikri.get_sak", fields(saksnr = saksnummer, kildesystem))]
 pub async fn get_sak(
     saksnummer: &str,
     kildesystem: &str,
@@ -149,16 +134,18 @@ pub async fn get_sak(
         .json::<ElementsSakMedJournalposterResponse>()
         .await
         .with_context(|| "Feil ved parsing av JSON-respons for get_sak()")?;
-    info!(
+    debug!(
         target: "sikri.http",
         method = "GET",
         url = %url,
-        response_body = %payload_for_log(&parsed),
-        "Sikri response payload"
+        kildesystem,
+        saksnr = saksnummer,
+        "Sikri get_sak response parsed"
     );
     Ok(parsed)
 }
 
+#[tracing::instrument(skip_all, name = "sikri.create_sak")]
 pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposterResponse> {
     let _ = data.validate();
 
@@ -168,8 +155,7 @@ pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposter
         target: "sikri.http",
         method = "POST",
         url = %url,
-        request_body = %payload_for_log(&data),
-        "Sending request to Sikri"
+        "Sending OpprettArkivsak request to Sikri"
     );
     let resp = Client::new()
         .post(&url)
@@ -184,16 +170,16 @@ pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposter
         .json::<ElementsSakMedJournalposterResponse>()
         .await
         .with_context(|| "Feil ved parsing av JSON-respons for create_sak()")?;
-    info!(
+    debug!(
         target: "sikri.http",
         method = "POST",
         url = %url,
-        response_body = %payload_for_log(&parsed),
-        "Sikri response payload"
+        "Sikri create_sak response parsed"
     );
     Ok(parsed)
 }
 
+#[tracing::instrument(skip_all, name = "sikri.opprett_journalpost", fields(saksnr = saksnummer))]
 pub async fn opprett_journalpost(
     journalpost: ElementsJournalpost,
     saksnummer: &str,
@@ -205,8 +191,7 @@ pub async fn opprett_journalpost(
         method = "POST",
         url = %url,
         saksnr = saksnummer,
-        request_body = %payload_for_log(&journalpost),
-        "Sending request to Sikri"
+        "Sending OpprettJournalpost request to Sikri"
     );
     let resp = Client::new()
         .post(&url)
@@ -222,16 +207,17 @@ pub async fn opprett_journalpost(
         .json::<ElementsJournalpostRespons>()
         .await
         .with_context(|| "Feil ved parsing av JSON-respons for opprett_journalpost()")?;
-    info!(
+    debug!(
         target: "sikri.http",
         method = "POST",
         url = %url,
-        response_body = %payload_for_log(&parsed),
-        "Sikri response payload"
+        saksnr = saksnummer,
+        "Sikri opprett_journalpost response parsed"
     );
     Ok(parsed)
 }
 
+#[tracing::instrument(skip_all, name = "sikri.legg_til_vedlegg", fields(journalpost_id, dokument_count = dokumenter.len()))]
 pub async fn legg_til_vedlegg(
     journalpost_id: i32,
     dokumenter: Vec<ElementsDokument>,
@@ -243,8 +229,8 @@ pub async fn legg_til_vedlegg(
         method = "POST",
         url = %url,
         journalpost_id,
-        request_body = %payload_for_log(&dokumenter),
-        "Sending request to Sikri"
+        dokument_count = dokumenter.len(),
+        "Sending LeggTilVedlegg request to Sikri"
     );
     let resp = Client::new()
         .post(&url)
@@ -260,16 +246,18 @@ pub async fn legg_til_vedlegg(
         .json::<Vec<ElementsDokumentRespons>>()
         .await
         .with_context(|| "Feil ved parsing av JSON-respons for legg_til_vedlegg()")?;
-    info!(
+    debug!(
         target: "sikri.http",
         method = "POST",
         url = %url,
-        response_body = %payload_for_log(&parsed),
-        "Sikri response payload"
+        journalpost_id,
+        dokument_count = parsed.len(),
+        "Sikri legg_til_vedlegg response parsed"
     );
     Ok(parsed)
 }
 
+#[tracing::instrument(skip_all, name = "sikri.sett_journalpost_status", fields(journalpost_id, journalpost_status = status))]
 pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Result<()> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/SetJournalpostStatus", base_url());
@@ -295,6 +283,11 @@ pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Resul
     Ok(())
 }
 
+#[tracing::instrument(
+    skip_all,
+    name = "sikri.avskriv_journalpost",
+    fields(journalpost_id, avskrivingsmaate)
+)]
 pub async fn avskriv_journalpost(journalpost_id: i32, avskrivingsmaate: &str) -> Result<()> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/AvskrivJournalpost", base_url());
@@ -320,6 +313,7 @@ pub async fn avskriv_journalpost(journalpost_id: i32, avskrivingsmaate: &str) ->
     Ok(())
 }
 
+#[tracing::instrument(skip_all, name = "sikri.avslutt_sak", fields(saksnr = saksnummer))]
 pub async fn avslutt_sak(saksnummer: &str) -> Result<()> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/SetStatusForArkivSak", base_url());
@@ -342,6 +336,7 @@ pub async fn avslutt_sak(saksnummer: &str) -> Result<()> {
     Ok(())
 }
 
+#[tracing::instrument(skip_all, name = "sikri.sett_saksansvarlig", fields(saksnr = saksnummer))]
 pub async fn sett_saksansvarlig(
     saksnummer: &str,
     saksbehandler: &str,
