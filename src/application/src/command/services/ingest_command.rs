@@ -142,6 +142,14 @@ impl IngestCommandService {
                     context.sak_client_reference = Some(client_reference.to_string());
                 }
             },
+            Command::SettSaksansvarlig(command) => match &command.sak_key {
+                lib_schemas::skuffen::query::queries::SakKey::ArkivId(saksnummer) => {
+                    context.saksnummer = Some(saksnummer.as_str().to_string());
+                }
+                lib_schemas::skuffen::query::queries::SakKey::ClientReference(client_reference) => {
+                    context.sak_client_reference = Some(client_reference.to_string());
+                }
+            },
         }
 
         context
@@ -182,6 +190,7 @@ impl IngestCommandService {
             Command::OpprettUtgåendeJournalpost(c) => Some(c.felles.client_reference),
             Command::OpprettInterntNotatJournalpost(c) => Some(c.felles.client_reference),
             Command::AvsluttSak(_) => None, // No new client reference
+            Command::SettSaksansvarlig(_) => None, // No new client reference
         }
     }
 
@@ -200,6 +209,7 @@ impl IngestCommandService {
             Command::OpprettUtgåendeJournalpost(c) => Some(&c.felles.sak_key),
             Command::OpprettInterntNotatJournalpost(c) => Some(&c.felles.sak_key),
             Command::AvsluttSak(c) => Some(&c.sak_key),
+            Command::SettSaksansvarlig(c) => Some(&c.sak_key),
             Command::OpprettSak(_) => None,
         }?;
 

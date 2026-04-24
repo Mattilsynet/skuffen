@@ -65,6 +65,22 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
     ) -> Result<(), anyhow::Error> {
         Ok(())
     }
+    async fn oppdater_oensket_saksansvarlig(
+        &self,
+        _sak_id: SkuffenSakId,
+        _saksbehandler_id: &str,
+        _saksbehandler_enhet: &str,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+    async fn oppdater_naavaerende_saksansvarlig(
+        &self,
+        _sak_id: SkuffenSakId,
+        _saksbehandler_id: &str,
+        _saksbehandler_enhet: &str,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
     async fn opprett_journalpost_tilstand(
         &self,
         _journalpost_id: SkuffenJournalpostId,
@@ -453,6 +469,8 @@ async fn etter_sak_endret_gjor_journalpostkommando_klar_nar_saksnummer_kommer() 
             oensket_tilstand: SakTilstand::Opprettet,
             sikri_id: Some(100),
             saksnummer: Some("2026/1".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
             journalposter: vec![JournalpostMedDokumenter {
                 journalpost_id: SkuffenJournalpostId::from(journalpost_id),
                 tilstand: JournalpostTilstand::IkkeRealisert,
@@ -537,6 +555,8 @@ async fn etter_sak_endret_gir_feil_ved_permanent_feilet_dokument() {
             oensket_tilstand: SakTilstand::Avsluttet,
             sikri_id: Some(100),
             saksnummer: Some("2026/1".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
             journalposter: vec![JournalpostMedDokumenter {
                 journalpost_id: SkuffenJournalpostId::from(journalpost_id),
                 tilstand: JournalpostTilstand::DokumenterUnderArbeid,

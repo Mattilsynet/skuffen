@@ -135,6 +135,9 @@ impl EksekverKommandoService {
                 self.avskriv(envelope, sak, journalpost_id).await
             }
             ArkivOperasjon::AvsluttSak { sak_id: _ } => self.avslutt_sak(envelope, sak).await,
+            ArkivOperasjon::SettSaksansvarlig { sak_id: _ } => {
+                self.sett_saksansvarlig(envelope, sak).await
+            }
         }
     }
 
@@ -196,6 +199,7 @@ fn extract_sak_key(envelope: &CommandEnvelope<Command>) -> Result<SakKey, anyhow
         Command::OpprettUtgåendeJournalpost(cmd) => Ok(cmd.felles.sak_key.clone()),
         Command::OpprettInterntNotatJournalpost(cmd) => Ok(cmd.felles.sak_key.clone()),
         Command::AvsluttSak(cmd) => Ok(cmd.sak_key.clone()),
+        Command::SettSaksansvarlig(cmd) => Ok(cmd.sak_key.clone()),
     }
 }
 

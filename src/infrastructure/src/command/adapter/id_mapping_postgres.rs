@@ -81,7 +81,9 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         }
 
         let entity_type = match command {
-            Command::OpprettSak(_) | Command::AvsluttSak(_) => "sak",
+            Command::OpprettSak(_) | Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => {
+                "sak"
+            }
             Command::OpprettInngåendeJournalpost(_)
             | Command::OpprettUtgåendeJournalpost(_)
             | Command::OpprettInterntNotatJournalpost(_) => "journalpost",

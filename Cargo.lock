@@ -50,7 +50,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "domain",
- "lib-schemas",
+ "lib-schemas 0.1.0 (git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git)",
  "thiserror 2.0.18",
  "tokio",
  "uuid",
@@ -668,7 +668,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "lib-schemas",
+ "lib-schemas 0.1.0 (git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git)",
  "uuid",
 ]
 
@@ -743,7 +743,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1464,8 +1464,8 @@ dependencies = [
  "domain",
  "dotenvy",
  "futures",
- "lib-nats",
- "lib-schemas",
+ "lib-nats 0.1.0 (git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git)",
+ "lib-schemas 0.1.0 (git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git)",
  "lib-sql",
  "opentelemetry",
  "opentelemetry-http",
@@ -1601,7 +1601,19 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 [[package]]
 name = "lib-nats"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#80cf6a08b5f2c8f0a80d2e99f09d2bafe7c72837"
+dependencies = [
+ "async-nats",
+ "bytes",
+ "futures",
+ "secrecy",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "lib-nats"
+version = "0.1.0"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#ce8a8f0707c3a8c33d4a697191ab7d3dc1e00ce2"
 dependencies = [
  "async-nats",
  "bytes",
@@ -1614,7 +1626,17 @@ dependencies = [
 [[package]]
 name = "lib-schemas"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#80cf6a08b5f2c8f0a80d2e99f09d2bafe7c72837"
+dependencies = [
+ "chrono",
+ "serde",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "lib-schemas"
+version = "0.1.0"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#ce8a8f0707c3a8c33d4a697191ab7d3dc1e00ce2"
 dependencies = [
  "chrono",
  "serde",
@@ -1784,7 +1806,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2579,7 +2601,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2638,7 +2660,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2953,7 +2975,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "gcp_auth",
- "lib-schemas",
+ "lib-schemas 0.1.0 (git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git)",
  "reqwest 0.13.2",
  "serde",
  "serde_json",
@@ -2973,8 +2995,8 @@ dependencies = [
  "domain",
  "dotenvy",
  "infrastructure",
- "lib-nats",
- "lib-schemas",
+ "lib-nats 0.1.0",
+ "lib-schemas 0.1.0",
  "rustls",
  "serde",
  "thiserror 2.0.18",
@@ -2996,8 +3018,8 @@ dependencies = [
  "dotenvy",
  "futures",
  "infrastructure",
- "lib-nats",
- "lib-schemas",
+ "lib-nats 0.1.0 (git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git)",
+ "lib-schemas 0.1.0 (git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git)",
  "rustls",
  "serde",
  "serde_json",
@@ -3031,7 +3053,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3366,7 +3388,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4168,7 +4190,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

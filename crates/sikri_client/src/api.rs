@@ -341,3 +341,32 @@ pub async fn avslutt_sak(saksnummer: &str) -> Result<()> {
     let _ = ensure_success(resp, "PUT", &url).await?;
     Ok(())
 }
+
+pub async fn sett_saksansvarlig(
+    saksnummer: &str,
+    saksbehandler: &str,
+    saksbehandler_enhet: &str,
+) -> Result<()> {
+    let (username, password) = hent_brukernavn_passord_sikri().await?;
+    let url = format!("{}/api/Archive/SetSaksansvarligIdForArkivSak", base_url());
+    info!(
+        target: "sikri.http",
+        method = "PUT",
+        url = %url,
+        saksnr = saksnummer,
+        "Sending SetSaksansvarligIdForArkivSak request to Sikri"
+    );
+    let resp = Client::new()
+        .put(&url)
+        .basic_auth(username, Some(password))
+        .query(&[
+            ("saksnr", saksnummer),
+            ("saksbehandler", saksbehandler),
+            ("saksbehandlerEnhet", saksbehandler_enhet),
+        ])
+        .send()
+        .await
+        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+    let _ = ensure_success(resp, "PUT", &url).await?;
+    Ok(())
+}

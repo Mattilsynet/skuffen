@@ -7,6 +7,7 @@ Denne siden gir en oversikt over saksstatuser slik de brukes i Mattilsynets arki
 En **sak** er en **samlemappe** i arkivet som inneholder én eller flere journalposter.
 
 - **Saken er rammen**: Den har metadata som tittel, status, ansvarlig enhet og saksbehandler.
+  - **Saksansvarlig (Noark 5 M306):** Identifiserer hvem som er ansvarlig for saken. Settes via `SettSaksansvarlig`-kommandoen, som kaller Sikris `SetSaksansvarligIdForArkivSak`. Saksansvarlig **låses** når saken avsluttes (Noark 5 §6.1.13) — en sak kan ikke avsluttes før ønsket saksansvarlig er satt i Sikri.
 
 - **Journalposter legges på saken**: Alle inngående, utgående og interne dokumenter knyttes til en sak.
 

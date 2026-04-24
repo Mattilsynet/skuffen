@@ -173,6 +173,12 @@ impl CommandOutwardStatusProjector for IdMappingOutwardStatusProjector {
                 }
                 context.saksnummer = self.resolve_saksnummer(&cmd.sak_key).await?;
             }
+            Command::SettSaksansvarlig(cmd) => {
+                if let SakKey::ClientReference(client_reference) = &cmd.sak_key {
+                    context.sak_client_reference = Some(client_reference.to_string());
+                }
+                context.saksnummer = self.resolve_saksnummer(&cmd.sak_key).await?;
+            }
         }
 
         Ok(context)

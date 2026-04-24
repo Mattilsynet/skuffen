@@ -32,6 +32,20 @@ pub trait EntityTilstandRepository: Send + Sync {
         oensket_tilstand: SakTilstand,
     ) -> Result<(), anyhow::Error>;
 
+    async fn oppdater_oensket_saksansvarlig(
+        &self,
+        sak_id: SkuffenSakId,
+        saksbehandler_id: &str,
+        saksbehandler_enhet: &str,
+    ) -> Result<(), anyhow::Error>;
+
+    async fn oppdater_naavaerende_saksansvarlig(
+        &self,
+        sak_id: SkuffenSakId,
+        saksbehandler_id: &str,
+        saksbehandler_enhet: &str,
+    ) -> Result<(), anyhow::Error>;
+
     // Journalpost
     async fn opprett_journalpost_tilstand(
         &self,

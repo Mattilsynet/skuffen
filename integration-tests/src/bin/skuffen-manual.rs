@@ -14,7 +14,7 @@ use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
 };
-use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
+use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettSaksansvarlig};
 use lib_schemas::skuffen::dokument::Dokument as DtoDokument;
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::status::SkuffenStatusEventV1;
@@ -300,6 +300,15 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
                     sak_key: DtoSakKey::ClientReference(sak_client_reference),
                     kildesystem: None,
                 },
+            }),
+        },
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id,
+            payload: Command::SettSaksansvarlig(SettSaksansvarlig {
+                sak_key: DtoSakKey::ClientReference(sak_client_reference),
+                saksbehandler_id: saksbehandler_id.clone(),
+                saksbehandler_enhet: saksbehandler_enhet.clone(),
             }),
         },
         CommandEnvelope {

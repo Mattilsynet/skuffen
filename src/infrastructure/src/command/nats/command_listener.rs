@@ -184,7 +184,8 @@ impl CommandListener {
                     self.validate_media_references(&command.felles.dokumenter, &mut missing)
                         .await?;
                 }
-                Command::OpprettSak(_) | Command::AvsluttSak(_) => {}
+                Command::OpprettSak(_) | Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => {
+                }
             }
         }
 

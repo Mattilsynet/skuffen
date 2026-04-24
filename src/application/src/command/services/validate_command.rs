@@ -118,6 +118,7 @@ impl ValidateCommandService {
                 self.validate_sak_ref(c.felles.sak_key).await
             }
             Command::AvsluttSak(c) => self.validate_sak_ref(c.sak_key).await,
+            Command::SettSaksansvarlig(c) => self.validate_sak_ref(c.sak_key).await,
         };
         let decision = outcome.as_lifecycle_decision();
 

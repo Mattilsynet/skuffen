@@ -3,7 +3,7 @@ use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost,
     OpprettUgåendeJournalpost,
 };
-use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
+use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettSaksansvarlig};
 use lib_schemas::skuffen::dokument::Dokument as DtoDokument;
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use uuid::Uuid;
@@ -148,6 +148,23 @@ impl CommandScenario {
                 },
                 avsender: Some("Avsender".to_string()),
                 mottaker: "Mottaker".to_string(),
+            }),
+        }
+    }
+
+    pub fn sett_saksansvarlig(
+        &self,
+        sak_key: DtoSakKey,
+        saksbehandler_id: &str,
+        saksbehandler_enhet: &str,
+    ) -> CommandEnvelope<Command> {
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id: Some(Uuid::new_v4()),
+            payload: Command::SettSaksansvarlig(SettSaksansvarlig {
+                sak_key,
+                saksbehandler_id: saksbehandler_id.to_string(),
+                saksbehandler_enhet: saksbehandler_enhet.to_string(),
             }),
         }
     }

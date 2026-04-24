@@ -25,6 +25,7 @@ pub enum CommandTypeCode {
     OpprettUtgaaendeJournalpost,
     OpprettInterntNotatJournalpost,
     AvsluttSak,
+    SettSaksansvarlig,
 }
 
 impl CommandTypeCode {
@@ -35,6 +36,7 @@ impl CommandTypeCode {
             Self::OpprettUtgaaendeJournalpost => "opprett_utgaaende_journalpost",
             Self::OpprettInterntNotatJournalpost => "opprett_internt_notat_journalpost",
             Self::AvsluttSak => "avslutt_sak",
+            Self::SettSaksansvarlig => "sett_saksansvarlig",
         }
     }
 }
@@ -304,6 +306,9 @@ pub fn command_metadata(command: &Command) -> (CommandTypeCode, CommandEntityTyp
             CommandEntityType::Journalpost,
         ),
         Command::AvsluttSak(_) => (CommandTypeCode::AvsluttSak, CommandEntityType::Sak),
+        Command::SettSaksansvarlig(_) => {
+            (CommandTypeCode::SettSaksansvarlig, CommandEntityType::Sak)
+        }
     }
 }
 

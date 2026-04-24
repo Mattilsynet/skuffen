@@ -35,7 +35,9 @@ impl ValidatedCommandDispatcher for NatsValidatedCommandDispatcher {
         command: &CommandEnvelope<Command>,
     ) -> Result<(), anyhow::Error> {
         let entity_type = match &command.payload {
-            Command::OpprettSak(_) | Command::AvsluttSak(_) => "sak",
+            Command::OpprettSak(_) | Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => {
+                "sak"
+            }
             Command::OpprettInngåendeJournalpost(_)
             | Command::OpprettUtgåendeJournalpost(_)
             | Command::OpprettInterntNotatJournalpost(_) => "journalpost",

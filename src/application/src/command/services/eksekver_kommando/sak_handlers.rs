@@ -92,4 +92,48 @@ impl EksekverKommandoService {
 
         Ok(())
     }
+
+    pub(super) async fn sett_saksansvarlig(
+        &self,
+        envelope: &CommandEnvelope<Command>,
+        sak: &SakMedBarn,
+    ) -> Result<(), EksekveringFeil> {
+        let saksnummer = sak.saksnummer.as_deref().ok_or_else(|| {
+            EksekveringFeil::blocked("Kan ikke endre saksansvarlig: saksnummer mangler")
+        })?;
+
+        let Command::SettSaksansvarlig(cmd) = &envelope.payload else {
+            return Err(EksekveringFeil::irrecoverable("Ugyldig kommando"));
+        };
+
+        self.arkiv_gateway
+            .sett_saksansvarlig(saksnummer, &cmd.saksbehandler_id, &cmd.saksbehandler_enhet)
+            .await
+            .map_err(|err| self.map_arkiv_feil(err))?;
+
+        self.entity_tilstand_repo
+            .oppdater_naavaerende_saksansvarlig(
+                sak.sak_id,
+                &cmd.saksbehandler_id,
+                &cmd.saksbehandler_enhet,
+            )
+            .await
+            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+
+        // Logg overgang (uten tilstandsendring)
+        self.entity_tilstand_repo
+            .logg_overgang(
+                "sak",
+                sak.sak_id.0,
+                envelope.command_id,
+                "opprettet",
+                "opprettet", // Ingen tilstandsendring
+                "sett_saksansvarlig",
+                None,
+            )
+            .await
+            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+
+        Ok(())
+    }
 }

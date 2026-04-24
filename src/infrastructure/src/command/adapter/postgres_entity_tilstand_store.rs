@@ -5,7 +5,7 @@ use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSa
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
     DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter, JournalpostTilstand,
-    SakMedBarn, SakTilstand,
+    SakMedBarn, SakTilstand, Saksansvarlig,
 };
 use sqlx::Row;
 use sqlx::postgres::PgPool;
@@ -184,6 +184,52 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         Ok(())
     }
 
+    async fn oppdater_oensket_saksansvarlig(
+        &self,
+        sak_id: SkuffenSakId,
+        saksbehandler_id: &str,
+        saksbehandler_enhet: &str,
+    ) -> Result<(), anyhow::Error> {
+        sqlx::query(
+            r#"
+            UPDATE sak_tilstand
+            SET oensket_saksansvarlig_id = $2, oensket_saksansvarlig_enhet = $3
+            WHERE sak_id = $1
+            "#,
+        )
+        .bind(Uuid::from(sak_id))
+        .bind(saksbehandler_id)
+        .bind(saksbehandler_enhet)
+        .execute(&self.pool)
+        .await
+        .context("oppdater_oensket_saksansvarlig")?;
+
+        Ok(())
+    }
+
+    async fn oppdater_naavaerende_saksansvarlig(
+        &self,
+        sak_id: SkuffenSakId,
+        saksbehandler_id: &str,
+        saksbehandler_enhet: &str,
+    ) -> Result<(), anyhow::Error> {
+        sqlx::query(
+            r#"
+            UPDATE sak_tilstand
+            SET naavaerende_saksansvarlig_id = $2, naavaerende_saksansvarlig_enhet = $3
+            WHERE sak_id = $1
+            "#,
+        )
+        .bind(Uuid::from(sak_id))
+        .bind(saksbehandler_id)
+        .bind(saksbehandler_enhet)
+        .execute(&self.pool)
+        .await
+        .context("oppdater_naavaerende_saksansvarlig")?;
+
+        Ok(())
+    }
+
     async fn opprett_journalpost_tilstand(
         &self,
         journalpost_id: SkuffenJournalpostId,
@@ -294,6 +340,8 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
             SELECT
                 s.sak_id, s.tilstand as sak_tilstand, s.oensket_tilstand as sak_oensket_tilstand,
                 s.sikri_id as sak_sikri_id, s.saksnummer,
+                s.oensket_saksansvarlig_id, s.oensket_saksansvarlig_enhet,
+                s.naavaerende_saksansvarlig_id, s.naavaerende_saksansvarlig_enhet,
                 j.journalpost_id, j.tilstand as jp_tilstand, j.oensket_tilstand as jp_oensket_tilstand,
                 j.sikri_id as jp_sikri_id, j.journalpostnummer, j.journalposttype, j.med_utsending,
                 d.dokument_id, d.tilstand as dok_tilstand
@@ -318,6 +366,26 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         let sak_oensket = sak_tilstand_from_db(first.get::<&str, _>("sak_oensket_tilstand"))?;
         let sak_sikri_id: Option<i64> = first.get("sak_sikri_id");
         let saksnummer: Option<String> = first.get("saksnummer");
+
+        let oensket_saksansvarlig_id: Option<String> = first.get("oensket_saksansvarlig_id");
+        let oensket_saksansvarlig_enhet: Option<String> = first.get("oensket_saksansvarlig_enhet");
+        let naavaerende_saksansvarlig_id: Option<String> =
+            first.get("naavaerende_saksansvarlig_id");
+        let naavaerende_saksansvarlig_enhet: Option<String> =
+            first.get("naavaerende_saksansvarlig_enhet");
+
+        let oensket_saksansvarlig = oensket_saksansvarlig_id
+            .zip(oensket_saksansvarlig_enhet)
+            .map(|(id, enhet)| Saksansvarlig {
+                saksbehandler_id: id,
+                enhet,
+            });
+        let naavaerende_saksansvarlig = naavaerende_saksansvarlig_id
+            .zip(naavaerende_saksansvarlig_enhet)
+            .map(|(id, enhet)| Saksansvarlig {
+                saksbehandler_id: id,
+                enhet,
+            });
 
         let mut journalposter: HashMap<Uuid, JournalpostMedDokumenter> = HashMap::new();
 
@@ -375,6 +443,8 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
             oensket_tilstand: sak_oensket,
             sikri_id: sak_sikri_id,
             saksnummer,
+            oensket_saksansvarlig,
+            naavaerende_saksansvarlig,
             journalposter,
         }))
     }

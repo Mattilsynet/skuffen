@@ -90,6 +90,24 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         Ok(())
     }
 
+    async fn oppdater_oensket_saksansvarlig(
+        &self,
+        _sak_id: SkuffenSakId,
+        _saksbehandler_id: &str,
+        _saksbehandler_enhet: &str,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
+    async fn oppdater_naavaerende_saksansvarlig(
+        &self,
+        _sak_id: SkuffenSakId,
+        _saksbehandler_id: &str,
+        _saksbehandler_enhet: &str,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
     async fn opprett_journalpost_tilstand(
         &self,
         journalpost_id: SkuffenJournalpostId,
@@ -638,6 +656,8 @@ async fn journalpost_med_arkiv_id_sak_opprettet_gir_klar() {
             oensket_tilstand: SakTilstand::Opprettet,
             sikri_id: Some(100),
             saksnummer: Some("2025/123".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
             journalposter: vec![JournalpostMedDokumenter {
                 journalpost_id: SkuffenJournalpostId::from(journalpost_skuffen_id),
                 tilstand: JournalpostTilstand::IkkeRealisert,
@@ -746,6 +766,8 @@ async fn avslutt_sak_med_arkiv_id_og_opprettet_sak_gir_klar() {
             oensket_tilstand: SakTilstand::Avsluttet,
             sikri_id: Some(100),
             saksnummer: Some("2025/456".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
             journalposter: Vec::new(),
         },
     );
@@ -913,6 +935,8 @@ async fn registrerer_feil_ved_tilstandsfeil() {
             oensket_tilstand: SakTilstand::Opprettet,
             sikri_id: Some(100),
             saksnummer: Some("2026/10".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
             journalposter: vec![JournalpostMedDokumenter {
                 journalpost_id: SkuffenJournalpostId::from(journalpost_skuffen_id),
                 tilstand: JournalpostTilstand::DokumenterUnderArbeid,

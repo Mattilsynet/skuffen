@@ -47,7 +47,10 @@ Treat `.agent/` as the deeper source of truth for repo rules, technical guidance
 ## Finalizing Expectations
 - Run formatting and linting for the touched scope.
 - Run at least one targeted crate test.
-- Run integration tests when touching command flow or infrastructure.
+- Run integration tests when touching command flow or infrastructure:
+  - `cargo test -p skuffen-integration-tests` (requires local NATS + Postgres).
+  - See `.agent/guides/commands.md` for full setup.
+- Update relevant documentation (decision docs, guides, AGENTS.md, domain skill resources) when changes affect behavior, contracts, architecture, or conventions. Documentation is part of done, not follow-up polish.
 
 ## Cursor / Copilot Rules
 - `.cursorrules`: not present

@@ -36,7 +36,7 @@ impl CommandDispatcher for NatsCommandDispatcher {
             Command::OpprettInngåendeJournalpost(_)
             | Command::OpprettUtgåendeJournalpost(_)
             | Command::OpprettInterntNotatJournalpost(_) => "journalpost",
-            Command::AvsluttSak(_) => "sak",
+            Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => "sak",
         };
 
         let subject = format!("arkiv.command.inbox.{}.{}", entity_type, command.command_id);

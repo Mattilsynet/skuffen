@@ -62,3 +62,11 @@ pub async fn avskriv_journalpost(
 pub async fn avslutt_sak(saksnummer: &str) -> anyhow::Result<()> {
     api::avslutt_sak(saksnummer).await
 }
+
+pub async fn sett_saksansvarlig(
+    saksnummer: &str,
+    saksbehandler: &str,
+    saksbehandler_enhet: &str,
+) -> anyhow::Result<()> {
+    api::sett_saksansvarlig(saksnummer, saksbehandler, saksbehandler_enhet).await
+}

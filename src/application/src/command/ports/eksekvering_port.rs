@@ -47,6 +47,13 @@ pub trait ArkivGateway: Send + Sync {
     ) -> Result<(), anyhow::Error>;
 
     async fn avslutt_sak(&self, saksnummer: &str) -> Result<(), anyhow::Error>;
+
+    async fn sett_saksansvarlig(
+        &self,
+        saksnummer: &str,
+        saksbehandler: &str,
+        saksbehandler_enhet: &str,
+    ) -> Result<(), anyhow::Error>;
 }
 
 #[async_trait]

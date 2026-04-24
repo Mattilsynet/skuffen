@@ -7,6 +7,7 @@ pub fn valider_kommando(command: &Command) -> Result<(), EksekveringFeil> {
     match command {
         Command::OpprettSak(_) => Ok(()),
         Command::AvsluttSak(_) => Ok(()),
+        Command::SettSaksansvarlig(_) => Ok(()),
         Command::OpprettInngåendeJournalpost(cmd) => {
             valider_felles(&cmd.felles)?;
             if cmd.avsender.trim().is_empty() {

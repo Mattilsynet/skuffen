@@ -8,6 +8,13 @@ pub enum JournalpostType {
     InterntNotat,
 }
 
+/// Saksansvarlig (Noark 5 M306) — identifiserer ansvarlig saksbehandler og enhet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Saksansvarlig {
+    pub saksbehandler_id: String,
+    pub enhet: String,
+}
+
 // ---------------------------------------------------------------------------
 // Tilstander
 // ---------------------------------------------------------------------------
@@ -50,6 +57,12 @@ pub struct SakMedBarn {
     pub oensket_tilstand: SakTilstand,
     pub sikri_id: Option<i64>,
     pub saksnummer: Option<String>,
+    /// Ønsket saksansvarlig (Noark 5 M306).
+    /// Set when a SettSaksansvarlig command is registered.
+    pub oensket_saksansvarlig: Option<Saksansvarlig>,
+    /// Nåværende saksansvarlig satt i Sikri.
+    /// Updated after successful Sikri call.
+    pub naavaerende_saksansvarlig: Option<Saksansvarlig>,
     pub journalposter: Vec<JournalpostMedDokumenter>,
 }
 
@@ -96,6 +109,9 @@ pub enum ArkivOperasjon {
     AvsluttSak {
         sak_id: SkuffenSakId,
     },
+    SettSaksansvarlig {
+        sak_id: SkuffenSakId,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +136,10 @@ pub fn oensket_sluttilstand_for_journalpost(
 /// Returnerer true hvis alle entiteter har nådd sin ønskede tilstand.
 pub fn er_ferdig(sak: &SakMedBarn) -> bool {
     if sak.tilstand != sak.oensket_tilstand {
+        return false;
+    }
+    // Saksansvarlig (Noark 5 M306) must match if requested
+    if sak.oensket_saksansvarlig != sak.naavaerende_saksansvarlig {
         return false;
     }
     sak.journalposter.iter().all(|jp| {
@@ -151,6 +171,18 @@ pub fn neste_handling(
         && sak.oensket_tilstand != SakTilstand::IkkeRealisert
     {
         return Ok(Some(ArkivOperasjon::OpprettSak { sak_id: sak.sak_id }));
+    }
+
+    // 1b. Saksansvarlig (Noark 5 M306) ønsket men ikke satt — sett før journalposter
+    //     Krever saksnummer (som step 2) for å unngå blocked-retry-syklus.
+    if sak.tilstand == SakTilstand::Opprettet
+        && sak.saksnummer.is_some()
+        && sak.oensket_saksansvarlig.is_some()
+        && sak.oensket_saksansvarlig != sak.naavaerende_saksansvarlig
+    {
+        return Ok(Some(ArkivOperasjon::SettSaksansvarlig {
+            sak_id: sak.sak_id,
+        }));
     }
 
     // 2. Journalpost ikke realisert, sak opprettet med saksnummer
@@ -231,7 +263,15 @@ pub fn neste_handling(
     //    VenterPaaUtsending → blokkert på ekstern utsending, skip.
 
     // 8. Avslutt sak hvis ønsket og alle journalposter terminale
+    //    (Noark 5 6.1.13: saksansvarlig must be correct before avslutting)
     if sak.oensket_tilstand == SakTilstand::Avsluttet && sak.tilstand == SakTilstand::Opprettet {
+        // Guard: saksansvarlig must match (or not be requested at all)
+        if sak.oensket_saksansvarlig != sak.naavaerende_saksansvarlig {
+            return Ok(Some(ArkivOperasjon::SettSaksansvarlig {
+                sak_id: sak.sak_id,
+            }));
+        }
+
         if sak.journalposter.is_empty() {
             return Ok(Some(ArkivOperasjon::AvsluttSak { sak_id: sak.sak_id }));
         }
@@ -288,6 +328,8 @@ mod tests {
             oensket_tilstand: oensket,
             sikri_id: None,
             saksnummer: None,
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
             journalposter: vec![],
         }
     }
@@ -299,6 +341,8 @@ mod tests {
             oensket_tilstand: SakTilstand::Opprettet,
             sikri_id: Some(1),
             saksnummer: Some("2025/1".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
             journalposter,
         }
     }
@@ -365,6 +409,8 @@ mod tests {
             oensket_tilstand: SakTilstand::Opprettet,
             sikri_id: None,
             saksnummer: None,
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
             journalposter: vec![jp],
         };
         let r = neste_handling(CommandTypeCode::OpprettInngaaendeJournalpost, &sak).unwrap();
@@ -589,5 +635,118 @@ mod tests {
         sak.oensket_tilstand = SakTilstand::Avsluttet;
         let resultat = neste_handling(CommandTypeCode::AvsluttSak, &sak);
         assert!(resultat.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // SettSaksansvarlig (Noark 5 M306) tests
+    // -----------------------------------------------------------------------
+
+    fn saksansvarlig(id: &str, enhet: &str) -> Option<Saksansvarlig> {
+        Some(Saksansvarlig {
+            saksbehandler_id: id.to_string(),
+            enhet: enhet.to_string(),
+        })
+    }
+
+    // 14. SettSaksansvarlig fires when ønsket != nåværende
+    #[test]
+    fn sett_saksansvarlig_naar_oensket_ulik_naavaerende() {
+        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Opprettet);
+        sak.saksnummer = Some("2025/1".to_string());
+        sak.oensket_saksansvarlig = saksansvarlig("Z12345", "42");
+        sak.naavaerende_saksansvarlig = None;
+        let resultat = neste_handling(CommandTypeCode::SettSaksansvarlig, &sak).unwrap();
+        assert!(matches!(
+            resultat,
+            Some(ArkivOperasjon::SettSaksansvarlig { .. })
+        ));
+    }
+
+    // 15. SettSaksansvarlig does NOT fire when ønsket == nåværende (idempotent)
+    #[test]
+    fn sett_saksansvarlig_idempotent_naar_lik() {
+        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Opprettet);
+        sak.saksnummer = Some("2025/1".to_string());
+        sak.oensket_saksansvarlig = saksansvarlig("Z12345", "42");
+        sak.naavaerende_saksansvarlig = saksansvarlig("Z12345", "42");
+        let resultat = neste_handling(CommandTypeCode::SettSaksansvarlig, &sak).unwrap();
+        assert_eq!(resultat, None);
+    }
+
+    // 16. SettSaksansvarlig does NOT fire when ønsket is None
+    #[test]
+    fn sett_saksansvarlig_ikke_naar_oensket_er_none() {
+        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Opprettet);
+        sak.saksnummer = Some("2025/1".to_string());
+        sak.oensket_saksansvarlig = None;
+        sak.naavaerende_saksansvarlig = None;
+        let resultat = neste_handling(CommandTypeCode::SettSaksansvarlig, &sak).unwrap();
+        assert_eq!(resultat, None);
+    }
+
+    // 17. SettSaksansvarlig fires before journalpost work
+    #[test]
+    fn sett_saksansvarlig_foer_journalpost() {
+        let jp = lag_journalpost(
+            JournalpostTilstand::IkkeRealisert,
+            JournalpostTilstand::Avskrevet,
+            JournalpostType::Inngaende,
+            false,
+            vec![dok(DokumentTilstand::IkkeRealisert)],
+        );
+        let mut sak = opprettet_sak_med_saksnummer(vec![jp]);
+        sak.oensket_saksansvarlig = saksansvarlig("Z12345", "42");
+        sak.naavaerende_saksansvarlig = None;
+        let resultat = neste_handling(CommandTypeCode::OpprettInngaaendeJournalpost, &sak).unwrap();
+        // Should pick sett_saksansvarlig BEFORE opprett_journalpost
+        assert!(matches!(
+            resultat,
+            Some(ArkivOperasjon::SettSaksansvarlig { .. })
+        ));
+    }
+
+    // 18. AvsluttSak blocked when saksansvarlig not yet set
+    #[test]
+    fn avslutt_sak_blokkert_naar_saksansvarlig_ikke_satt() {
+        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Avsluttet);
+        sak.saksnummer = Some("2025/1".to_string());
+        sak.oensket_saksansvarlig = saksansvarlig("Z12345", "42");
+        sak.naavaerende_saksansvarlig = None;
+        let resultat = neste_handling(CommandTypeCode::AvsluttSak, &sak).unwrap();
+        // Should return SettSaksansvarlig instead of AvsluttSak
+        assert!(matches!(
+            resultat,
+            Some(ArkivOperasjon::SettSaksansvarlig { .. })
+        ));
+    }
+
+    // 19. AvsluttSak proceeds when saksansvarlig matches
+    #[test]
+    fn avslutt_sak_naar_saksansvarlig_satt() {
+        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Avsluttet);
+        sak.saksnummer = Some("2025/1".to_string());
+        sak.oensket_saksansvarlig = saksansvarlig("Z12345", "42");
+        sak.naavaerende_saksansvarlig = saksansvarlig("Z12345", "42");
+        let resultat = neste_handling(CommandTypeCode::AvsluttSak, &sak).unwrap();
+        assert!(matches!(resultat, Some(ArkivOperasjon::AvsluttSak { .. })));
+    }
+
+    // 20. er_ferdig respects saksansvarlig mismatch
+    #[test]
+    fn er_ferdig_sjekker_saksansvarlig() {
+        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Opprettet);
+        sak.oensket_saksansvarlig = saksansvarlig("Z12345", "42");
+        sak.naavaerende_saksansvarlig = None;
+        assert!(!er_ferdig(&sak));
+
+        sak.naavaerende_saksansvarlig = saksansvarlig("Z12345", "42");
+        assert!(er_ferdig(&sak));
+    }
+
+    // 21. er_ferdig ok when no saksansvarlig requested
+    #[test]
+    fn er_ferdig_ok_uten_saksansvarlig() {
+        let sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Opprettet);
+        assert!(er_ferdig(&sak));
     }
 }

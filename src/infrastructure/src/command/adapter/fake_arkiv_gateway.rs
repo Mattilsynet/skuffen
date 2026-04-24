@@ -76,4 +76,13 @@ impl ArkivGateway for FakeArkivGateway {
     async fn avslutt_sak(&self, _saksnummer: &str) -> Result<(), anyhow::Error> {
         Ok(())
     }
+
+    async fn sett_saksansvarlig(
+        &self,
+        _saksnummer: &str,
+        _saksbehandler: &str,
+        _saksbehandler_enhet: &str,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
 }

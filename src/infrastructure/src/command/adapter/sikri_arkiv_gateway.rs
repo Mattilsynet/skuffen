@@ -126,6 +126,15 @@ impl ArkivGateway for SikriArkivGateway {
     async fn avslutt_sak(&self, saksnummer: &str) -> Result<(), anyhow::Error> {
         sikri_client::avslutt_sak(saksnummer).await
     }
+
+    async fn sett_saksansvarlig(
+        &self,
+        saksnummer: &str,
+        saksbehandler: &str,
+        saksbehandler_enhet: &str,
+    ) -> Result<(), anyhow::Error> {
+        sikri_client::sett_saksansvarlig(saksnummer, saksbehandler, saksbehandler_enhet).await
+    }
 }
 
 impl SikriArkivGateway {

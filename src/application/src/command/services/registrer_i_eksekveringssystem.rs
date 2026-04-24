@@ -130,6 +130,18 @@ impl RegistrerIEksekveringssystemService {
                     .oppdater_sak_oensket_tilstand(sak_id, SakTilstand::Avsluttet)
                     .await?;
             }
+            Command::SettSaksansvarlig(cmd) => {
+                let sak_id = registration
+                    .sak_id()
+                    .ok_or_else(|| anyhow::anyhow!("Mangler sak_id for SettSaksansvarlig"))?;
+                self.entity_tilstand_repo
+                    .oppdater_oensket_saksansvarlig(
+                        sak_id,
+                        &cmd.saksbehandler_id,
+                        &cmd.saksbehandler_enhet,
+                    )
+                    .await?;
+            }
         }
         Ok(())
     }

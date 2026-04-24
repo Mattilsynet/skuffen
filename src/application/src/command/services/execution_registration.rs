@@ -72,6 +72,11 @@ pub(crate) async fn resolve_registration(
             None,
             Vec::new(),
         )),
+        Command::SettSaksansvarlig(cmd) => Ok(ResolvedRegistration::new(
+            Some(resolve_sett_saksansvarlig_registration(id_mapping_repo, cmd).await?),
+            None,
+            Vec::new(),
+        )),
         Command::OpprettInngåendeJournalpost(cmd) => {
             resolve_journalpost_registration(id_mapping_repo, &cmd.felles).await
         }
@@ -100,6 +105,13 @@ async fn resolve_opprett_sak_registration(
 async fn resolve_avslutt_sak_registration(
     id_mapping_repo: &dyn IdMappingRepository,
     command: &AvsluttSak,
+) -> Result<ResolvedSakRegistration> {
+    resolve_sak_registration(id_mapping_repo, &command.sak_key).await
+}
+
+async fn resolve_sett_saksansvarlig_registration(
+    id_mapping_repo: &dyn IdMappingRepository,
+    command: &lib_schemas::skuffen::command::sak::SettSaksansvarlig,
 ) -> Result<ResolvedSakRegistration> {
     resolve_sak_registration(id_mapping_repo, &command.sak_key).await
 }
