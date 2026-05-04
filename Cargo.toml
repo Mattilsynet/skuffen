@@ -35,7 +35,7 @@ lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", p
 lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats" }
 dotenvy = "0.15.7"
 anyhow = "1.0.102"
-tokio = { version = "1.52.1", features = ["full"] }
+tokio = { version = "1.52.2", features = ["full"] }
 async-trait = "0.1.89"
 tracing = "0.1.44"
 

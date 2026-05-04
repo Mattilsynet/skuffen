@@ -15,7 +15,7 @@ path = "tests/e2e/e2e_client.rs"
 lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git" }
 reqwest = {version = "0.13.2", features = ["json", "query"] }
 serde = {version = "1.0.228", features = ["derive"]}
-tokio = {version = "1.52.1", features = ["full"]}
+tokio = {version = "1.52.2", features = ["full"]}
 chrono = { version = "0.4.44", features = ["serde"] }
 anyhow = { version = "1.0.102" }
 gcp_auth = { version = "0.12.6" }
