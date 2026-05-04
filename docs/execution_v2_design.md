@@ -1,6 +1,6 @@
 # Execution v2 design
 
-Se også ADR: `docs/adr/0001-execution-v2-og-opprydding-av-legacy-state-seams.md`.
+Se også ADR: `docs/adr/skuffen/SKU-0001-execution-v2-og-opprydding-av-legacy-state-seams.md`.
 
 Dette dokumentet beskriver den implementerte modellen for execution v2.
 

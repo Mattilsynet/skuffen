@@ -1,0 +1,23 @@
+# adr-fmt configuration for Skuffen ADR governance.
+#
+# Rules are hardcoded in the vendored adr-fmt binary. Keep this file focused on
+# domain mappings, crate ownership, and stale archive configuration.
+
+[stale]
+directory = "stale"
+
+[[domains]]
+prefix = "COM"
+name = "Common Foundation"
+directory = "common"
+description = "Tverrgående konvensjoner og felleseiergods som gjelder for alle Skuffen crates, inkludert arkitekturprinsipper, observability, trygg logging og utviklingsworkflow."
+crates = []
+foundation = true
+
+[[domains]]
+prefix = "SKU"
+name = "Skuffen"
+directory = "skuffen"
+description = "Skuffen-spesifikke beslutninger for runtime, domain, application, infrastructure, Sikri-adapter og archive integration."
+crates = ["skuffen", "domain", "application", "infrastructure", "sikri_client", "skuffen-integration-tests"]
+foundation = false

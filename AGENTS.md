@@ -14,6 +14,7 @@ Treat `.agent/` as the deeper source of truth for repo rules, technical guidance
 - Normative repo rules: `.agent/rules/repo_rules.md`
 - Technical guidance: `.agent/guides/`
 - Canonical archive-domain knowledge: `.agent/skills/arkivfag/`
+- Architecture decision records: `docs/adr/` (governed by `adr-fmt`)
 - Machine-readable index: `.agent/manifest.yaml`
 - CI reference: `.github/workflows/validate.yaml`
 
@@ -51,6 +52,36 @@ Treat `.agent/` as the deeper source of truth for repo rules, technical guidance
   - `cargo test -p skuffen-integration-tests` (requires local NATS + Postgres).
   - See `.agent/guides/commands.md` for full setup.
 - Update relevant documentation (decision docs, guides, AGENTS.md, domain skill resources) when changes affect behavior, contracts, architecture, or conventions. Documentation is part of done, not follow-up polish.
+
+## Architecture Decision Records (ADRs)
+
+All durable architecture decisions live in `docs/adr/` and are governed by the project-local `adr-fmt` tool.
+`.agent/decisions/` is no longer used — decisions belong in `docs/adr/`.
+
+**Key files:**
+- `docs/adr/GOVERNANCE.md` — Skuffen-specific process and judgment (read first)
+- `docs/adr/TEMPLATE.md` — canonical ADR template
+- `docs/adr/common/` — COM domain: cross-cutting foundation decisions
+- `docs/adr/skuffen/` — SKU domain: Skuffen-specific decisions
+- `docs/adr/stale/` — superseded ADRs (retired, not deleted)
+
+**adr-fmt commands (always use project-local binary):**
+```
+cargo run -p adr-fmt -- --guidelines          # authoritative authoring rules
+cargo run -p adr-fmt -- --lint                # diagnostics (advisory; warnings do not block)
+cargo run -p adr-fmt -- --context <crate>     # applicable rules for a given crate
+cargo run -p adr-fmt -- --critique <ADR_ID>   # focal ADR + direct neighbors
+cargo run -p adr-fmt -- --tree [DOMAIN]       # domain tree overview
+cargo run -p adr-fmt -- --report              # reverse-link / children index
+```
+
+**Lint is advisory.** `--lint` warnings (e.g. T015 word-count) inform quality but do not block commits or CI.
+Errors (exit 1) from `--lint` indicate infrastructure failure and should be resolved before finalizing.
+
+**When to run adr-fmt:**
+- Before editing or superseding an ADR: `--critique <ADR_ID>`
+- After writing or editing any ADR: `--lint`
+- When planning work against a crate: `--context <crate>`
 
 ## Cursor / Copilot Rules
 - `.cursorrules`: not present

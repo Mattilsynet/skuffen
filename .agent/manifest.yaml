@@ -17,6 +17,17 @@ guides:
   - id: architecture
     path: .agent/guides/architecture/README.md
 
+decisions:
+  - id: adr_governance
+    path: docs/adr/GOVERNANCE.md
+    description: "Skuffen-specific ADR process and judgment (read before authoring ADRs)"
+  - id: adr_common
+    path: docs/adr/common/
+    description: "COM domain: cross-cutting foundation decisions"
+  - id: adr_skuffen
+    path: docs/adr/skuffen/
+    description: "SKU domain: Skuffen-specific decisions"
+
 skills:
   - id: arkivfag
     path: .agent/skills/arkivfag/SKILL.md

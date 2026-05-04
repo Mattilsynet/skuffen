@@ -1,7 +1,7 @@
 # Implementeringsplan: Entity State Machine Execution Model
 
 **Opprettet:** 2026-04-20  
-**Beslutningsdokument:** `.agent/decisions/entity-state-machine-execution.md`
+**Beslutningsdokument:** `docs/adr/skuffen/SKU-0002-entity-state-machine-execution.md`
 
 ## Bakgrunn og mål
 

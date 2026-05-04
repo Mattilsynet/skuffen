@@ -91,3 +91,19 @@ Normative regler for hvordan kode, dokumentasjon og agentarbeid skal se ut i Sku
 3. **Structure:** Følg Arrange / Act / Assert.
 4. **Test scope:** Foretrekk fakes og mocks i application-tester; behold end-to-end-atferd i integration tests.
 5. **Before finalizing:** Kjor `cargo fmt` og relevante tester for endringen; kjor integration tests nar command flow eller infrastructure er berort.
+
+## Architecture Decision Records (ADRs)
+
+Alle durable architecture decisions hører til i `docs/adr/`. `.agent/decisions/` er ikke lenger i bruk.
+
+1. **Kanonisk kilde:** `docs/adr/GOVERNANCE.md` for Skuffen-prosess; `cargo run -p adr-fmt -- --guidelines` for mekaniske regler.
+2. **Domener:** `docs/adr/common/` (COM — tverrgående) og `docs/adr/skuffen/` (SKU — Skuffen-spesifikk). Stale ADR-er flyttes til `docs/adr/stale/`.
+3. **Verktøy (alltid project-local binary):**
+   - `cargo run -p adr-fmt -- --guidelines` — autoritative authoring rules
+   - `cargo run -p adr-fmt -- --lint` — diagnostics (advisory; warnings blokkerer ikke)
+   - `cargo run -p adr-fmt -- --context <crate>` — gjeldende regler for en crate
+   - `cargo run -p adr-fmt -- --critique <ADR_ID>` — fokal ADR + direkte naboer
+   - `cargo run -p adr-fmt -- --tree [DOMAIN]` — domain tree overview
+   - `cargo run -p adr-fmt -- --report` — reverse-link / children index
+4. **Lint er advisory.** T015-advarsler (ordtelling) er informative, ikke blokerende. Exit 1 fra `--lint` indikerer infrastructure-feil og skal løses.
+5. **Workflow:** Kjør `--critique <ADR_ID>` før redigering, `--lint` etter skriving, `--context <crate>` ved planlegging.
