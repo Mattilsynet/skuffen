@@ -7,8 +7,8 @@ edition = "2024"
 application = { path = "../application" }
 domain = { path = "../domain" }
 
-lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas", features = ["skuffen"] }
-lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats" }
+lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", rev = "91e69423239d3e6b496506e9e48699a26896124e", package = "lib-schemas", features = ["skuffen"] }
+lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", rev = "91e69423239d3e6b496506e9e48699a26896124e", package = "lib-nats" }
 sikri_client = {path = "../../crates/sikri_client"}
 
 lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.5.2" }
@@ -25,12 +25,13 @@ futures = "0.3.32"
 async-trait = "0.1.89"
 axum = "0.8.9"
 dotenvy = "0.15.7"
-async-nats = "0.47.0"
+async-nats = "0.48.0"
 bytes = "1.11.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 reqwest = { version = "0.13.2" }
 base64 = "0.22.1"
+gcp_auth = "0.12.6"
 
 
 # Feilhåndtering
@@ -55,4 +56,4 @@ opentelemetry-http = "0.31.0"
 tracing-stackdriver = "0.10.0"
 tracing-log = "0.2.0"
 
-uuid = { version = "1.23.1", features = ["serde", "v7", "v4"] }
+uuid = { version = "1.23.1", features = ["serde", "v7", "v5", "v4"] }

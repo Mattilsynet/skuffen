@@ -29,6 +29,17 @@ Denne guiden beskriver trygge, vanlige bygg-, test- og kvalitetssjekker for `sku
 - Build service only: `cargo build --bin skuffen`
 - Run service: `cargo run --bin skuffen`
 
+## Runtime configuration
+
+- `SKUFFEN_FAKE_SIKRI=1` uses fake Sikri adapters for local development.
+- `SKUFFEN_HTML2PDF_RENDERER_ENDPOINT=<url>` enables HTML-template rendering through
+  the external `html-to-pdf` service. When unset, Skuffen keeps a recoverable
+  "renderer not configured" failure so local services can still start. Set this
+  in any environment that must process `Dokumentform::HtmlTemplate` commands.
+  The endpoint must use `https://` unless `APP_ENV=local`.
+- `SKUFFEN_HTML2PDF_RENDERER_AUDIENCE=<audience>` overrides the Cloud Run ID-token
+  audience. If unset, the renderer endpoint is used as audience.
+
 ## Test suites
 
 - All tests: `cargo test --workspace`

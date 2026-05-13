@@ -3,8 +3,8 @@ use domain::eksekvering::execution::EksekveringStatus;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
-    DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter, JournalpostTilstand,
-    SakMedBarn, SakTilstand,
+    DokumentKildeTilstand, DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter,
+    JournalpostTilstand, SakMedBarn, SakTilstand,
 };
 use domain::eksekvering::typer::{
     CommandLifecycleContext, CommandLifecycleEvent, CommandStage, CommandStageStatus,
@@ -14,7 +14,7 @@ use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
 };
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
-use lib_schemas::skuffen::dokument::Dokument;
+use lib_schemas::skuffen::dokument::{Dokument, Dokumentform, Felt};
 use lib_schemas::skuffen::query::queries::SakKey;
 use lib_schemas::skuffen::sak::{Ordningsverdi, Saksnummer, Sakstittel};
 use std::collections::HashMap;
@@ -40,7 +40,7 @@ use crate::command::services::registrer_i_eksekveringssystem::RegistrerIEksekver
 struct FakeEntityTilstandData {
     opprettede_saker: Vec<(Uuid, SakTilstand, Uuid)>,
     opprettede_journalposter: Vec<(Uuid, Uuid, JournalpostType, bool, JournalpostTilstand, Uuid)>,
-    opprettede_dokumenter: Vec<(Uuid, Uuid, Uuid)>,
+    opprettede_dokumenter: Vec<(Uuid, Uuid, DokumentTilstand, Option<Uuid>, Vec<Felt>, Uuid)>,
     oppdaterte_sak_oensket: Vec<(Uuid, SakTilstand)>,
     sak_med_barn: HashMap<Uuid, SakMedBarn>,
 }
@@ -143,11 +143,17 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         &self,
         dokument_id: SkuffenDokumentId,
         journalpost_id: SkuffenJournalpostId,
+        tilstand: DokumentTilstand,
+        mal_referanse: Option<Uuid>,
+        felter: Vec<Felt>,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
         self.data.lock().unwrap().opprettede_dokumenter.push((
             Uuid::from(dokument_id),
             Uuid::from(journalpost_id),
+            tilstand,
+            mal_referanse,
+            felter,
             command_id,
         ));
         Ok(())
@@ -158,6 +164,14 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         _dokument_id: SkuffenDokumentId,
         _tilstand: DokumentTilstand,
         _feil_detalj: Option<&str>,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
+    async fn oppdater_rendered_dokument_referanse(
+        &self,
+        _dokument_id: SkuffenDokumentId,
+        _rendered_dokument_referanse: Uuid,
     ) -> Result<(), anyhow::Error> {
         Ok(())
     }
@@ -669,6 +683,7 @@ async fn journalpost_med_arkiv_id_sak_opprettet_gir_klar() {
                 dokumenter: vec![DokumentMedTilstand {
                     dokument_id: SkuffenDokumentId::from(Uuid::new_v4()),
                     tilstand: DokumentTilstand::IkkeRealisert,
+                    kilde: DokumentKildeTilstand::Bytes,
                 }],
             }],
         },
@@ -948,6 +963,7 @@ async fn registrerer_feil_ved_tilstandsfeil() {
                 dokumenter: vec![DokumentMedTilstand {
                     dokument_id: SkuffenDokumentId::from(Uuid::new_v4()),
                     tilstand: DokumentTilstand::FeiletPermanent,
+                    kilde: DokumentKildeTilstand::Bytes,
                 }],
             }],
         },
@@ -1004,8 +1020,10 @@ fn make_journalpost_command(journalpost_id: Uuid, sak_key: SakKey) -> CommandEnv
                 dokumenter: vec![Dokument {
                     client_reference: Uuid::new_v4(),
                     tittel: "Vedlegg".to_string(),
-                    filtype: "PDF".to_string(),
-                    dokument_referanse: Uuid::new_v4(),
+                    form: Dokumentform::Bytes {
+                        filtype: "PDF".to_string(),
+                        dokument_referanse: Uuid::new_v4(),
+                    },
                 }],
                 sak_key,
                 kildesystem: None,

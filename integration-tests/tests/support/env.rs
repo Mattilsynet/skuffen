@@ -116,7 +116,11 @@ fn start_skuffen_process(
             std::env::set_var("APP_NATS_CREDENTIALS", " ");
         }
 
-        skuffen::run().await
+        let result = skuffen::run().await;
+        if let Err(err) = &result {
+            eprintln!("start_runtime: skuffen process exited with error: {err:#}");
+        }
+        result
     })
 }
 

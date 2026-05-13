@@ -11,6 +11,8 @@ use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::query::queries::SakKey;
 use uuid::Uuid;
 
+use crate::command::ports::dokument_lager_port::DokumentLager;
+use crate::command::ports::dokument_renderer_port::DokumentRenderer;
 use crate::command::ports::eksekvering_port::{
     ArkivGateway, EksekveringKvitteringPublisher, EksekveringStatusPublisher,
 };
@@ -22,6 +24,8 @@ use crate::command::ports::ventende_kommando_wakeup_port::VentendeKommandoWakeup
 pub struct EksekverKommandoService {
     entity_tilstand_repo: Box<dyn EntityTilstandRepository>,
     arkiv_gateway: Box<dyn ArkivGateway>,
+    dokument_renderer: Box<dyn DokumentRenderer>,
+    dokument_lager: Box<dyn DokumentLager>,
     id_mapping: Box<dyn IdMappingRepository>,
     status_publisher: Box<dyn EksekveringStatusPublisher>,
     done_publisher: Box<dyn EksekveringKvitteringPublisher>,
@@ -38,9 +42,12 @@ pub enum ExecutionOutcome {
 }
 
 impl EksekverKommandoService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         entity_tilstand_repo: Box<dyn EntityTilstandRepository>,
         arkiv_gateway: Box<dyn ArkivGateway>,
+        dokument_renderer: Box<dyn DokumentRenderer>,
+        dokument_lager: Box<dyn DokumentLager>,
         status_publisher: Box<dyn EksekveringStatusPublisher>,
         done_publisher: Box<dyn EksekveringKvitteringPublisher>,
         id_mapping: Box<dyn IdMappingRepository>,
@@ -50,6 +57,8 @@ impl EksekverKommandoService {
         Self {
             entity_tilstand_repo,
             arkiv_gateway,
+            dokument_renderer,
+            dokument_lager,
             id_mapping,
             status_publisher,
             done_publisher,
@@ -126,6 +135,13 @@ impl EksekverKommandoService {
                 dokument_id,
             } => {
                 self.legg_til_dokument(envelope, sak, journalpost_id, dokument_id)
+                    .await
+            }
+            ArkivOperasjon::RenderDokument {
+                journalpost_id,
+                dokument_id,
+            } => {
+                self.render_dokument(envelope, sak, journalpost_id, dokument_id)
                     .await
             }
             ArkivOperasjon::Journalfoer { journalpost_id } => {

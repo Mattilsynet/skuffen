@@ -4,6 +4,7 @@ use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
     DokumentTilstand, JournalpostTilstand, SakMedBarn, SakTilstand,
 };
+use lib_schemas::skuffen::dokument::Felt;
 use uuid::Uuid;
 
 #[allow(clippy::too_many_arguments)]
@@ -71,6 +72,9 @@ pub trait EntityTilstandRepository: Send + Sync {
         &self,
         dokument_id: SkuffenDokumentId,
         journalpost_id: SkuffenJournalpostId,
+        tilstand: DokumentTilstand,
+        mal_referanse: Option<Uuid>,
+        felter: Vec<Felt>,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error>;
 
@@ -79,6 +83,12 @@ pub trait EntityTilstandRepository: Send + Sync {
         dokument_id: SkuffenDokumentId,
         tilstand: DokumentTilstand,
         feil_detalj: Option<&str>,
+    ) -> Result<(), anyhow::Error>;
+
+    async fn oppdater_rendered_dokument_referanse(
+        &self,
+        dokument_id: SkuffenDokumentId,
+        rendered_dokument_referanse: Uuid,
     ) -> Result<(), anyhow::Error>;
 
     // Aggregat-henting

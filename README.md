@@ -63,8 +63,12 @@ nats request arkiv.arkiver '[
             {
               "client_reference": "55555555-5555-4555-8555-555555555555",
               "tittel": "Vedlegg",
-              "filtype": "PDF",
-              "dokument_referanse": "66666666-6666-4666-8666-666666666666"
+              "form": {
+                "Bytes": {
+                  "dokument_referanse": "66666666-6666-4666-8666-666666666666",
+                  "filtype": "PDF"
+                }
+              }
             }
           ],
           "sak_key": {

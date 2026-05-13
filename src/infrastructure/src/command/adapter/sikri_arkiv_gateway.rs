@@ -8,7 +8,7 @@ use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::{
     OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost, OpprettUgåendeJournalpost,
 };
-use lib_schemas::skuffen::dokument::Dokument;
+use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
 use sikri_client::domain::ny_sak::NySak;
 use sikri_client::dto::elements_avsender_mottaker::ElementsAvsenderMottaker;
 use sikri_client::dto::elements_dokument::ElementsDokument;
@@ -262,13 +262,12 @@ impl SikriArkivGateway {
             return Ok(Vec::new());
         };
 
-        let innhold = self
-            .hent_media_base64(hoveddokument.dokument_referanse)
-            .await?;
+        let (dokument_referanse, filtype) = bytes_form(hoveddokument)?;
+        let innhold = self.hent_media_base64(dokument_referanse).await?;
         Ok(vec![ElementsDokument {
             tittel: Some(hoveddokument.tittel.clone()),
             hoveddokument: true,
-            filtype: Some(hoveddokument.filtype.clone()),
+            filtype: Some(filtype.to_string()),
             innhold: Some(innhold),
         }])
     }
@@ -279,11 +278,12 @@ impl SikriArkivGateway {
         dokument_id: uuid::Uuid,
     ) -> Result<ElementsDokument, anyhow::Error> {
         let dokument = Self::dokument_for_client_reference(command, dokument_id)?;
-        let innhold = self.hent_media_base64(dokument.dokument_referanse).await?;
+        let (dokument_referanse, filtype) = bytes_form(dokument)?;
+        let innhold = self.hent_media_base64(dokument_referanse).await?;
         Ok(ElementsDokument {
             tittel: Some(dokument.tittel.clone()),
             hoveddokument: false,
-            filtype: Some(dokument.filtype.clone()),
+            filtype: Some(filtype.to_string()),
             innhold: Some(innhold),
         })
     }
@@ -322,16 +322,28 @@ impl SikriArkivGateway {
     }
 }
 
+fn bytes_form(dokument: &Dokument) -> Result<(uuid::Uuid, &str), anyhow::Error> {
+    match &dokument.form {
+        Dokumentform::Bytes {
+            dokument_referanse,
+            filtype,
+        } => Ok((*dokument_referanse, filtype.as_str())),
+        Dokumentform::HtmlTemplate { .. } => Err(anyhow::anyhow!(
+            "HtmlTemplate dokument må rendres før arkivmapping"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::SikriArkivGateway;
-    use crate::command::media::{MediaFile, MediaStore};
+    use crate::command::media::{MediaFile, MediaMetadata, MediaStore};
     use async_trait::async_trait;
     use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
     use lib_schemas::skuffen::command::journalpost::{
         JournalpostCommon, OpprettInterntNotatJournalpost,
     };
-    use lib_schemas::skuffen::dokument::Dokument;
+    use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
     use lib_schemas::skuffen::query::queries::SakKey;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -402,10 +414,11 @@ mod tests {
         let files = dokumenter
             .iter()
             .map(|dokument| MediaFile {
-                id: dokument.dokument_referanse,
+                id: dokument_referanse(dokument),
                 data: dokument.tittel.as_bytes().to_vec(),
-                filename: Some(format!("{}.{}", dokument.tittel, dokument.filtype)),
+                filename: Some(format!("{}.{}", dokument.tittel, filtype(dokument))),
                 content_type: None,
+                metadata: MediaMetadata::default(),
             })
             .collect();
         SikriArkivGateway::new(Arc::new(FakeMediaStore::with_files(files)))
@@ -435,8 +448,30 @@ mod tests {
         Dokument {
             client_reference: Uuid::new_v4(),
             tittel: tittel.to_string(),
-            filtype: filtype.to_string(),
-            dokument_referanse: Uuid::new_v4(),
+            form: Dokumentform::Bytes {
+                filtype: filtype.to_string(),
+                dokument_referanse: Uuid::new_v4(),
+            },
+        }
+    }
+
+    fn dokument_referanse(dokument: &Dokument) -> Uuid {
+        match &dokument.form {
+            Dokumentform::Bytes {
+                dokument_referanse,
+                filtype: _,
+            } => *dokument_referanse,
+            Dokumentform::HtmlTemplate { .. } => panic!("expected bytes document"),
+        }
+    }
+
+    fn filtype(dokument: &Dokument) -> &str {
+        match &dokument.form {
+            Dokumentform::Bytes {
+                dokument_referanse: _,
+                filtype,
+            } => filtype,
+            Dokumentform::HtmlTemplate { .. } => panic!("expected bytes document"),
         }
     }
 }

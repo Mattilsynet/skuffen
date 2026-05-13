@@ -6,6 +6,8 @@ use async_nats::jetstream::{
 };
 
 const COMMAND_STREAM_MAX_AGE: Duration = Duration::from_secs(60 * 60 * 24 * 180);
+const EXECUTOR_ACK_WAIT: Duration = Duration::from_secs(180);
+const MEDIA_OBJECT_STORE_MAX_AGE: Duration = Duration::from_secs(60 * 60 * 24 * 180);
 
 pub fn command_inbox_stream_config(num_replicas: usize) -> stream::Config {
     stream::Config {
@@ -60,6 +62,7 @@ pub fn executor_consumer_config(num_replicas: usize) -> consumer::pull::Config {
     consumer::pull::Config {
         durable_name: Some("executor".to_string()),
         ack_policy: consumer::AckPolicy::Explicit,
+        ack_wait: EXECUTOR_ACK_WAIT,
         num_replicas,
         ..Default::default()
     }
@@ -68,6 +71,7 @@ pub fn executor_consumer_config(num_replicas: usize) -> consumer::pull::Config {
 pub fn media_object_store_config(num_replicas: usize) -> jetstream::object_store::Config {
     jetstream::object_store::Config {
         bucket: "arkiv_media".to_string(),
+        max_age: MEDIA_OBJECT_STORE_MAX_AGE,
         num_replicas,
         ..Default::default()
     }

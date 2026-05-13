@@ -1,13 +1,21 @@
+use anyhow::{Context, ensure};
 use application::command::ports::command_state_port::ArkivSakTilstandRepository;
+use application::command::ports::dokument_renderer_port::{
+    DokumentRenderer, IkkeKonfigurertDokumentRenderer,
+};
 use application::command::ports::eksekvering_port::ArkivGateway;
 use application::query::services::hent_journalpost::HentJournalpostService;
 use application::query::services::hent_sak::HentSakService;
 use async_trait::async_trait;
 use lib_nats::jetstream;
 use tokio::task::JoinHandle;
+use tracing::{info, warn};
 
 use crate::command::adapter::fake_arkiv_gateway::FakeArkivGateway;
 use crate::command::adapter::fake_command_state_repo::FakeArkivSakTilstandRepository;
+use crate::command::adapter::html2pdf_renderer_adapter::{
+    GcpIdTokenProvider, Html2PdfRendererAdapter,
+};
 use crate::command::adapter::id_mapping_postgres::PostgresIdMappingRepository;
 use crate::command::adapter::nats_done_publisher::NatsDonePublisher;
 use crate::command::adapter::nats_eksekvering_status_publisher::NatsEksekveringStatusPublisher;
@@ -131,10 +139,10 @@ pub fn build_eksekvering_components(
     entity_tilstand_store: PostgresEntityTilstandStore,
     media_store: std::sync::Arc<ObjectStoreMediaStore>,
     use_fake_sikri: bool,
-) -> (
+) -> anyhow::Result<(
     KommandoEksekveringListener,
     application::command::services::eksekvering_worker::EksekveringWorker,
-) {
+)> {
     let registrer_i_eksekveringssystem_service =
         application::command::services::registrer_i_eksekveringssystem::RegistrerIEksekveringssystemService::new(
             Box::new(execution_store.clone()),
@@ -149,7 +157,9 @@ pub fn build_eksekvering_components(
     let eksekvering_service =
         application::command::services::eksekver_kommando::EksekverKommandoService::new(
             Box::new(entity_tilstand_store.clone()),
-            arkiv_gateway(use_fake_sikri, media_store),
+            arkiv_gateway(use_fake_sikri, media_store.clone()),
+            dokument_renderer()?,
+            Box::new((*media_store).clone()),
             Box::new(NatsEksekveringStatusPublisher::new(nats.clone())),
             Box::new(NatsDonePublisher::new(nats.clone())),
             Box::new(id_mapping_repo.clone()),
@@ -180,13 +190,69 @@ pub fn build_eksekvering_components(
             std::time::Duration::from_secs(5),
         );
 
-    (eksekvering_listener, eksekvering_worker)
+    Ok((eksekvering_listener, eksekvering_worker))
 }
 
 fn use_fake_sikri() -> bool {
     std::env::var("SKUFFEN_FAKE_SIKRI")
         .map(|value| value == "1")
         .unwrap_or(false)
+}
+
+fn dokument_renderer() -> anyhow::Result<Box<dyn DokumentRenderer>> {
+    let endpoint = match optional_env("SKUFFEN_HTML2PDF_RENDERER_ENDPOINT") {
+        Some(endpoint) => endpoint,
+        None => {
+            warn!(
+                renderer_mode = "unconfigured",
+                "HTML-to-PDF renderer is not configured"
+            );
+            return Ok(Box::new(IkkeKonfigurertDokumentRenderer));
+        }
+    };
+    validate_renderer_endpoint(&endpoint)?;
+
+    let custom_audience = optional_env("SKUFFEN_HTML2PDF_RENDERER_AUDIENCE");
+    let audience = custom_audience.clone().unwrap_or_else(|| endpoint.clone());
+
+    info!(
+        renderer_mode = "enabled",
+        custom_audience = custom_audience.is_some(),
+        "HTML-to-PDF renderer is configured"
+    );
+
+    Ok(Box::new(Html2PdfRendererAdapter::new(
+        endpoint,
+        audience,
+        Box::new(GcpIdTokenProvider),
+    )))
+}
+
+fn validate_renderer_endpoint(endpoint: &str) -> anyhow::Result<()> {
+    let parsed = reqwest::Url::parse(endpoint)
+        .context("SKUFFEN_HTML2PDF_RENDERER_ENDPOINT is not a valid URL")?;
+    ensure!(
+        parsed.scheme() == "https" || (parsed.scheme() == "http" && is_local_env()),
+        "SKUFFEN_HTML2PDF_RENDERER_ENDPOINT must use https outside APP_ENV=local"
+    );
+    Ok(())
+}
+
+fn is_local_env() -> bool {
+    std::env::var("APP_ENV")
+        .map(|value| value.trim().eq_ignore_ascii_case("local"))
+        .unwrap_or(false)
+}
+
+fn optional_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 async fn setup_media_store(

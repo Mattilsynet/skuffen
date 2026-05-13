@@ -6,7 +6,7 @@ use lib_nats::chunked_upload::receiver::ChunkedUploadAssembler;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use crate::command::media::{MediaFile, MediaStore};
+use crate::command::media::{MediaFile, MediaMetadata, MediaStore};
 use crate::nats::client::NatsClient;
 use crate::nats::nats_response::NatsResponse;
 use crate::nats::supervisor::TaskSupervisor;
@@ -89,6 +89,7 @@ impl MediaListener {
             data: payload.data,
             filename: payload.filename,
             content_type: payload.content_type,
+            metadata: MediaMetadata::default(),
         };
 
         if let Err(err) = self.store.save(file).await {

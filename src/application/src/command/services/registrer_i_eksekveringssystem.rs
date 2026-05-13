@@ -6,12 +6,13 @@ use domain::eksekvering::execution::EksekveringStatus;
 use domain::eksekvering::id::SkuffenSakId;
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
-    er_ferdig, neste_handling, oensket_sluttilstand_for_journalpost, SakTilstand,
+    er_ferdig, neste_handling, oensket_sluttilstand_for_journalpost, DokumentTilstand, SakTilstand,
 };
 use domain::eksekvering::typer::{
     command_metadata, CommandLifecycleEvent, CommandTypeCode, EksekveringFeiltype,
 };
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+use lib_schemas::skuffen::dokument::Dokumentform;
 
 use crate::command::ports::command_execution_port::{
     CommandExecutionRepository, EksekveringsregistreringResultat, NyKommandoEksekvering,
@@ -170,9 +171,31 @@ impl RegistrerIEksekveringssystemService {
             )
             .await?;
 
-        for dok in &registration.dokumenter {
+        let dokumenter = dokumenter_for_envelope(envelope);
+        for (index, dok) in registration.dokumenter.iter().enumerate() {
+            let schema_dokument = dokumenter.get(index).ok_or_else(|| {
+                anyhow::anyhow!("Mangler dokumentform for dokument {}", dok.dokument_id.0)
+            })?;
+            let (tilstand, mal_referanse, felter) = match &schema_dokument.form {
+                Dokumentform::Bytes { .. } => (DokumentTilstand::IkkeRealisert, None, Vec::new()),
+                Dokumentform::HtmlTemplate {
+                    mal_referanse,
+                    felter,
+                } => (
+                    DokumentTilstand::AvventerRendring,
+                    Some(*mal_referanse),
+                    felter.clone(),
+                ),
+            };
             self.entity_tilstand_repo
-                .opprett_dokument_tilstand(dok.dokument_id, jp_id, envelope.command_id)
+                .opprett_dokument_tilstand(
+                    dok.dokument_id,
+                    jp_id,
+                    tilstand,
+                    mal_referanse,
+                    felter,
+                    envelope.command_id,
+                )
                 .await?;
         }
 
@@ -215,6 +238,17 @@ impl RegistrerIEksekveringssystemService {
 
     async fn emit_status(&self, event: CommandLifecycleEvent) -> Result<()> {
         self.status_publisher.publiser_status(event).await
+    }
+}
+
+fn dokumenter_for_envelope(
+    envelope: &CommandEnvelope<Command>,
+) -> &[lib_schemas::skuffen::dokument::Dokument] {
+    match &envelope.payload {
+        Command::OpprettInngåendeJournalpost(cmd) => &cmd.felles.dokumenter,
+        Command::OpprettUtgåendeJournalpost(cmd) => &cmd.felles.dokumenter,
+        Command::OpprettInterntNotatJournalpost(cmd) => &cmd.felles.dokumenter,
+        _ => &[],
     }
 }
 

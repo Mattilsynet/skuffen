@@ -7,12 +7,12 @@ edition = "2021"
 [dependencies]
 domain = { path = "../domain" }
 
-lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", features = ["skuffen"] }
+lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", rev = "91e69423239d3e6b496506e9e48699a26896124e", features = ["skuffen"] }
 async-trait = "0.1.89"
 
 # Feilhåndtering
 anyhow = "1.0.102"
 thiserror = "2.0.18"
-uuid = { version = "1.23.1", features = ["v7", "v4"] }
+uuid = { version = "1.23.1", features = ["v7", "v5", "v4"] }
 tokio = { version = "1.52.1", features = ["macros", "rt", "time"] }
 chrono = { version = "0.4.44", features = ["serde"] }

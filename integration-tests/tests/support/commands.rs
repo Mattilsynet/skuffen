@@ -4,7 +4,7 @@ use lib_schemas::skuffen::command::journalpost::{
     OpprettUgåendeJournalpost,
 };
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettSaksansvarlig};
-use lib_schemas::skuffen::dokument::Dokument as DtoDokument;
+use lib_schemas::skuffen::dokument::{Dokument as DtoDokument, Dokumentform};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use uuid::Uuid;
 
@@ -68,8 +68,7 @@ impl CommandScenario {
                         dokumenter: vec![DtoDokument {
                             client_reference: self.dokument_client_reference,
                             tittel: "Vedlegg".to_string(),
-                            filtype: "PDF".to_string(),
-                            dokument_referanse: self.dokument_referanse,
+                            form: self.bytes_form(),
                         }],
                         sak_key: DtoSakKey::ClientReference(self.sak_client_reference),
                         kildesystem: None,
@@ -107,8 +106,7 @@ impl CommandScenario {
                     dokumenter: vec![DtoDokument {
                         client_reference: self.dokument_client_reference,
                         tittel: "Vedlegg".to_string(),
-                        filtype: "PDF".to_string(),
-                        dokument_referanse: self.dokument_referanse,
+                        form: self.bytes_form(),
                     }],
                     sak_key,
                     kildesystem: None,
@@ -140,8 +138,7 @@ impl CommandScenario {
                     dokumenter: vec![DtoDokument {
                         client_reference: self.dokument_client_reference,
                         tittel: "Vedlegg".to_string(),
-                        filtype: "PDF".to_string(),
-                        dokument_referanse: self.dokument_referanse,
+                        form: self.bytes_form(),
                     }],
                     sak_key,
                     kildesystem: None,
@@ -166,6 +163,13 @@ impl CommandScenario {
                 saksbehandler_id: saksbehandler_id.to_string(),
                 saksbehandler_enhet: saksbehandler_enhet.to_string(),
             }),
+        }
+    }
+
+    fn bytes_form(&self) -> Dokumentform {
+        Dokumentform::Bytes {
+            dokument_referanse: self.dokument_referanse,
+            filtype: "PDF".to_string(),
         }
     }
 }

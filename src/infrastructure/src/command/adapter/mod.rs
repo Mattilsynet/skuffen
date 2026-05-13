@@ -1,5 +1,6 @@
 pub mod fake_arkiv_gateway;
 pub mod fake_command_state_repo;
+pub mod html2pdf_renderer_adapter;
 pub mod id_mapping_postgres;
 pub mod nats_done_publisher;
 pub mod nats_eksekvering_status_publisher;

@@ -11,7 +11,7 @@ use lib_schemas::skuffen::command::journalpost::{
     OpprettUgåendeJournalpost,
 };
 use lib_schemas::skuffen::command::sak::{Arkivdel, OpprettSak};
-use lib_schemas::skuffen::dokument::Dokument;
+use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
 
 use lib_schemas::skuffen::query::queries::SakKey;
 use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
@@ -324,14 +324,18 @@ async fn test_ingest_command_registers_document_mappings() {
         Dokument {
             client_reference: Uuid::new_v4(),
             tittel: "Vedlegg 1".to_string(),
-            filtype: "PDF".to_string(),
-            dokument_referanse: Uuid::new_v4(),
+            form: Dokumentform::Bytes {
+                filtype: "PDF".to_string(),
+                dokument_referanse: Uuid::new_v4(),
+            },
         },
         Dokument {
             client_reference: Uuid::new_v4(),
             tittel: "Vedlegg 2".to_string(),
-            filtype: "PDF".to_string(),
-            dokument_referanse: Uuid::new_v4(),
+            form: Dokumentform::Bytes {
+                filtype: "PDF".to_string(),
+                dokument_referanse: Uuid::new_v4(),
+            },
         },
     ];
 
@@ -459,14 +463,18 @@ async fn test_ingest_command_allows_multiple_mappings_per_command_id() {
         Dokument {
             client_reference: Uuid::new_v4(),
             tittel: "Vedlegg 1".to_string(),
-            filtype: "PDF".to_string(),
-            dokument_referanse: Uuid::new_v4(),
+            form: Dokumentform::Bytes {
+                filtype: "PDF".to_string(),
+                dokument_referanse: Uuid::new_v4(),
+            },
         },
         Dokument {
             client_reference: Uuid::new_v4(),
             tittel: "Vedlegg 2".to_string(),
-            filtype: "PDF".to_string(),
-            dokument_referanse: Uuid::new_v4(),
+            form: Dokumentform::Bytes {
+                filtype: "PDF".to_string(),
+                dokument_referanse: Uuid::new_v4(),
+            },
         },
     ];
 

@@ -1,6 +1,8 @@
 pub mod command_dispatcher_port;
 pub mod command_execution_port;
 pub mod command_state_port;
+pub mod dokument_lager_port;
+pub mod dokument_renderer_port;
 pub mod eksekvering_port;
 pub mod entity_tilstand_port;
 pub mod id_mapping_port;

@@ -1,5 +1,7 @@
+use crate::eksekvering::html_template::{er_felter_klare, FeltVerdier};
 use crate::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use crate::eksekvering::typer::{CommandTypeCode, EksekveringFeil};
+use lib_schemas::skuffen::dokument::Felt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JournalpostType {
@@ -42,6 +44,7 @@ pub enum JournalpostTilstand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DokumentTilstand {
     IkkeRealisert,
+    AvventerRendring,
     Ok,
     FeiletPermanent,
 }
@@ -78,10 +81,21 @@ pub struct JournalpostMedDokumenter {
     pub dokumenter: Vec<DokumentMedTilstand>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct DokumentMedTilstand {
     pub dokument_id: SkuffenDokumentId,
     pub tilstand: DokumentTilstand,
+    pub kilde: DokumentKildeTilstand,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DokumentKildeTilstand {
+    Bytes,
+    HtmlTemplate {
+        mal_referanse: uuid::Uuid,
+        felter: Vec<Felt>,
+        rendered_dokument_referanse: Option<uuid::Uuid>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +111,10 @@ pub enum ArkivOperasjon {
         journalpost_id: SkuffenJournalpostId,
     },
     LeggTilDokument {
+        journalpost_id: SkuffenJournalpostId,
+        dokument_id: SkuffenDokumentId,
+    },
+    RenderDokument {
         journalpost_id: SkuffenJournalpostId,
         dokument_id: SkuffenDokumentId,
     },
@@ -227,6 +245,25 @@ pub fn neste_handling(
         }
     }
 
+    // 4b. HTML-template dokument klart for rendering etter at felter finnes.
+    for jp in &sak.journalposter {
+        if matches!(
+            jp.tilstand,
+            JournalpostTilstand::Opprettet | JournalpostTilstand::DokumenterUnderArbeid
+        ) {
+            for dok in &jp.dokumenter {
+                if dok.tilstand == DokumentTilstand::AvventerRendring
+                    && dokument_kan_rendres(dok, sak.saksnummer.as_deref())
+                {
+                    return Ok(Some(ArkivOperasjon::RenderDokument {
+                        journalpost_id: jp.journalpost_id,
+                        dokument_id: dok.dokument_id,
+                    }));
+                }
+            }
+        }
+    }
+
     // 5. Alle dokumenter Ok → journalfør
     for jp in &sak.journalposter {
         if matches!(
@@ -300,6 +337,20 @@ fn er_terminal_journalpost(jp: &JournalpostMedDokumenter) -> bool {
     }
 }
 
+fn dokument_kan_rendres(dok: &DokumentMedTilstand, saksnummer: Option<&str>) -> bool {
+    match &dok.kilde {
+        DokumentKildeTilstand::HtmlTemplate {
+            felter,
+            rendered_dokument_referanse,
+            mal_referanse: _,
+        } => {
+            rendered_dokument_referanse.is_none()
+                && er_felter_klare(felter, &FeltVerdier { saksnummer })
+        }
+        DokumentKildeTilstand::Bytes => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tester
 // ---------------------------------------------------------------------------
@@ -370,6 +421,19 @@ mod tests {
         DokumentMedTilstand {
             dokument_id: dok_id(),
             tilstand,
+            kilde: DokumentKildeTilstand::Bytes,
+        }
+    }
+
+    fn template_dok(tilstand: DokumentTilstand, felter: Vec<Felt>) -> DokumentMedTilstand {
+        DokumentMedTilstand {
+            dokument_id: dok_id(),
+            tilstand,
+            kilde: DokumentKildeTilstand::HtmlTemplate {
+                mal_referanse: uuid::Uuid::new_v4(),
+                felter,
+                rendered_dokument_referanse: None,
+            },
         }
     }
 
@@ -464,6 +528,87 @@ mod tests {
             resultat.unwrap_err().feiltype,
             crate::eksekvering::typer::EksekveringFeiltype::Irrecoverable
         );
+    }
+
+    #[test]
+    fn permanent_feil_vinner_over_rendering() {
+        let jp = lag_journalpost(
+            JournalpostTilstand::Opprettet,
+            JournalpostTilstand::Journalfoert,
+            JournalpostType::Utgaaende,
+            false,
+            vec![
+                template_dok(DokumentTilstand::AvventerRendring, vec![Felt::Saksnummer]),
+                dok(DokumentTilstand::FeiletPermanent),
+            ],
+        );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+        let resultat = neste_handling(CommandTypeCode::OpprettUtgaaendeJournalpost, &sak);
+        assert!(resultat.is_err());
+    }
+
+    #[test]
+    fn html_template_venter_paa_saksnummer() {
+        let jp = lag_journalpost(
+            JournalpostTilstand::Opprettet,
+            JournalpostTilstand::Journalfoert,
+            JournalpostType::Utgaaende,
+            false,
+            vec![template_dok(
+                DokumentTilstand::AvventerRendring,
+                vec![Felt::Saksnummer],
+            )],
+        );
+        let mut sak = opprettet_sak_med_saksnummer(vec![jp]);
+        sak.saksnummer = None;
+
+        let resultat = neste_handling(CommandTypeCode::OpprettUtgaaendeJournalpost, &sak).unwrap();
+
+        assert_eq!(resultat, None);
+    }
+
+    #[test]
+    fn html_template_rendres_for_journalfoering() {
+        let jp = lag_journalpost(
+            JournalpostTilstand::Opprettet,
+            JournalpostTilstand::Journalfoert,
+            JournalpostType::Utgaaende,
+            false,
+            vec![template_dok(
+                DokumentTilstand::AvventerRendring,
+                vec![Felt::Saksnummer],
+            )],
+        );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let resultat = neste_handling(CommandTypeCode::OpprettUtgaaendeJournalpost, &sak).unwrap();
+
+        assert!(matches!(
+            resultat,
+            Some(ArkivOperasjon::RenderDokument { .. })
+        ));
+    }
+
+    #[test]
+    fn journalfoering_venter_paa_rendered_hoveddokument() {
+        let jp = lag_journalpost(
+            JournalpostTilstand::Opprettet,
+            JournalpostTilstand::Journalfoert,
+            JournalpostType::Utgaaende,
+            false,
+            vec![template_dok(
+                DokumentTilstand::AvventerRendring,
+                vec![Felt::Saksnummer],
+            )],
+        );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let resultat = neste_handling(CommandTypeCode::OpprettUtgaaendeJournalpost, &sak).unwrap();
+
+        assert!(!matches!(
+            resultat,
+            Some(ArkivOperasjon::Journalfoer { .. })
+        ));
     }
 
     // 5. Utgående journalpost som er Journalfoert med ønsket Journalfoert → None

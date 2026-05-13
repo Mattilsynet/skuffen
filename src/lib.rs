@@ -64,7 +64,7 @@ pub async fn run() -> anyhow::Result<()> {
             runtime.entity_tilstand_store,
             runtime.media_store,
             runtime.use_fake_sikri,
-        );
+        )?;
 
     let mut tasks = JoinSet::new();
     spawn_named_task(

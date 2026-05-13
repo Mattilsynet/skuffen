@@ -4,9 +4,10 @@ use async_trait::async_trait;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
-    DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter, JournalpostTilstand,
-    SakMedBarn, SakTilstand, Saksansvarlig,
+    DokumentKildeTilstand, DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter,
+    JournalpostTilstand, SakMedBarn, SakTilstand, Saksansvarlig,
 };
+use lib_schemas::skuffen::dokument::Felt;
 use sqlx::Row;
 use sqlx::postgres::PgPool;
 use std::collections::HashMap;
@@ -65,6 +66,7 @@ fn journalpost_tilstand_from_db(s: &str) -> Result<JournalpostTilstand, anyhow::
 fn dokument_tilstand_to_db(t: DokumentTilstand) -> &'static str {
     match t {
         DokumentTilstand::IkkeRealisert => "ikke_realisert",
+        DokumentTilstand::AvventerRendring => "avventer_rendring",
         DokumentTilstand::Ok => "ok",
         DokumentTilstand::FeiletPermanent => "feilet_permanent",
     }
@@ -73,6 +75,7 @@ fn dokument_tilstand_to_db(t: DokumentTilstand) -> &'static str {
 fn dokument_tilstand_from_db(s: &str) -> Result<DokumentTilstand, anyhow::Error> {
     match s {
         "ikke_realisert" => Ok(DokumentTilstand::IkkeRealisert),
+        "avventer_rendring" => Ok(DokumentTilstand::AvventerRendring),
         "ok" => Ok(DokumentTilstand::Ok),
         "feilet_permanent" => Ok(DokumentTilstand::FeiletPermanent),
         other => Err(anyhow!("Ukjent dokument_tilstand: {other}")),
@@ -290,16 +293,28 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         &self,
         dokument_id: SkuffenDokumentId,
         journalpost_id: SkuffenJournalpostId,
+        tilstand: DokumentTilstand,
+        mal_referanse: Option<Uuid>,
+        felter: Vec<Felt>,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
+        let felter_json = if mal_referanse.is_some() {
+            Some(serde_json::to_value(&felter).context("serialize felter")?)
+        } else {
+            None
+        };
         sqlx::query(
             r#"
-            INSERT INTO dokument_tilstand (dokument_id, journalpost_id, tilstand, oensket_tilstand, opprettet_av_command_id)
-            VALUES ($1, $2, 'ikke_realisert', 'ok', $3)
+            INSERT INTO dokument_tilstand
+                (dokument_id, journalpost_id, tilstand, oensket_tilstand, mal_referanse, felter, opprettet_av_command_id)
+            VALUES ($1, $2, $3, 'ok', $4, $5, $6)
             "#,
         )
         .bind(Uuid::from(dokument_id))
         .bind(Uuid::from(journalpost_id))
+        .bind(dokument_tilstand_to_db(tilstand))
+        .bind(mal_referanse)
+        .bind(felter_json)
         .bind(command_id)
         .execute(&self.pool)
         .await
@@ -331,6 +346,27 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         Ok(())
     }
 
+    async fn oppdater_rendered_dokument_referanse(
+        &self,
+        dokument_id: SkuffenDokumentId,
+        rendered_dokument_referanse: Uuid,
+    ) -> Result<(), anyhow::Error> {
+        sqlx::query(
+            r#"
+            UPDATE dokument_tilstand
+            SET rendered_dokument_referanse = $2
+            WHERE dokument_id = $1
+            "#,
+        )
+        .bind(Uuid::from(dokument_id))
+        .bind(rendered_dokument_referanse)
+        .execute(&self.pool)
+        .await
+        .context("oppdater_rendered_dokument_referanse")?;
+
+        Ok(())
+    }
+
     async fn hent_sak_med_barn(
         &self,
         sak_id: SkuffenSakId,
@@ -344,7 +380,8 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
                 s.naavaerende_saksansvarlig_id, s.naavaerende_saksansvarlig_enhet,
                 j.journalpost_id, j.tilstand as jp_tilstand, j.oensket_tilstand as jp_oensket_tilstand,
                 j.sikri_id as jp_sikri_id, j.journalpostnummer, j.journalposttype, j.med_utsending,
-                d.dokument_id, d.tilstand as dok_tilstand
+                d.dokument_id, d.tilstand as dok_tilstand, d.mal_referanse,
+                d.felter, d.rendered_dokument_referanse
             FROM sak_tilstand s
             LEFT JOIN journalpost_tilstand j ON j.sak_id = s.sak_id
             LEFT JOIN dokument_tilstand d ON d.journalpost_id = j.journalpost_id
@@ -425,9 +462,27 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
                 // Avoid duplicates from the flat join
                 let already_added = jp.dokumenter.iter().any(|d| d.dokument_id.0 == dok_id);
                 if !already_added {
+                    let mal_referanse: Option<Uuid> = row.get("mal_referanse");
+                    let felter_json: Option<serde_json::Value> = row.get("felter");
+                    let rendered_dokument_referanse: Option<Uuid> =
+                        row.get("rendered_dokument_referanse");
+                    let felter = match felter_json {
+                        Some(value) => serde_json::from_value(value).unwrap_or_default(),
+                        None => Vec::new(),
+                    };
+                    let kilde = if let Some(mal_referanse) = mal_referanse {
+                        DokumentKildeTilstand::HtmlTemplate {
+                            mal_referanse,
+                            felter,
+                            rendered_dokument_referanse,
+                        }
+                    } else {
+                        DokumentKildeTilstand::Bytes
+                    };
                     jp.dokumenter.push(DokumentMedTilstand {
                         dokument_id: SkuffenDokumentId::from(dok_id),
                         tilstand: dok_tilstand,
+                        kilde,
                     });
                 }
             }

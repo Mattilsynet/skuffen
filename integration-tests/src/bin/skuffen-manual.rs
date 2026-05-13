@@ -15,7 +15,7 @@ use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
 };
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettSaksansvarlig};
-use lib_schemas::skuffen::dokument::Dokument as DtoDokument;
+use lib_schemas::skuffen::dokument::{Dokument as DtoDokument, Dokumentform};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::status::SkuffenStatusEventV1;
 use tokio::time::Instant;
@@ -244,8 +244,10 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
                 DtoDokument {
                     client_reference: Uuid::new_v4(),
                     tittel: attachment.title.to_string(),
-                    filtype: attachment.filetype.to_string(),
-                    dokument_referanse,
+                    form: Dokumentform::Bytes {
+                        filtype: attachment.filetype.to_string(),
+                        dokument_referanse,
+                    },
                 },
                 dokument_referanse,
                 attachment.content_type,

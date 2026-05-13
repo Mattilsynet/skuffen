@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
-    DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter, JournalpostTilstand,
-    SakMedBarn, SakTilstand,
+    DokumentKildeTilstand, DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter,
+    JournalpostTilstand, SakMedBarn, SakTilstand,
 };
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::{
@@ -11,6 +11,7 @@ use lib_schemas::skuffen::command::journalpost::{
 };
 use lib_schemas::skuffen::command::sak::AvsluttSak;
 use lib_schemas::skuffen::dokument::Dokument;
+use lib_schemas::skuffen::dokument::{Dokumentform, Felt};
 use lib_schemas::skuffen::query::queries::SakKey;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -106,6 +107,9 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         &self,
         _dokument_id: SkuffenDokumentId,
         _journalpost_id: SkuffenJournalpostId,
+        _tilstand: DokumentTilstand,
+        _mal_referanse: Option<Uuid>,
+        _felter: Vec<Felt>,
         _command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
         Ok(())
@@ -115,6 +119,14 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         _dokument_id: SkuffenDokumentId,
         _tilstand: DokumentTilstand,
         _feil_detalj: Option<&str>,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
+    async fn oppdater_rendered_dokument_referanse(
+        &self,
+        _dokument_id: SkuffenDokumentId,
+        _rendered_dokument_referanse: Uuid,
     ) -> Result<(), anyhow::Error> {
         Ok(())
     }
@@ -482,6 +494,7 @@ async fn etter_sak_endret_gjor_journalpostkommando_klar_nar_saksnummer_kommer() 
                 dokumenter: vec![DokumentMedTilstand {
                     dokument_id: SkuffenDokumentId::from(dokument_id),
                     tilstand: DokumentTilstand::IkkeRealisert,
+                    kilde: DokumentKildeTilstand::Bytes,
                 }],
             }],
         },
@@ -568,6 +581,7 @@ async fn etter_sak_endret_gir_feil_ved_permanent_feilet_dokument() {
                 dokumenter: vec![DokumentMedTilstand {
                     dokument_id: SkuffenDokumentId::from(Uuid::new_v4()),
                     tilstand: DokumentTilstand::FeiletPermanent,
+                    kilde: DokumentKildeTilstand::Bytes,
                 }],
             }],
         },
@@ -632,8 +646,10 @@ fn make_internt_notat_command(
                 dokumenter: vec![Dokument {
                     client_reference: dokument_client_reference,
                     tittel: "Vedlegg".to_string(),
-                    filtype: "PDF".to_string(),
-                    dokument_referanse: Uuid::new_v4(),
+                    form: Dokumentform::Bytes {
+                        filtype: "PDF".to_string(),
+                        dokument_referanse: Uuid::new_v4(),
+                    },
                 }],
                 sak_key: SakKey::ClientReference(sak_client_reference),
                 kildesystem: None,

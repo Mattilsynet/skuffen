@@ -6,6 +6,8 @@ use application::command::services::ingest_command::IngestCommandService;
 use async_nats::Message;
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
+use lib_schemas::skuffen::dokument::{Dokument, Dokumentform, Felt};
+use std::collections::HashSet;
 use tracing::{Span, error, info};
 
 pub struct CommandListener {
@@ -191,11 +193,23 @@ impl CommandListener {
 
     async fn validate_media_references(
         &self,
-        dokumenter: &[lib_schemas::skuffen::dokument::Dokument],
+        dokumenter: &[Dokument],
         missing: &mut Vec<String>,
     ) -> Result<(), String> {
         for dokument in dokumenter {
-            let id = dokument.dokument_referanse;
+            let id = match &dokument.form {
+                Dokumentform::Bytes {
+                    dokument_referanse,
+                    filtype: _,
+                } => *dokument_referanse,
+                Dokumentform::HtmlTemplate {
+                    mal_referanse,
+                    felter,
+                } => {
+                    validate_html_template_felter(felter)?;
+                    *mal_referanse
+                }
+            };
             let exists = self
                 .media_store
                 .exists(id)
@@ -207,4 +221,19 @@ impl CommandListener {
         }
         Ok(())
     }
+}
+
+fn validate_html_template_felter(felter: &[Felt]) -> Result<(), String> {
+    if felter.is_empty() {
+        return Err("HtmlTemplate må deklarere minst ett felt".to_string());
+    }
+
+    let mut sett = HashSet::with_capacity(felter.len());
+    for felt in felter {
+        if !sett.insert(*felt) {
+            return Err("HtmlTemplate har duplikate felter".to_string());
+        }
+    }
+
+    Ok(())
 }

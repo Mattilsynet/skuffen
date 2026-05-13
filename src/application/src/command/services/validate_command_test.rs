@@ -7,7 +7,7 @@ use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
 };
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
-use lib_schemas::skuffen::dokument::Dokument;
+use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
 use lib_schemas::skuffen::query::queries::SakKey;
 use lib_schemas::skuffen::sak::{Ordningsverdi, Saksnummer, Sakstittel};
 use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
@@ -285,8 +285,10 @@ fn sample_dokument() -> Dokument {
     Dokument {
         client_reference: Uuid::new_v4(),
         tittel: "Hoveddokument".to_string(),
-        filtype: "PDF".to_string(),
-        dokument_referanse: Uuid::new_v4(),
+        form: Dokumentform::Bytes {
+            filtype: "PDF".to_string(),
+            dokument_referanse: Uuid::new_v4(),
+        },
     }
 }
 
