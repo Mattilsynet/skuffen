@@ -46,4 +46,4 @@ thiserror = "2.0.18"
 
 # CVC
 aws-lc-sys = "0.40.0"
-aws-lc-rs = "1.16.3"
+aws-lc-rs = "1.17.0"
