@@ -111,6 +111,23 @@ impl CommandExecutionRepository for PostgresExecutionStore {
         };
 
         tx.commit().await?;
+
+        if matches!(registrering, EksekveringsregistreringResultat::Nyregistrert) {
+            let log_context = ExecutionLogContext {
+                correlation_id: ny.envelope.correlation_id,
+                command_type: command_type_code(ny.command_type).to_string(),
+                sak_id: ny.sak_id.map(Uuid::from),
+                journalpost_id: ny.journalpost_id.map(Uuid::from),
+            };
+            log_command_execution_outcome(
+                ny.envelope.command_id,
+                None,
+                ny.status.as_db_code(),
+                ny.last_detail.as_deref(),
+                &log_context,
+            );
+        }
+
         Ok(registrering)
     }
 
@@ -196,6 +213,39 @@ impl CommandExecutionRepository for PostgresExecutionStore {
         .bind(executor_id)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    async fn marker_klar(&self, command_id: Uuid, attempt_no: i32) -> Result<(), anyhow::Error> {
+        let mut tx = self.pool.begin().await?;
+        let log_context = sqlx::query_as::<_, ExecutionLogContext>(
+            r#"
+            UPDATE command_execution
+            SET status = 'klar',
+                retry_ready_at = NULL,
+                last_detail = NULL,
+                updated_at = now(),
+                finished_at = NULL
+            WHERE command_id = $1
+              AND status = 'kjorer'
+              AND attempt_no = $2
+            RETURNING correlation_id, command_type, sak_id, journalpost_id
+            "#,
+        )
+        .bind(command_id)
+        .bind(attempt_no)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(log_context) = log_context else {
+            return Err(anyhow::anyhow!(
+                "Kunne ikke markere command {} som klar for attempt {}",
+                command_id,
+                attempt_no
+            ));
+        };
+        avslutt_forsok(&mut tx, command_id, attempt_no, "klar", None).await?;
+        tx.commit().await?;
+        log_command_execution_outcome(command_id, Some(attempt_no), "klar", None, &log_context);
         Ok(())
     }
 
@@ -435,8 +485,8 @@ impl CommandExecutionRepository for PostgresExecutionStore {
         Ok(result)
     }
 
-    async fn marker_blokkert_venter_til_klar(&self, command_id: Uuid) -> Result<(), anyhow::Error> {
-        sqlx::query(
+    async fn oppdater_til_klar(&self, command_id: Uuid) -> Result<(), anyhow::Error> {
+        let log_context = sqlx::query_as::<_, ExecutionLogContext>(
             r#"
             UPDATE command_execution
             SET status = 'klar',
@@ -446,29 +496,50 @@ impl CommandExecutionRepository for PostgresExecutionStore {
                 finished_at = NULL
             WHERE command_id = $1
               AND status = 'blokkert_venter'
+            RETURNING correlation_id, command_type, sak_id, journalpost_id
             "#,
         )
         .bind(command_id)
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
+
+        if let Some(log_context) = log_context {
+            log_command_execution_outcome(command_id, None, "klar", None, &log_context);
+        }
+
         Ok(())
     }
 
-    async fn oppdater_til_klar(&self, command_id: Uuid) -> Result<(), anyhow::Error> {
-        sqlx::query(
+    async fn oppdater_blokkert_detail(
+        &self,
+        command_id: Uuid,
+        detalj: &str,
+    ) -> Result<(), anyhow::Error> {
+        let log_context = sqlx::query_as::<_, ExecutionLogContext>(
             r#"
             UPDATE command_execution
-            SET status = 'klar',
-                retry_ready_at = NULL,
-                last_detail = NULL,
-                updated_at = now(),
-                finished_at = NULL
+            SET last_detail = $2,
+                updated_at = now()
             WHERE command_id = $1
+              AND status = 'blokkert_venter'
+            RETURNING correlation_id, command_type, sak_id, journalpost_id
             "#,
         )
         .bind(command_id)
-        .execute(&self.pool)
+        .bind(detalj)
+        .fetch_optional(&self.pool)
         .await?;
+
+        if let Some(log_context) = log_context {
+            log_command_execution_outcome(
+                command_id,
+                None,
+                "blokkert_venter",
+                Some(detalj),
+                &log_context,
+            );
+        }
+
         Ok(())
     }
 
@@ -654,7 +725,29 @@ fn sanitize_log_detail(detail: &str) -> Option<String> {
 }
 
 fn error_category_for_detail(detail: &str) -> &'static str {
-    if detail.contains("Ugyldig kommando") {
+    if detail.starts_with("invalid_reason=journalpost_mangler") {
+        "journalpost_mangler"
+    } else if detail.starts_with("invalid_reason=dokument_feilet_permanent") {
+        "dokument_feilet_permanent"
+    } else if detail.starts_with("invalid_reason=target_mismatch") {
+        "target_mismatch"
+    } else if detail.starts_with("invalid_reason=journalpost_feilet_permanent") {
+        "journalpost_feilet_permanent"
+    } else if detail.starts_with("invalid_reason=journalpost_type_mismatch") {
+        "journalpost_type_mismatch"
+    } else if detail.starts_with("blocked_reason=entity_missing") {
+        "entity_missing"
+    } else if detail.starts_with("blocked_reason=saksnummer_mangler") {
+        "saksnummer_mangler"
+    } else if detail.starts_with("blocked_reason=saksansvarlig_ikke_satt") {
+        "saksansvarlig_ikke_satt"
+    } else if detail.starts_with("blocked_reason=journalposter_ikke_ferdige") {
+        "journalposter_ikke_ferdige"
+    } else if detail.starts_with("blocked_reason=felter_ikke_klare") {
+        "felter_ikke_klare"
+    } else if detail.starts_with("blocked_reason=permanent_feil") {
+        "permanent_feil"
+    } else if detail.contains("Ugyldig kommando") {
         "invalid_command"
     } else {
         "execution_error"

@@ -36,12 +36,13 @@ use crate::command::services::registrer_i_eksekveringssystem::RegistrerIEksekver
 // FakeEntityTilstandRepository
 // ---------------------------------------------------------------------------
 
+type OpprettetDokumentRecord = (Uuid, Uuid, DokumentTilstand, Option<Uuid>, Vec<Felt>, Uuid);
+
 #[derive(Default)]
 struct FakeEntityTilstandData {
-    opprettede_saker: Vec<(Uuid, SakTilstand, Uuid)>,
-    opprettede_journalposter: Vec<(Uuid, Uuid, JournalpostType, bool, JournalpostTilstand, Uuid)>,
-    opprettede_dokumenter: Vec<(Uuid, Uuid, DokumentTilstand, Option<Uuid>, Vec<Felt>, Uuid)>,
-    oppdaterte_sak_oensket: Vec<(Uuid, SakTilstand)>,
+    opprettede_saker: Vec<(Uuid, Uuid)>,
+    opprettede_journalposter: Vec<(Uuid, Uuid, JournalpostType, bool, Uuid)>,
+    opprettede_dokumenter: Vec<OpprettetDokumentRecord>,
     sak_med_barn: HashMap<Uuid, SakMedBarn>,
 }
 
@@ -55,14 +56,13 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
     async fn opprett_sak_tilstand(
         &self,
         sak_id: SkuffenSakId,
-        oensket_tilstand: SakTilstand,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
-        self.data.lock().unwrap().opprettede_saker.push((
-            Uuid::from(sak_id),
-            oensket_tilstand,
-            command_id,
-        ));
+        self.data
+            .lock()
+            .unwrap()
+            .opprettede_saker
+            .push((Uuid::from(sak_id), command_id));
         Ok(())
     }
 
@@ -72,21 +72,7 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         _tilstand: SakTilstand,
         _sikri_id: Option<i64>,
         _saksnummer: Option<&str>,
-        _feil_detalj: Option<&str>,
     ) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn oppdater_sak_oensket_tilstand(
-        &self,
-        sak_id: SkuffenSakId,
-        oensket_tilstand: SakTilstand,
-    ) -> Result<(), anyhow::Error> {
-        self.data
-            .lock()
-            .unwrap()
-            .oppdaterte_sak_oensket
-            .push((Uuid::from(sak_id), oensket_tilstand));
         Ok(())
     }
 
@@ -114,7 +100,6 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         sak_id: SkuffenSakId,
         journalposttype: JournalpostType,
         med_utsending: bool,
-        oensket_tilstand: JournalpostTilstand,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
         self.data.lock().unwrap().opprettede_journalposter.push((
@@ -122,7 +107,6 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
             Uuid::from(sak_id),
             journalposttype,
             med_utsending,
-            oensket_tilstand,
             command_id,
         ));
         Ok(())
@@ -134,9 +118,47 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         _tilstand: JournalpostTilstand,
         _sikri_id: Option<i64>,
         _journalpostnummer: Option<i32>,
-        _feil_detalj: Option<&str>,
     ) -> Result<(), anyhow::Error> {
         Ok(())
+    }
+
+    async fn hent_sak_id_fra_journalpost_id(
+        &self,
+        journalpost_id: SkuffenJournalpostId,
+    ) -> Result<Option<SkuffenSakId>, anyhow::Error> {
+        let journalpost_id = Uuid::from(journalpost_id);
+        Ok(self
+            .data
+            .lock()
+            .unwrap()
+            .sak_med_barn
+            .values()
+            .find(|sak| {
+                sak.journalposter
+                    .iter()
+                    .any(|journalpost| journalpost.journalpost_id.0 == journalpost_id)
+            })
+            .map(|sak| sak.sak_id))
+    }
+
+    async fn hent_journalpost_id_fra_dokument_id(
+        &self,
+        dokument_id: SkuffenDokumentId,
+    ) -> Result<Option<SkuffenJournalpostId>, anyhow::Error> {
+        Ok(self
+            .data
+            .lock()
+            .unwrap()
+            .sak_med_barn
+            .values()
+            .flat_map(|sak| &sak.journalposter)
+            .find(|journalpost| {
+                journalpost
+                    .dokumenter
+                    .iter()
+                    .any(|dokument| dokument.dokument_id == dokument_id)
+            })
+            .map(|journalpost| journalpost.journalpost_id))
     }
 
     async fn opprett_dokument_tilstand(
@@ -163,7 +185,6 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         &self,
         _dokument_id: SkuffenDokumentId,
         _tilstand: DokumentTilstand,
-        _feil_detalj: Option<&str>,
     ) -> Result<(), anyhow::Error> {
         Ok(())
     }
@@ -266,6 +287,10 @@ impl CommandExecutionRepository for FakeExecutionRepository {
         Ok(())
     }
 
+    async fn marker_klar(&self, _command_id: Uuid, _attempt_no: i32) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
     async fn marker_ok(&self, _command_id: Uuid, _attempt_no: i32) -> Result<(), anyhow::Error> {
         Ok(())
     }
@@ -314,14 +339,15 @@ impl CommandExecutionRepository for FakeExecutionRepository {
         Ok(Vec::new())
     }
 
-    async fn marker_blokkert_venter_til_klar(
-        &self,
-        _command_id: Uuid,
-    ) -> Result<(), anyhow::Error> {
+    async fn oppdater_til_klar(&self, _command_id: Uuid) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn oppdater_til_klar(&self, _command_id: Uuid) -> Result<(), anyhow::Error> {
+    async fn oppdater_blokkert_detail(
+        &self,
+        _command_id: Uuid,
+        _detalj: &str,
+    ) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
@@ -564,9 +590,8 @@ async fn opprett_sak_oppretter_tilstand_og_registrerer_som_klar() {
 
     let entity_data = entity_repo.data.lock().unwrap();
     assert_eq!(entity_data.opprettede_saker.len(), 1);
-    let (saved_sak_id, oensket, cmd_id) = &entity_data.opprettede_saker[0];
+    let (saved_sak_id, cmd_id) = &entity_data.opprettede_saker[0];
     assert_eq!(*saved_sak_id, sak_skuffen_id);
-    assert_eq!(*oensket, SakTilstand::Opprettet);
     assert_eq!(*cmd_id, envelope.command_id);
     drop(entity_data);
 
@@ -619,12 +644,10 @@ async fn journalpost_med_client_reference_sak_ikke_i_tilstand_gir_blokkert_vente
 
     let entity_data = entity_repo.data.lock().unwrap();
     assert_eq!(entity_data.opprettede_journalposter.len(), 1);
-    let (jp_id, linked_sak_id, jp_type, _, oensket, cmd_id) =
-        &entity_data.opprettede_journalposter[0];
+    let (jp_id, linked_sak_id, jp_type, _, cmd_id) = &entity_data.opprettede_journalposter[0];
     assert_eq!(*jp_id, journalpost_skuffen_id);
     assert_eq!(*linked_sak_id, sak_skuffen_id);
     assert_eq!(*jp_type, JournalpostType::InterntNotat);
-    assert_eq!(*oensket, JournalpostTilstand::Journalfoert);
     assert_eq!(*cmd_id, envelope.command_id);
     assert_eq!(entity_data.opprettede_dokumenter.len(), 1);
     drop(entity_data);
@@ -632,7 +655,11 @@ async fn journalpost_med_client_reference_sak_ikke_i_tilstand_gir_blokkert_vente
     let exec_data = execution_repo.data.lock().unwrap();
     assert_eq!(
         exec_data.opprettede_eksekveringer,
-        vec![(envelope.command_id, EksekveringStatus::BlokkertVenter, None)]
+        vec![(
+            envelope.command_id,
+            EksekveringStatus::BlokkertVenter,
+            Some("blocked_reason=entity_missing trigger_category=entity_fakta_endret".to_string())
+        )]
     );
     assert_eq!(exec_data.markerte_utfores_venter, vec![envelope.command_id]);
     drop(exec_data);
@@ -667,7 +694,6 @@ async fn journalpost_med_arkiv_id_sak_opprettet_gir_klar() {
         SakMedBarn {
             sak_id: SkuffenSakId::from(ensured_sak_id),
             tilstand: SakTilstand::Opprettet,
-            oensket_tilstand: SakTilstand::Opprettet,
             sikri_id: Some(100),
             saksnummer: Some("2025/123".to_string()),
             oensket_saksansvarlig: None,
@@ -675,7 +701,6 @@ async fn journalpost_med_arkiv_id_sak_opprettet_gir_klar() {
             journalposter: vec![JournalpostMedDokumenter {
                 journalpost_id: SkuffenJournalpostId::from(journalpost_skuffen_id),
                 tilstand: JournalpostTilstand::IkkeRealisert,
-                oensket_tilstand: JournalpostTilstand::Journalfoert,
                 sikri_id: None,
                 journalpostnummer: None,
                 journalposttype: JournalpostType::InterntNotat,
@@ -722,7 +747,7 @@ async fn journalpost_med_arkiv_id_sak_opprettet_gir_klar() {
 }
 
 #[tokio::test]
-async fn avslutt_sak_oppdaterer_oensket_tilstand() {
+async fn avslutt_sak_uten_opprettet_sak_registrerer_som_blokkert_venter() {
     let execution_repo = FakeExecutionRepository::default();
     let entity_repo = FakeEntityTilstandRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
@@ -747,17 +772,14 @@ async fn avslutt_sak_oppdaterer_oensket_tilstand() {
     let envelope = make_avslutt_sak_command(SakKey::ClientReference(sak_client_reference));
     service.handle(&envelope).await.unwrap();
 
-    let entity_data = entity_repo.data.lock().unwrap();
-    assert_eq!(entity_data.oppdaterte_sak_oensket.len(), 1);
-    let (updated_sak_id, oensket) = &entity_data.oppdaterte_sak_oensket[0];
-    assert_eq!(*updated_sak_id, sak_skuffen_id);
-    assert_eq!(*oensket, SakTilstand::Avsluttet);
-    drop(entity_data);
-
     let exec_data = execution_repo.data.lock().unwrap();
     assert_eq!(
         exec_data.opprettede_eksekveringer,
-        vec![(envelope.command_id, EksekveringStatus::BlokkertVenter, None)]
+        vec![(
+            envelope.command_id,
+            EksekveringStatus::BlokkertVenter,
+            Some("blocked_reason=entity_missing trigger_category=entity_fakta_endret".to_string())
+        )]
     );
     assert_eq!(exec_data.markerte_utfores_venter, vec![envelope.command_id]);
 }
@@ -778,7 +800,6 @@ async fn avslutt_sak_med_arkiv_id_og_opprettet_sak_gir_klar() {
         SakMedBarn {
             sak_id: SkuffenSakId::from(ensured_sak_id),
             tilstand: SakTilstand::Opprettet,
-            oensket_tilstand: SakTilstand::Avsluttet,
             sikri_id: Some(100),
             saksnummer: Some("2025/456".to_string()),
             oensket_saksansvarlig: None,
@@ -941,13 +962,12 @@ async fn registrerer_feil_ved_tilstandsfeil() {
     ];
 
     // Sak Opprettet, men journalpost har et permanent-feilet dokument.
-    // neste_handling returnerer Err(Blocked), som evaluer_klarhet mapper til BlokkertVenter.
+    // planlegg_neste_handling returnerer CommandStateDecision::Invalid, som evaluer_klarhet mapper til Feil.
     entity_repo.data.lock().unwrap().sak_med_barn.insert(
         sak_skuffen_id,
         SakMedBarn {
             sak_id: SkuffenSakId::from(sak_skuffen_id),
             tilstand: SakTilstand::Opprettet,
-            oensket_tilstand: SakTilstand::Opprettet,
             sikri_id: Some(100),
             saksnummer: Some("2026/10".to_string()),
             oensket_saksansvarlig: None,
@@ -955,7 +975,6 @@ async fn registrerer_feil_ved_tilstandsfeil() {
             journalposter: vec![JournalpostMedDokumenter {
                 journalpost_id: SkuffenJournalpostId::from(journalpost_skuffen_id),
                 tilstand: JournalpostTilstand::DokumenterUnderArbeid,
-                oensket_tilstand: JournalpostTilstand::Journalfoert,
                 sikri_id: Some(200),
                 journalpostnummer: Some(42),
                 journalposttype: JournalpostType::InterntNotat,
@@ -982,15 +1001,15 @@ async fn registrerer_feil_ved_tilstandsfeil() {
     );
     service.handle(&envelope).await.unwrap();
 
-    // FeiletPermanent dokument → neste_handling returns Err(Irrecoverable)
-    // → evaluer_klarhet maps to Feil → terminal error event published
+    // FeiletPermanent dokument → planlegg_neste_handling returnerer CommandStateDecision::Invalid
+    // → evaluer_klarhet mapper til Feil → terminal error event publiseres
     let exec_data = execution_repo.data.lock().unwrap();
     assert_eq!(
         exec_data.opprettede_eksekveringer,
         vec![(
             envelope.command_id,
             EksekveringStatus::Feil,
-            Some("Tilstandsfeil ved registrering".to_string())
+            Some("invalid_reason=dokument_feilet_permanent".to_string())
         )]
     );
     drop(exec_data);

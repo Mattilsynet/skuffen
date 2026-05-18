@@ -62,6 +62,8 @@ pub trait CommandExecutionRepository: Send + Sync {
         executor_id: &str,
     ) -> Result<(), anyhow::Error>;
 
+    async fn marker_klar(&self, command_id: Uuid, attempt_no: i32) -> Result<(), anyhow::Error>;
+
     async fn marker_ok(&self, command_id: Uuid, attempt_no: i32) -> Result<(), anyhow::Error>;
 
     async fn marker_retry_venter(
@@ -98,9 +100,13 @@ pub trait CommandExecutionRepository: Send + Sync {
         sak_id: SkuffenSakId,
     ) -> Result<Vec<EksekveringKommando>, anyhow::Error>;
 
-    async fn marker_blokkert_venter_til_klar(&self, command_id: Uuid) -> Result<(), anyhow::Error>;
-
     async fn oppdater_til_klar(&self, command_id: Uuid) -> Result<(), anyhow::Error>;
+
+    async fn oppdater_blokkert_detail(
+        &self,
+        command_id: Uuid,
+        detalj: &str,
+    ) -> Result<(), anyhow::Error>;
 
     async fn oppdater_til_feil(&self, command_id: Uuid, detalj: &str) -> Result<(), anyhow::Error>;
 

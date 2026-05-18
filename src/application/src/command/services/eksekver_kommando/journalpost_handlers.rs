@@ -1,7 +1,8 @@
 use domain::eksekvering::id::SkuffenJournalpostId;
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
-    DokumentTilstand, JournalpostMedDokumenter, JournalpostTilstand, SakMedBarn,
+    DokumentKildeTilstand, DokumentTilstand, JournalpostMedDokumenter, JournalpostTilstand,
+    SakMedBarn,
 };
 use domain::eksekvering::typer::EksekveringFeil;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
@@ -47,7 +48,6 @@ impl EksekverKommandoService {
                 JournalpostTilstand::Opprettet,
                 Some(resultat.journalpost_id as i64),
                 Some(resultat.journalpost_id),
-                None,
             )
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
@@ -65,25 +65,27 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
-        // Hoveddokument is auto-included in the Sikri call
+        // Hoveddokument is auto-included in the Sikri call only for byte documents.
         if let Some(hoveddokument) = jp.dokumenter.first() {
-            self.entity_tilstand_repo
-                .oppdater_dokument_tilstand(hoveddokument.dokument_id, DokumentTilstand::Ok, None)
-                .await
-                .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+            if hoveddokument.kilde == DokumentKildeTilstand::Bytes {
+                self.entity_tilstand_repo
+                    .oppdater_dokument_tilstand(hoveddokument.dokument_id, DokumentTilstand::Ok)
+                    .await
+                    .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
-            self.entity_tilstand_repo
-                .logg_overgang(
-                    "dokument",
-                    hoveddokument.dokument_id.0,
-                    envelope.command_id,
-                    "ikke_realisert",
-                    "ok",
-                    "opprett_journalpost",
-                    None,
-                )
-                .await
-                .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+                self.entity_tilstand_repo
+                    .logg_overgang(
+                        "dokument",
+                        hoveddokument.dokument_id.0,
+                        envelope.command_id,
+                        "ikke_realisert",
+                        "ok",
+                        "opprett_journalpost",
+                        None,
+                    )
+                    .await
+                    .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+            }
         }
 
         Ok(())
@@ -122,7 +124,6 @@ impl EksekverKommandoService {
                 ny_tilstand,
                 jp.sikri_id,
                 Some(journalpostnummer),
-                None,
             )
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
@@ -168,7 +169,6 @@ impl EksekverKommandoService {
                 JournalpostTilstand::Avskrevet,
                 jp.sikri_id,
                 Some(journalpostnummer),
-                None,
             )
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;

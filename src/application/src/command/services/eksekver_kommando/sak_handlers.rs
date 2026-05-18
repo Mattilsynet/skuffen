@@ -25,13 +25,7 @@ impl EksekverKommandoService {
         }
 
         self.entity_tilstand_repo
-            .oppdater_sak_tilstand(
-                sak_id,
-                SakTilstand::Opprettet,
-                None,
-                Some(&saksnummer),
-                None,
-            )
+            .oppdater_sak_tilstand(sak_id, SakTilstand::Opprettet, None, Some(&saksnummer))
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
@@ -72,7 +66,6 @@ impl EksekverKommandoService {
                 SakTilstand::Avsluttet,
                 sak.sikri_id,
                 Some(saksnummer),
-                None,
             )
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;

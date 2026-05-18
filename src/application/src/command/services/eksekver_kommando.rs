@@ -4,9 +4,11 @@ mod lifecycle_publisher;
 mod sak_handlers;
 
 use anyhow::Context;
-use domain::eksekvering::id::SkuffenSakId;
-use domain::eksekvering::tilstand::{er_ferdig, neste_handling, SakMedBarn};
-use domain::eksekvering::typer::{command_metadata, EksekveringFeil};
+use domain::eksekvering::id::{SkuffenJournalpostId, SkuffenSakId};
+use domain::eksekvering::tilstand::{
+    planlegg_neste_handling, BlockedReason, CommandStateDecision, DomainViolation, SakMedBarn,
+};
+use domain::eksekvering::typer::{command_metadata, CommandTypeCode, EksekveringFeil};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::query::queries::SakKey;
 use uuid::Uuid;
@@ -20,6 +22,7 @@ use crate::command::ports::entity_tilstand_port::EntityTilstandRepository;
 use crate::command::ports::id_mapping_port::IdMappingRepository;
 use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
 use crate::command::ports::ventende_kommando_wakeup_port::VentendeKommandoWakeup;
+use crate::command::services::execution_registration::command_target_for_type;
 
 pub struct EksekverKommandoService {
     entity_tilstand_repo: Box<dyn EntityTilstandRepository>,
@@ -35,6 +38,7 @@ pub struct EksekverKommandoService {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionOutcome {
+    Klar,
     Ok,
     BlokkertVenter { last_error: Option<String> },
     Retrying { last_error: Option<String> },
@@ -74,44 +78,94 @@ impl EksekverKommandoService {
     ) -> Result<ExecutionOutcome, anyhow::Error> {
         let (command_type, _) = command_metadata(&envelope.payload);
         let sak_id = self.resolve_sak_id_for_envelope(&envelope).await?;
+        let journalpost_id = self
+            .resolve_journalpost_id_for_envelope(&envelope, command_type)
+            .await?;
+        let target = command_target_for_type(command_type, journalpost_id)?;
 
-        loop {
-            let sak_med_barn = self
-                .entity_tilstand_repo
-                .hent_sak_med_barn(sak_id)
+        let sak_med_barn = self.hent_sak_med_barn(sak_id).await?;
+        match planlegg_neste_handling(command_type, target, &sak_med_barn) {
+            CommandStateDecision::Ready(operasjon) => {
+                match self
+                    .utfoer_operasjon(&envelope, &sak_med_barn, operasjon)
+                    .await
+                {
+                    Ok(()) => {
+                        let _ = self.wakeup_after_operation(sak_id, operasjon).await;
+                        let oppdatert_sak_med_barn = self.hent_sak_med_barn(sak_id).await?;
+                        let neste_beslutning =
+                            planlegg_neste_handling(command_type, target, &oppdatert_sak_med_barn);
+                        self.materialiser_beslutning(&envelope, attempt, neste_beslutning)
+                            .await
+                    }
+                    Err(feil) => {
+                        let _ = self.wakeup_after_operation(sak_id, operasjon).await;
+                        self.map_feil_til_outcome(&envelope, feil, attempt).await
+                    }
+                }
+            }
+            beslutning => {
+                self.materialiser_beslutning(&envelope, attempt, beslutning)
+                    .await
+            }
+        }
+    }
+
+    async fn hent_sak_med_barn(&self, sak_id: SkuffenSakId) -> Result<SakMedBarn, anyhow::Error> {
+        self.entity_tilstand_repo
+            .hent_sak_med_barn(sak_id)
+            .await
+            .context("Feil ved henting av sak med barn")?
+            .ok_or_else(|| anyhow::anyhow!("Sak {} finnes ikke i tilstandstabeller", sak_id.0))
+    }
+
+    async fn materialiser_beslutning(
+        &self,
+        envelope: &CommandEnvelope<Command>,
+        attempt: u32,
+        beslutning: CommandStateDecision,
+    ) -> Result<ExecutionOutcome, anyhow::Error> {
+        match beslutning {
+            CommandStateDecision::Ready(_) => Ok(ExecutionOutcome::Klar),
+            CommandStateDecision::Blocked(reason) => {
+                self.publish_blocked_with_detail(envelope, attempt, blocked_detail(reason))
+                    .await
+            }
+            CommandStateDecision::Done => self.publish_success(envelope, attempt).await,
+            CommandStateDecision::Invalid(violation) => {
+                self.map_feil_til_outcome(
+                    envelope,
+                    EksekveringFeil::irrecoverable(invalid_detail(violation)),
+                    attempt,
+                )
                 .await
-                .context("Feil ved henting av sak med barn")?
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Sak {} finnes ikke i tilstandstabeller", sak_id.0)
-                })?;
+            }
+        }
+    }
 
-            match neste_handling(command_type, &sak_med_barn) {
-                Ok(Some(operasjon)) => {
-                    match self
-                        .utfoer_operasjon(&envelope, &sak_med_barn, operasjon)
-                        .await
-                    {
-                        Ok(()) => {
-                            // Loop continues — reload and check again
-                        }
-                        Err(feil) => {
-                            let _ = self.wakeup_service.etter_sak_endret(sak_id).await;
-                            return self.map_feil_til_outcome(&envelope, feil, attempt).await;
-                        }
-                    }
-                }
-                Ok(None) => {
-                    let _ = self.wakeup_service.etter_sak_endret(sak_id).await;
-                    if er_ferdig(&sak_med_barn) {
-                        return self.publish_success(&envelope, attempt).await;
-                    } else {
-                        return self.publish_blocked(&envelope, attempt).await;
-                    }
-                }
-                Err(feil) => {
-                    let _ = self.wakeup_service.etter_sak_endret(sak_id).await;
-                    return self.map_feil_til_outcome(&envelope, feil, attempt).await;
-                }
+    async fn wakeup_after_operation(
+        &self,
+        sak_id: SkuffenSakId,
+        operasjon: domain::eksekvering::tilstand::ArkivOperasjon,
+    ) -> Result<(), anyhow::Error> {
+        use domain::eksekvering::tilstand::ArkivOperasjon;
+
+        match operasjon {
+            ArkivOperasjon::OpprettSak { .. }
+            | ArkivOperasjon::AvsluttSak { .. }
+            | ArkivOperasjon::SettSaksansvarlig { .. } => {
+                self.wakeup_service.etter_sak_endret(sak_id).await
+            }
+            ArkivOperasjon::OpprettJournalpost { journalpost_id }
+            | ArkivOperasjon::Journalfoer { journalpost_id }
+            | ArkivOperasjon::Avskriv { journalpost_id } => {
+                self.wakeup_service
+                    .etter_journalpost_endret(journalpost_id)
+                    .await
+            }
+            ArkivOperasjon::LeggTilDokument { dokument_id, .. }
+            | ArkivOperasjon::RenderDokument { dokument_id, .. } => {
+                self.wakeup_service.etter_dokument_endret(dokument_id).await
             }
         }
     }
@@ -188,13 +242,39 @@ impl EksekverKommandoService {
         }
     }
 
+    async fn resolve_journalpost_id_for_envelope(
+        &self,
+        envelope: &CommandEnvelope<Command>,
+        command_type: CommandTypeCode,
+    ) -> Result<Option<SkuffenJournalpostId>, anyhow::Error> {
+        let Some(client_reference) = extract_journalpost_client_reference(envelope) else {
+            return Ok(None);
+        };
+
+        match command_type {
+            CommandTypeCode::OpprettInngaaendeJournalpost
+            | CommandTypeCode::OpprettUtgaaendeJournalpost
+            | CommandTypeCode::OpprettInterntNotatJournalpost => self
+                .id_mapping
+                .hent_journalpost_id_fra_mapping(client_reference)
+                .await
+                .context("Feil ved oppslag av journalpost_id fra client_reference")?
+                .map(Some)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Fant ikke skuffen_id for journalpost client_reference {}",
+                        client_reference
+                    )
+                }),
+            CommandTypeCode::OpprettSak
+            | CommandTypeCode::AvsluttSak
+            | CommandTypeCode::SettSaksansvarlig => Ok(None),
+        }
+    }
+
     fn map_arkiv_feil(&self, err: anyhow::Error) -> EksekveringFeil {
         let original = err.to_string();
-        let message = original
-            .replace("sikri_recoverability=irrecoverable", "")
-            .replace("sikri_recoverability=recoverable", "")
-            .trim()
-            .to_string();
+        let message = safe_execution_detail(&original);
 
         if original.contains("sikri_recoverability=irrecoverable") {
             return EksekveringFeil::irrecoverable(message);
@@ -202,6 +282,38 @@ impl EksekverKommandoService {
 
         EksekveringFeil::recoverable(message)
     }
+}
+
+fn safe_execution_detail(detail: &str) -> String {
+    let stripped = detail
+        .replace("sikri_recoverability=irrecoverable", "")
+        .replace("sikri_recoverability=recoverable", "");
+    let normalized = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    if let Some(code) = normalized
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .find(|token| token.starts_with("sikri_"))
+    {
+        return code.to_string();
+    }
+
+    if detail.contains("sikri_recoverability=") {
+        return "execution_upstream_error".to_string();
+    }
+
+    "execution_error".to_string()
+}
+
+fn blocked_detail(reason: BlockedReason) -> String {
+    format!(
+        "{} trigger_category={}",
+        reason.safe_detail(),
+        reason.trigger_category().as_code()
+    )
+}
+
+fn invalid_detail(violation: DomainViolation) -> String {
+    violation.safe_detail().to_string()
 }
 
 // ---------------------------------------------------------------------------

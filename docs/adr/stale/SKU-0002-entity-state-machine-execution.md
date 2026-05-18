@@ -1,9 +1,9 @@
 # SKU-0002. Entity State Machine Execution Model
 
 Date: 2026-04-20
-Last-reviewed: 2026-05-04
+Last-reviewed: 2026-05-18
 Tier: A
-Status: Accepted
+Status: Superseded by SKU-0007
 Crates: skuffen, domain, application, infrastructure
 
 ## Related
@@ -77,5 +77,9 @@ R11 [5]: Flere kommandoer kan dele samme sak-entitet. Kryss-kommando-avhengighet
 ### Tradeoffs
 
 - Beholder `command_execution` for scheduling/retry selv om entitetsmodellen kunne tatt over — retry-logikk har ingen naturlig plass i entitetstabeller
-- Per-type tabeller gir bedre typesikkerhet men mer skjema- kompleksitet enn én generisk tabell
+- Per-type tabeller gir bedre typesikkerhet men mer skjema-kompleksitet enn én generisk tabell
 - `tilstand_historikk` gir audit trail men introduserer mange-til-mange-relasjon via `command_id`
+
+## Retirement
+
+SKU-0002 er superseded by SKU-0007. R1, R2, R6, R7, R8, R10 og R11 er videreført i ånd, men modellen med `oensket_tilstand` som execution-driver i R3/R4 er forkastet. Ny modell er command executor-basert: entity state lagrer facts, og `CommandStateDecision` beregnes fra command execution state, entity facts og domeneregler.

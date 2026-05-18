@@ -95,6 +95,14 @@ NATS error replies to callers must not echo internal details:
 - Sikri HTTP errors: the `ensure_success` function logs response metadata but does
   not echo response bodies to callers
 
+## Status-event safety contract
+
+Public status projections use `outward_message` as the external/client-facing message.
+Dynamic `detail` is internal diagnostic context and must not be relied on as safe outward text.
+Application lifecycle helpers that accept dynamic detail must set a static, safe `outward_message`,
+especially validation blocked/retrying/error and execution outcomes. This prevents infrastructure
+fallback from exposing diagnostics if outward messages are omitted.
+
 ## Test logging
 
 Suggested environment:
@@ -105,3 +113,26 @@ Suggested environment:
 
 When validating `SakKey::ArkivId`, do not persist state if the sak does not exist.
 If ingestion created an ArkivId mapping and validation fails irrecoverably, delete the mapping.
+
+## Sikri safe error detail codes
+
+`safe_detail_for_http_error` in `crates/sikri_client/src/error_mapping.rs` maps Sikri HTTP responses to stable, safe `&'static str` codes with no PII, URLs, or raw response body text. These codes appear in `last_detail` on `command_execution` and in structured logs. They are stable identifiers safe to surface in dashboards and alerts.
+
+| Code | Meaning | Recoverability |
+|---|---|---|
+| `sikri_unknown_user` | Saksbehandler/systembruker not found in ePhorte | Irrecoverable |
+| `sikri_upstream_unavailable` | Sikri upstream returned 502 Bad Gateway | Recoverable |
+| `sikri_missing_document_content` | Journalpost document files have no content | Irrecoverable |
+| `sikri_resource_not_found` | HTTP 404 from Sikri | Irrecoverable |
+| `sikri_rate_limited` | HTTP 429 — Sikri throttling | Recoverable |
+| `sikri_upstream_error` | Generic 5xx from Sikri | Recoverable |
+| `sikri_invalid_request` | Generic 4xx client error | Irrecoverable |
+| `sikri_unknown_error` | Unclassified error | Recoverable |
+
+The companion `user_message_for_http_error` function returns a Norwegian human-readable message for status events. It shares the same classification logic. Neither function echoes raw Sikri response bodies or user identifiers.
+
+## NATS server URL redaction
+
+`safe_nats_server_label` in `src/infrastructure/src/nats/config.rs` strips credentials (user/password or token in the URL authority) before logging the NATS server address. Only `scheme://host:port` is logged; inline secrets are never emitted to logs or spans.
+
+Example: `nats://user:secret@nats.example.invalid:4222` → logged as `nats://nats.example.invalid:4222`.

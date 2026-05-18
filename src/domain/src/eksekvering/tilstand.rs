@@ -50,6 +50,17 @@ pub enum DokumentTilstand {
 }
 
 // ---------------------------------------------------------------------------
+// CommandTarget — narrow domain-level command target
+// ---------------------------------------------------------------------------
+
+/// Target entity for a command: either a Sak or a specific Journalpost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandTarget {
+    Sak,
+    Journalpost(SkuffenJournalpostId),
+}
+
+// ---------------------------------------------------------------------------
 // Aggregat-snapshots
 // ---------------------------------------------------------------------------
 
@@ -57,7 +68,6 @@ pub enum DokumentTilstand {
 pub struct SakMedBarn {
     pub sak_id: SkuffenSakId,
     pub tilstand: SakTilstand,
-    pub oensket_tilstand: SakTilstand,
     pub sikri_id: Option<i64>,
     pub saksnummer: Option<String>,
     /// Ønsket saksansvarlig (Noark 5 M306).
@@ -73,7 +83,6 @@ pub struct SakMedBarn {
 pub struct JournalpostMedDokumenter {
     pub journalpost_id: SkuffenJournalpostId,
     pub tilstand: JournalpostTilstand,
-    pub oensket_tilstand: JournalpostTilstand,
     pub sikri_id: Option<i64>,
     pub journalpostnummer: Option<i32>,
     pub journalposttype: JournalpostType,
@@ -133,194 +142,424 @@ pub enum ArkivOperasjon {
 }
 
 // ---------------------------------------------------------------------------
-// Hjelpefunksjoner
+// CommandStateDecision - new domain planner return type
 // ---------------------------------------------------------------------------
 
-pub fn oensket_sluttilstand_for_dokument() -> DokumentTilstand {
-    DokumentTilstand::Ok
+/// Reasons why a command is blocked — typed, explicit failure classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockedReason {
+    /// Missing required entity (sak/journalpost)
+    EntityMissing,
+    /// Missing saksnummer prerequisite
+    SaksnummerMangler,
+    /// Saksansvarlig mismatch — must be corrected before proceeding
+    SaksansvarligIkkeSatt,
+    /// Unfinished journalposter block sak closure
+    JournalposterIkkeFerdige,
+    /// Template missing required field values
+    FelterIkkeKlare,
+    /// Journalpost exists, but its facts do not match a known executable state.
+    JournalpostTilstandUavklart,
 }
 
-pub fn oensket_sluttilstand_for_journalpost(
-    journalposttype: JournalpostType,
-) -> JournalpostTilstand {
-    match journalposttype {
-        JournalpostType::Inngaende => JournalpostTilstand::Avskrevet,
-        JournalpostType::Utgaaende | JournalpostType::InterntNotat => {
-            JournalpostTilstand::Journalfoert
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WakeupTriggerCategory {
+    SakFaktaEndret,
+    SaksansvarligOppdatert,
+    JournalpostTerminal,
+    DokumentFaktaEndret,
+    EntityFaktaEndret,
+}
+
+impl BlockedReason {
+    pub fn as_code(self) -> &'static str {
+        match self {
+            Self::EntityMissing => "entity_missing",
+            Self::SaksnummerMangler => "saksnummer_mangler",
+            Self::SaksansvarligIkkeSatt => "saksansvarlig_ikke_satt",
+            Self::JournalposterIkkeFerdige => "journalposter_ikke_ferdige",
+            Self::FelterIkkeKlare => "felter_ikke_klare",
+            Self::JournalpostTilstandUavklart => "journalpost_tilstand_uavklart",
+        }
+    }
+
+    pub fn trigger_category(self) -> WakeupTriggerCategory {
+        match self {
+            Self::EntityMissing => WakeupTriggerCategory::EntityFaktaEndret,
+            Self::SaksnummerMangler => WakeupTriggerCategory::SakFaktaEndret,
+            Self::SaksansvarligIkkeSatt => WakeupTriggerCategory::SaksansvarligOppdatert,
+            Self::JournalposterIkkeFerdige => WakeupTriggerCategory::JournalpostTerminal,
+            Self::FelterIkkeKlare => WakeupTriggerCategory::DokumentFaktaEndret,
+            Self::JournalpostTilstandUavklart => WakeupTriggerCategory::EntityFaktaEndret,
+        }
+    }
+
+    pub fn safe_detail(self) -> &'static str {
+        match self {
+            Self::EntityMissing => "blocked_reason=entity_missing",
+            Self::SaksnummerMangler => "blocked_reason=saksnummer_mangler",
+            Self::SaksansvarligIkkeSatt => "blocked_reason=saksansvarlig_ikke_satt",
+            Self::JournalposterIkkeFerdige => "blocked_reason=journalposter_ikke_ferdige",
+            Self::FelterIkkeKlare => "blocked_reason=felter_ikke_klare",
+            Self::JournalpostTilstandUavklart => "blocked_reason=journalpost_tilstand_uavklart",
         }
     }
 }
 
-/// Returnerer true hvis alle entiteter har nådd sin ønskede tilstand.
-pub fn er_ferdig(sak: &SakMedBarn) -> bool {
-    if sak.tilstand != sak.oensket_tilstand {
-        return false;
+impl WakeupTriggerCategory {
+    pub fn as_code(self) -> &'static str {
+        match self {
+            Self::SakFaktaEndret => "sak_fakta_endret",
+            Self::SaksansvarligOppdatert => "saksansvarlig_oppdatert",
+            Self::JournalpostTerminal => "journalpost_terminal",
+            Self::DokumentFaktaEndret => "dokument_fakta_endret",
+            Self::EntityFaktaEndret => "entity_fakta_endret",
+        }
     }
-    // Saksansvarlig (Noark 5 M306) must match if requested
-    if sak.oensket_saksansvarlig != sak.naavaerende_saksansvarlig {
-        return false;
+}
+
+/// Domain violation — irrecoverable state that cannot be resolved by retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomainViolation {
+    /// Journalpost not found for this command type
+    JournalpostMangler,
+    /// Permanent document failure
+    DokumentFeiletPermanent,
+    /// Command target mismatch: Sak command given Journalpost target or vice versa
+    TargetMismatch,
+    /// Journalpost in terminal failure state
+    JournalpostFeiletPermanent,
+    /// Sak in terminal failure state
+    SakFeiletPermanent,
+    /// Journalpost type does not match command type
+    JournalpostTypeMismatch,
+}
+
+impl DomainViolation {
+    pub fn as_code(self) -> &'static str {
+        match self {
+            Self::JournalpostMangler => "journalpost_mangler",
+            Self::DokumentFeiletPermanent => "dokument_feilet_permanent",
+            Self::TargetMismatch => "target_mismatch",
+            Self::JournalpostFeiletPermanent => "journalpost_feilet_permanent",
+            Self::SakFeiletPermanent => "sak_feilet_permanent",
+            Self::JournalpostTypeMismatch => "journalpost_type_mismatch",
+        }
     }
-    sak.journalposter.iter().all(|jp| {
-        jp.tilstand == jp.oensket_tilstand
-            && jp
-                .dokumenter
-                .iter()
-                .all(|d| d.tilstand == DokumentTilstand::Ok)
-    })
+
+    pub fn safe_detail(self) -> &'static str {
+        match self {
+            Self::JournalpostMangler => "invalid_reason=journalpost_mangler",
+            Self::DokumentFeiletPermanent => "invalid_reason=dokument_feilet_permanent",
+            Self::TargetMismatch => "invalid_reason=target_mismatch",
+            Self::JournalpostFeiletPermanent => "invalid_reason=journalpost_feilet_permanent",
+            Self::SakFeiletPermanent => "invalid_reason=sak_feilet_permanent",
+            Self::JournalpostTypeMismatch => "invalid_reason=journalpost_type_mismatch",
+        }
+    }
+}
+
+/// The planner's decision on what to do next.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandStateDecision {
+    /// Ready to execute this operation
+    Ready(ArkivOperasjon),
+    /// Blocked by a known, typed reason
+    Blocked(BlockedReason),
+    /// Command is complete — nothing more to do
+    Done,
+    /// Invalid state — irrecoverable domain violation
+    Invalid(DomainViolation),
 }
 
 // ---------------------------------------------------------------------------
-// Tilstandsmaskin: neste handling
+// CommandStateDecision-based planner
 // ---------------------------------------------------------------------------
 
-/// Gitt nåværende tilstander for saken og dens barn,
-/// returnerer neste Sikri-operasjon som kan utføres, eller `None`
-/// hvis alt er ferdig eller blokkert.
+/// Planlegger neste handling basert på command_type, target og sak-tilstand.
 ///
-/// `command_type` er reservert for fremtidig bruk der kommandotypen
-/// påvirker hvilke overganger som er tillatt (f.eks. AvsluttSak
-/// trenger tilgang til hele sakens barn).
-pub fn neste_handling(
-    _command_type: CommandTypeCode,
+/// CommandTypeCode er branch-first og styrer planleggingen:
+/// - OpprettSak: returnerer Ready(OpprettSak) hvis ingen saksnummer, Done hvis saksnummer finnes
+/// - Journalpost commands: krever CommandTarget::Journalpost(id), blokkerer hvis sak mangler
+/// - SettSaksansvarlig: blokkerer hvis saksnummer mangler, Ready hvis mismatch, Done hvis match
+/// - AvsluttSak: Done hvis allerede avsluttet, Blocked hvis uferdige journalposter/saksansvarlig
+///
+/// Hver ikke-Ready/ikke-Done sti returnerer eksplisitt BlockedReason eller DomainViolation.
+pub fn planlegg_neste_handling(
+    command_type: CommandTypeCode,
+    target: CommandTarget,
     sak: &SakMedBarn,
-) -> Result<Option<ArkivOperasjon>, EksekveringFeil> {
-    // 1. Sak ikke realisert, men ønsket fremover
-    if sak.tilstand == SakTilstand::IkkeRealisert
-        && sak.oensket_tilstand != SakTilstand::IkkeRealisert
-    {
-        return Ok(Some(ArkivOperasjon::OpprettSak { sak_id: sak.sak_id }));
-    }
-
-    // 1b. Saksansvarlig (Noark 5 M306) ønsket men ikke satt — sett før journalposter
-    //     Krever saksnummer (som step 2) for å unngå blocked-retry-syklus.
-    if sak.tilstand == SakTilstand::Opprettet
-        && sak.saksnummer.is_some()
-        && sak.oensket_saksansvarlig.is_some()
-        && sak.oensket_saksansvarlig != sak.naavaerende_saksansvarlig
-    {
-        return Ok(Some(ArkivOperasjon::SettSaksansvarlig {
-            sak_id: sak.sak_id,
-        }));
-    }
-
-    // 2. Journalpost ikke realisert, sak opprettet med saksnummer
-    if sak.tilstand == SakTilstand::Opprettet && sak.saksnummer.is_some() {
-        for jp in &sak.journalposter {
-            if jp.tilstand == JournalpostTilstand::IkkeRealisert {
-                return Ok(Some(ArkivOperasjon::OpprettJournalpost {
-                    journalpost_id: jp.journalpost_id,
-                }));
-            }
+) -> CommandStateDecision {
+    // Branch first on command type
+    match command_type {
+        CommandTypeCode::OpprettSak => planlegg_opprett_sak(target, sak),
+        CommandTypeCode::OpprettInngaaendeJournalpost
+        | CommandTypeCode::OpprettUtgaaendeJournalpost
+        | CommandTypeCode::OpprettInterntNotatJournalpost => {
+            planlegg_journalpost_command(command_type, target, sak)
         }
+        CommandTypeCode::SettSaksansvarlig => planlegg_sett_saksansvarlig(target, sak),
+        CommandTypeCode::AvsluttSak => planlegg_avslutt_sak(target, sak),
+    }
+}
+
+fn planlegg_opprett_sak(target: CommandTarget, sak: &SakMedBarn) -> CommandStateDecision {
+    // Sak-level commands require CommandTarget::Sak
+    if !matches!(target, CommandTarget::Sak) {
+        return CommandStateDecision::Invalid(DomainViolation::TargetMismatch);
     }
 
-    // 3. Dokument ikke realisert, journalpost i arbeidsfase
-    for jp in &sak.journalposter {
-        if matches!(
-            jp.tilstand,
-            JournalpostTilstand::Opprettet | JournalpostTilstand::DokumenterUnderArbeid
-        ) {
-            for dok in &jp.dokumenter {
-                if dok.tilstand == DokumentTilstand::IkkeRealisert {
-                    return Ok(Some(ArkivOperasjon::LeggTilDokument {
+    // OpprettSak: no saksnummer -> Ready(OpprettSak), with saksnummer -> Done
+    if sak.saksnummer.is_none() {
+        return CommandStateDecision::Ready(ArkivOperasjon::OpprettSak { sak_id: sak.sak_id });
+    }
+
+    // Saksnummer finnes — opprettelse er ferdig
+    CommandStateDecision::Done
+}
+
+fn planlegg_journalpost_command(
+    command_type: CommandTypeCode,
+    target: CommandTarget,
+    sak: &SakMedBarn,
+) -> CommandStateDecision {
+    // Journalpost commands require CommandTarget::Journalpost(id)
+    let target_id = match target {
+        CommandTarget::Journalpost(id) => id,
+        CommandTarget::Sak => {
+            return CommandStateDecision::Invalid(DomainViolation::TargetMismatch);
+        }
+    };
+
+    // Find the target journalpost by ID first (before saksnummer check)
+    let jp = match sak
+        .journalposter
+        .iter()
+        .find(|j| j.journalpost_id == target_id)
+    {
+        Some(jp) => jp,
+        None => return CommandStateDecision::Invalid(DomainViolation::JournalpostMangler),
+    };
+
+    // Validate journalpost type matches command type (before saksnummer check)
+    let expected_type = match command_type {
+        CommandTypeCode::OpprettInngaaendeJournalpost => JournalpostType::Inngaende,
+        CommandTypeCode::OpprettUtgaaendeJournalpost => JournalpostType::Utgaaende,
+        CommandTypeCode::OpprettInterntNotatJournalpost => JournalpostType::InterntNotat,
+        _ => unreachable!("caller ensures only journalpost commands reach here"),
+    };
+
+    if jp.journalposttype != expected_type {
+        return CommandStateDecision::Invalid(DomainViolation::JournalpostTypeMismatch);
+    }
+
+    // Guard: missing saksnummer -> Blocked (only after target exists and type matches)
+    if sak.saksnummer.is_none() {
+        return CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler);
+    }
+
+    // Check for permanent failure in this journalpost
+    if jp.tilstand == JournalpostTilstand::FeiletPermanent {
+        return CommandStateDecision::Invalid(DomainViolation::JournalpostFeiletPermanent);
+    }
+
+    // Check for permanent document failures only in the target journalpost
+    if jp
+        .dokumenter
+        .iter()
+        .any(|d| d.tilstand == DokumentTilstand::FeiletPermanent)
+    {
+        return CommandStateDecision::Invalid(DomainViolation::DokumentFeiletPermanent);
+    }
+
+    // Process only this journalpost's lifecycle
+    planlegg_journalpost_lifecycle(jp, sak)
+}
+
+fn planlegg_journalpost_lifecycle(
+    jp: &JournalpostMedDokumenter,
+    sak: &SakMedBarn,
+) -> CommandStateDecision {
+    // 1. Opprett journalpost hvis ikke realisert
+    if jp.tilstand == JournalpostTilstand::IkkeRealisert {
+        return CommandStateDecision::Ready(ArkivOperasjon::OpprettJournalpost {
+            journalpost_id: jp.journalpost_id,
+        });
+    }
+
+    // 2. Legg til dokumenter hvis journalpost er opprettet eller under arbeid
+    if matches!(
+        jp.tilstand,
+        JournalpostTilstand::Opprettet | JournalpostTilstand::DokumenterUnderArbeid
+    ) {
+        // First check for documents needing rendering (before adding new ones)
+        for dok in &jp.dokumenter {
+            if dok.tilstand == DokumentTilstand::AvventerRendring {
+                if dokument_kan_rendres(dok, sak.saksnummer.as_deref()) {
+                    return CommandStateDecision::Ready(ArkivOperasjon::RenderDokument {
                         journalpost_id: jp.journalpost_id,
                         dokument_id: dok.dokument_id,
-                    }));
+                    });
+                } else {
+                    return CommandStateDecision::Blocked(BlockedReason::FelterIkkeKlare);
                 }
             }
         }
+
+        // Then add unrealized documents
+        for dok in &jp.dokumenter {
+            if dok.tilstand == DokumentTilstand::IkkeRealisert {
+                return CommandStateDecision::Ready(ArkivOperasjon::LeggTilDokument {
+                    journalpost_id: jp.journalpost_id,
+                    dokument_id: dok.dokument_id,
+                });
+            }
+        }
     }
 
-    // 4. Feilet dokument — kan aldri hentes, avbryt ugjenkallelig
+    // 3. Journalfør hvis alle dokumenter er Ok
+    if matches!(
+        jp.tilstand,
+        JournalpostTilstand::Opprettet
+            | JournalpostTilstand::DokumenterUnderArbeid
+            | JournalpostTilstand::KlarForJournalforing
+    ) {
+        let alle_dok_ok = !jp.dokumenter.is_empty()
+            && jp
+                .dokumenter
+                .iter()
+                .all(|d| d.tilstand == DokumentTilstand::Ok);
+        if alle_dok_ok {
+            return CommandStateDecision::Ready(ArkivOperasjon::Journalfoer {
+                journalpost_id: jp.journalpost_id,
+            });
+        }
+    }
+
+    // 4. Avskriv inngående hvis journalført
+    if jp.tilstand == JournalpostTilstand::Journalfoert
+        && jp.journalposttype == JournalpostType::Inngaende
+    {
+        return CommandStateDecision::Ready(ArkivOperasjon::Avskriv {
+            journalpost_id: jp.journalpost_id,
+        });
+    }
+
+    // 5. Terminal tilstander — done for this journalpost
+    //    Inngående: Avskrevet
+    //    Utgående: Journalført (eller VenterPaaUtsending if med_utsending)
+    //    InterntNotat: Journalført
+    match jp.journalposttype {
+        JournalpostType::Inngaende => {
+            if jp.tilstand == JournalpostTilstand::Avskrevet {
+                return CommandStateDecision::Done;
+            }
+        }
+        JournalpostType::Utgaaende => {
+            if jp.med_utsending {
+                if jp.tilstand == JournalpostTilstand::VenterPaaUtsending {
+                    return CommandStateDecision::Done;
+                }
+            } else if jp.tilstand == JournalpostTilstand::Journalfoert {
+                return CommandStateDecision::Done;
+            }
+        }
+        JournalpostType::InterntNotat => {
+            if jp.tilstand == JournalpostTilstand::Journalfoert {
+                return CommandStateDecision::Done;
+            }
+        }
+    }
+
+    // Uklassifisert ikke-terminal journalposttilstand: vent eksplisitt på faktaendring.
+    CommandStateDecision::Blocked(BlockedReason::JournalpostTilstandUavklart)
+}
+
+fn planlegg_sett_saksansvarlig(target: CommandTarget, sak: &SakMedBarn) -> CommandStateDecision {
+    // Sak-level commands require CommandTarget::Sak
+    if !matches!(target, CommandTarget::Sak) {
+        return CommandStateDecision::Invalid(DomainViolation::TargetMismatch);
+    }
+
+    if sak.tilstand == SakTilstand::FeiletPermanent {
+        return CommandStateDecision::Invalid(DomainViolation::SakFeiletPermanent);
+    }
+
+    // Missing saksnummer -> Blocked
+    if sak.saksnummer.is_none() {
+        return CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler);
+    }
+
+    // No desired saksansvarlig set -> nothing to do (Done)
+    let Some(oensket) = &sak.oensket_saksansvarlig else {
+        return CommandStateDecision::Done;
+    };
+
+    // Mismatch -> Ready to set
+    if sak.naavaerende_saksansvarlig.as_ref() != Some(oensket) {
+        return CommandStateDecision::Ready(ArkivOperasjon::SettSaksansvarlig {
+            sak_id: sak.sak_id,
+        });
+    }
+
+    // Match -> Done
+    CommandStateDecision::Done
+}
+
+fn planlegg_avslutt_sak(target: CommandTarget, sak: &SakMedBarn) -> CommandStateDecision {
+    // Sak-level commands require CommandTarget::Sak
+    if !matches!(target, CommandTarget::Sak) {
+        return CommandStateDecision::Invalid(DomainViolation::TargetMismatch);
+    }
+
+    // Already closed -> Done
+    if sak.tilstand == SakTilstand::Avsluttet {
+        return CommandStateDecision::Done;
+    }
+
+    if sak.tilstand == SakTilstand::FeiletPermanent {
+        return CommandStateDecision::Invalid(DomainViolation::SakFeiletPermanent);
+    }
+
+    // Missing sak/saksnummer -> Blocked
+    if sak.saksnummer.is_none() {
+        return CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler);
+    }
+
+    // Saksansvarlig mismatch -> Blocked
+    if sak.oensket_saksansvarlig.is_some()
+        && sak.oensket_saksansvarlig != sak.naavaerende_saksansvarlig
+    {
+        return CommandStateDecision::Blocked(BlockedReason::SaksansvarligIkkeSatt);
+    }
+
+    // Empty journalposter list -> Ready to close
+    if sak.journalposter.is_empty() {
+        return CommandStateDecision::Ready(ArkivOperasjon::AvsluttSak { sak_id: sak.sak_id });
+    }
+
+    // Check for permanent failures in any journalpost (both journalpost-level and document-level)
     for jp in &sak.journalposter {
+        if jp.tilstand == JournalpostTilstand::FeiletPermanent {
+            return CommandStateDecision::Invalid(DomainViolation::JournalpostFeiletPermanent);
+        }
         if jp
             .dokumenter
             .iter()
             .any(|d| d.tilstand == DokumentTilstand::FeiletPermanent)
         {
-            return Err(EksekveringFeil::irrecoverable(format!(
-                "Journalpost {} har dokument med permanent feil",
-                jp.journalpost_id.0,
-            )));
+            return CommandStateDecision::Invalid(DomainViolation::DokumentFeiletPermanent);
         }
     }
 
-    // 4b. HTML-template dokument klart for rendering etter at felter finnes.
-    for jp in &sak.journalposter {
-        if matches!(
-            jp.tilstand,
-            JournalpostTilstand::Opprettet | JournalpostTilstand::DokumenterUnderArbeid
-        ) {
-            for dok in &jp.dokumenter {
-                if dok.tilstand == DokumentTilstand::AvventerRendring
-                    && dokument_kan_rendres(dok, sak.saksnummer.as_deref())
-                {
-                    return Ok(Some(ArkivOperasjon::RenderDokument {
-                        journalpost_id: jp.journalpost_id,
-                        dokument_id: dok.dokument_id,
-                    }));
-                }
-            }
-        }
+    // Unfinished journalposter -> Blocked
+    let alle_terminale = sak.journalposter.iter().all(er_terminal_journalpost);
+    if !alle_terminale {
+        return CommandStateDecision::Blocked(BlockedReason::JournalposterIkkeFerdige);
     }
 
-    // 5. Alle dokumenter Ok → journalfør
-    for jp in &sak.journalposter {
-        if matches!(
-            jp.tilstand,
-            JournalpostTilstand::Opprettet
-                | JournalpostTilstand::DokumenterUnderArbeid
-                | JournalpostTilstand::KlarForJournalforing
-        ) {
-            let alle_dok_ok = !jp.dokumenter.is_empty()
-                && jp
-                    .dokumenter
-                    .iter()
-                    .all(|d| d.tilstand == DokumentTilstand::Ok);
-            if alle_dok_ok {
-                return Ok(Some(ArkivOperasjon::Journalfoer {
-                    journalpost_id: jp.journalpost_id,
-                }));
-            }
-        }
-    }
-
-    // 6. Journalført → avskriv (kun inngående)
-    for jp in &sak.journalposter {
-        if jp.tilstand == JournalpostTilstand::Journalfoert
-            && jp.oensket_tilstand == JournalpostTilstand::Avskrevet
-        {
-            return Ok(Some(ArkivOperasjon::Avskriv {
-                journalpost_id: jp.journalpost_id,
-            }));
-        }
-    }
-
-    // 7. Journalført med ønsket Journalført → ferdig, skip.
-    //    VenterPaaUtsending → blokkert på ekstern utsending, skip.
-
-    // 8. Avslutt sak hvis ønsket og alle journalposter terminale
-    //    (Noark 5 6.1.13: saksansvarlig must be correct before avslutting)
-    if sak.oensket_tilstand == SakTilstand::Avsluttet && sak.tilstand == SakTilstand::Opprettet {
-        // Guard: saksansvarlig must match (or not be requested at all)
-        if sak.oensket_saksansvarlig != sak.naavaerende_saksansvarlig {
-            return Ok(Some(ArkivOperasjon::SettSaksansvarlig {
-                sak_id: sak.sak_id,
-            }));
-        }
-
-        if sak.journalposter.is_empty() {
-            return Ok(Some(ArkivOperasjon::AvsluttSak { sak_id: sak.sak_id }));
-        }
-
-        let alle_terminale = sak.journalposter.iter().all(er_terminal_journalpost);
-        if alle_terminale {
-            return Ok(Some(ArkivOperasjon::AvsluttSak { sak_id: sak.sak_id }));
-        }
-    }
-
-    // 9. Ingenting å gjøre
-    Ok(None)
+    // Prerequisites met -> Ready to close
+    CommandStateDecision::Ready(ArkivOperasjon::AvsluttSak { sak_id: sak.sak_id })
 }
 
 fn er_terminal_journalpost(jp: &JournalpostMedDokumenter) -> bool {
@@ -352,6 +591,34 @@ fn dokument_kan_rendres(dok: &DokumentMedTilstand, saksnummer: Option<&str>) -> 
 }
 
 // ---------------------------------------------------------------------------
+// Compatibility wrapper for application migration
+// ---------------------------------------------------------------------------
+
+/// Compatibility wrapper: maps CommandStateDecision to old Result<Option<ArkivOperasjon>, EksekveringFeil>
+/// - Ready -> Ok(Some(op))
+/// - Done -> Ok(None)
+/// - Blocked -> Ok(None) (retryable)
+/// - Invalid -> Err(irrecoverable)
+#[deprecated(
+    since = "1.0.0",
+    note = "Use planlegg_neste_handling which returns CommandStateDecision"
+)]
+pub fn neste_handling(
+    command_type: CommandTypeCode,
+    target: CommandTarget,
+    sak: &SakMedBarn,
+) -> Result<Option<ArkivOperasjon>, EksekveringFeil> {
+    match planlegg_neste_handling(command_type, target, sak) {
+        CommandStateDecision::Ready(op) => Ok(Some(op)),
+        CommandStateDecision::Done => Ok(None),
+        CommandStateDecision::Blocked(_) => Ok(None),
+        CommandStateDecision::Invalid(violation) => Err(EksekveringFeil::irrecoverable(
+            violation.safe_detail().to_string(),
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tester
 // ---------------------------------------------------------------------------
 
@@ -372,11 +639,10 @@ mod tests {
         SkuffenDokumentId(Uuid::new_v4())
     }
 
-    fn enkel_sak(tilstand: SakTilstand, oensket: SakTilstand) -> SakMedBarn {
+    fn enkel_sak(tilstand: SakTilstand) -> SakMedBarn {
         SakMedBarn {
             sak_id: sak_id(),
             tilstand,
-            oensket_tilstand: oensket,
             sikri_id: None,
             saksnummer: None,
             oensket_saksansvarlig: None,
@@ -389,7 +655,6 @@ mod tests {
         SakMedBarn {
             sak_id: sak_id(),
             tilstand: SakTilstand::Opprettet,
-            oensket_tilstand: SakTilstand::Opprettet,
             sikri_id: Some(1),
             saksnummer: Some("2025/1".to_string()),
             oensket_saksansvarlig: None,
@@ -399,16 +664,15 @@ mod tests {
     }
 
     fn lag_journalpost(
+        id: SkuffenJournalpostId,
         tilstand: JournalpostTilstand,
-        oensket: JournalpostTilstand,
         jptype: JournalpostType,
         med_utsending: bool,
         dokumenter: Vec<DokumentMedTilstand>,
     ) -> JournalpostMedDokumenter {
         JournalpostMedDokumenter {
-            journalpost_id: jp_id(),
+            journalpost_id: id,
             tilstand,
-            oensket_tilstand: oensket,
             sikri_id: Some(100),
             journalpostnummer: Some(1),
             journalposttype: jptype,
@@ -437,121 +701,659 @@ mod tests {
         }
     }
 
-    // 1. IkkeRealisert sak med ønsket Opprettet → OpprettSak
+    // =========================================================================
+    // OpprettSak tests
+    // =========================================================================
+
     #[test]
-    fn sak_uten_barn_ikke_realisert_gir_opprett_sak() {
-        let sak = enkel_sak(SakTilstand::IkkeRealisert, SakTilstand::Opprettet);
-        let resultat = neste_handling(CommandTypeCode::OpprettSak, &sak).unwrap();
-        assert!(matches!(resultat, Some(ArkivOperasjon::OpprettSak { .. })));
+    fn opprett_sak_uten_saksnummer_gir_ready() {
+        let sak = enkel_sak(SakTilstand::IkkeRealisert);
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::OpprettSak, CommandTarget::Sak, &sak);
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::OpprettSak { .. })
+        ));
     }
 
-    // 2. Opprettet sak uten barn er ferdig
     #[test]
-    fn sak_opprettet_uten_barn_er_ferdig() {
-        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Opprettet);
+    fn opprett_sak_med_saksnummer_gir_done() {
+        let mut sak = enkel_sak(SakTilstand::Opprettet);
         sak.saksnummer = Some("2025/1".to_string());
-        let resultat = neste_handling(CommandTypeCode::OpprettSak, &sak).unwrap();
-        assert_eq!(resultat, None);
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::OpprettSak, CommandTarget::Sak, &sak);
+        assert!(matches!(decision, CommandStateDecision::Done));
     }
 
-    // 3. Full livssyklus for inngående journalpost
     #[test]
-    fn journalpost_ordering_inngaende() {
-        let d = dok(DokumentTilstand::IkkeRealisert);
+    fn blocked_reason_har_stabil_kode_og_triggerkategori() {
+        assert_eq!(
+            BlockedReason::SaksnummerMangler.as_code(),
+            "saksnummer_mangler"
+        );
+        assert_eq!(
+            BlockedReason::SaksnummerMangler
+                .trigger_category()
+                .as_code(),
+            "sak_fakta_endret"
+        );
+        assert_eq!(
+            BlockedReason::JournalposterIkkeFerdige
+                .trigger_category()
+                .as_code(),
+            "journalpost_terminal"
+        );
+        assert_eq!(
+            BlockedReason::SaksansvarligIkkeSatt
+                .trigger_category()
+                .as_code(),
+            "saksansvarlig_oppdatert"
+        );
+        assert_eq!(
+            BlockedReason::FelterIkkeKlare.trigger_category().as_code(),
+            "dokument_fakta_endret"
+        );
+        assert_eq!(
+            BlockedReason::JournalpostTilstandUavklart.as_code(),
+            "journalpost_tilstand_uavklart"
+        );
+        assert_eq!(
+            BlockedReason::JournalpostTilstandUavklart
+                .trigger_category()
+                .as_code(),
+            "entity_fakta_endret"
+        );
+    }
+
+    #[test]
+    fn domain_violation_har_stabil_kode() {
+        assert_eq!(DomainViolation::TargetMismatch.as_code(), "target_mismatch");
+        assert_eq!(
+            DomainViolation::TargetMismatch.safe_detail(),
+            "invalid_reason=target_mismatch"
+        );
+    }
+
+    #[test]
+    fn opprett_sak_aldri_returnerer_sett_saksansvarlig_eller_journalpost_eller_avslutt() {
+        let sak = enkel_sak(SakTilstand::IkkeRealisert);
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::OpprettSak, CommandTarget::Sak, &sak);
+        if let CommandStateDecision::Ready(op) = decision {
+            assert!(matches!(op, ArkivOperasjon::OpprettSak { .. }));
+        }
+    }
+
+    #[test]
+    fn opprett_sak_med_journalpost_target_gir_invalid() {
+        let sak = enkel_sak(SakTilstand::IkkeRealisert);
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettSak,
+            CommandTarget::Journalpost(jp_id()),
+            &sak,
+        );
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Invalid(DomainViolation::TargetMismatch)
+        ));
+    }
+
+    // =========================================================================
+    // Journalpost command tests
+    // =========================================================================
+
+    #[test]
+    fn journalpost_command_uten_saksnummer_gir_blocked() {
+        // Target must exist and match type before saksnummer check applies
+        let jp_id_1 = jp_id();
         let jp = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::Opprettet,
+            JournalpostType::Inngaende,
+            false,
+            vec![],
+        );
+        let mut sak = opprettet_sak_med_saksnummer(vec![jp]);
+        sak.saksnummer = None; // Remove saksnummer to trigger Blocked
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler)
+        ));
+    }
+
+    #[test]
+    fn journalpost_command_aldri_returnerer_sett_saksansvarlig() {
+        let mut sak = opprettet_sak_med_saksnummer(vec![]);
+        sak.oensket_saksansvarlig = Some(Saksansvarlig {
+            saksbehandler_id: "Z123".to_string(),
+            enhet: "42".to_string(),
+        });
+        sak.naavaerende_saksansvarlig = None;
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id()),
+            &sak,
+        );
+        match decision {
+            CommandStateDecision::Ready(op) => {
+                assert!(!matches!(op, ArkivOperasjon::SettSaksansvarlig { .. }));
+            }
+            CommandStateDecision::Done
+            | CommandStateDecision::Blocked(_)
+            | CommandStateDecision::Invalid(_) => {}
+        }
+    }
+
+    #[test]
+    fn journalpost_command_aldri_returnerer_avslutt_sak() {
+        let sak = opprettet_sak_med_saksnummer(vec![]);
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id()),
+            &sak,
+        );
+        match decision {
+            CommandStateDecision::Ready(op) => {
+                assert!(!matches!(op, ArkivOperasjon::AvsluttSak { .. }));
+            }
+            CommandStateDecision::Done
+            | CommandStateDecision::Blocked(_)
+            | CommandStateDecision::Invalid(_) => {}
+        }
+    }
+
+    #[test]
+    fn journalpost_command_kun_for_matching_type() {
+        let jp_id_1 = jp_id();
+        let jp_id_2 = jp_id();
+        let inngaaende_jp = lag_journalpost(
+            jp_id_1,
             JournalpostTilstand::IkkeRealisert,
+            JournalpostType::Inngaende,
+            false,
+            vec![],
+        );
+        let utgaaende_jp = lag_journalpost(
+            jp_id_2,
+            JournalpostTilstand::IkkeRealisert,
+            JournalpostType::Utgaaende,
+            false,
+            vec![],
+        );
+
+        let sak = SakMedBarn {
+            sak_id: sak_id(),
+            tilstand: SakTilstand::Opprettet,
+            sikri_id: Some(1),
+            saksnummer: Some("2025/1".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
+            journalposter: vec![inngaaende_jp, utgaaende_jp],
+        };
+
+        // OpprettInngaaendeJournalpost should only see inngående journalpost
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+        match decision {
+            CommandStateDecision::Ready(ArkivOperasjon::OpprettJournalpost { journalpost_id }) => {
+                // Should be the inngående one, not utgående
+                assert!(sak
+                    .journalposter
+                    .iter()
+                    .find(|jp| jp.journalpost_id == journalpost_id)
+                    .map(|jp| jp.journalposttype == JournalpostType::Inngaende)
+                    .unwrap_or(false));
+            }
+            _ => panic!("Expected Ready for inngående journalpost"),
+        }
+    }
+
+    #[test]
+    fn journalpost_command_uten_matching_journalpost_gir_invalid() {
+        let jp_id_1 = jp_id();
+        // Only utgående journalpost exists
+        let utgaaende_jp = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::IkkeRealisert,
+            JournalpostType::Utgaaende,
+            false,
+            vec![],
+        );
+
+        let sak = SakMedBarn {
+            sak_id: sak_id(),
+            tilstand: SakTilstand::Opprettet,
+            sikri_id: Some(1),
+            saksnummer: Some("2025/1".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
+            journalposter: vec![utgaaende_jp],
+        };
+
+        // OpprettInngaaendeJournalpost with non-existent id
+        let missing_id = jp_id();
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(missing_id),
+            &sak,
+        );
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Invalid(DomainViolation::JournalpostMangler)
+        ));
+    }
+
+    #[test]
+    fn journalpost_command_med_sak_target_gir_invalid() {
+        let jp = lag_journalpost(
+            jp_id(),
+            JournalpostTilstand::IkkeRealisert,
+            JournalpostType::Inngaende,
+            false,
+            vec![],
+        );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Sak,
+            &sak,
+        );
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Invalid(DomainViolation::TargetMismatch)
+        ));
+    }
+
+    #[test]
+    fn journalpost_command_type_mismatch_gir_invalid() {
+        let jp_id_1 = jp_id();
+        // Inngående journalpost exists
+        let inngaaende_jp = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::IkkeRealisert,
+            JournalpostType::Inngaende,
+            false,
+            vec![],
+        );
+
+        let sak = SakMedBarn {
+            sak_id: sak_id(),
+            tilstand: SakTilstand::Opprettet,
+            sikri_id: Some(1),
+            saksnummer: Some("2025/1".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
+            journalposter: vec![inngaaende_jp],
+        };
+
+        // OpprettUtgaaendeJournalpost targeting inngående journalpost
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettUtgaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Invalid(DomainViolation::JournalpostTypeMismatch)
+        ));
+    }
+
+    #[test]
+    fn journalpost_feilet_permanent_gir_invalid() {
+        let jp_id_1 = jp_id();
+        let jp = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::FeiletPermanent,
+            JournalpostType::Inngaende,
+            false,
+            vec![],
+        );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Invalid(DomainViolation::JournalpostFeiletPermanent)
+        ));
+    }
+
+    // =========================================================================
+    // Sibling isolation tests
+    // =========================================================================
+
+    #[test]
+    fn same_type_sibling_isolation() {
+        // Two journalposts of the same type, target is the second one
+        let jp_id_1 = jp_id();
+        let jp_id_2 = jp_id();
+        let jp_1 = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::Opprettet,
+            JournalpostType::Inngaende,
+            false,
+            vec![dok(DokumentTilstand::Ok)],
+        );
+        let jp_2 = lag_journalpost(
+            jp_id_2,
+            JournalpostTilstand::IkkeRealisert,
+            JournalpostType::Inngaende,
+            false,
+            vec![],
+        );
+
+        let sak = opprettet_sak_med_saksnummer(vec![jp_1, jp_2]);
+
+        // Target the second journalpost
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_2),
+            &sak,
+        );
+        match decision {
+            CommandStateDecision::Ready(ArkivOperasjon::OpprettJournalpost { journalpost_id }) => {
+                assert_eq!(journalpost_id, jp_id_2);
+            }
+            _ => panic!("Expected Ready for target journalpost"),
+        }
+    }
+
+    #[test]
+    fn sibling_failed_document_does_not_invalidate_target() {
+        // Target journalpost has actionable state, sibling has FeiletPermanent document
+        let jp_id_1 = jp_id();
+        let jp_id_2 = jp_id();
+        let jp_sibling = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::Opprettet,
+            JournalpostType::Inngaende,
+            false,
+            vec![dok(DokumentTilstand::FeiletPermanent)],
+        );
+        let jp_target = lag_journalpost(
+            jp_id_2,
+            JournalpostTilstand::Opprettet,
+            JournalpostType::Inngaende,
+            false,
+            vec![dok(DokumentTilstand::Ok)],
+        );
+
+        let sak = opprettet_sak_med_saksnummer(vec![jp_sibling, jp_target]);
+
+        // Target the second journalpost (which has Ok document)
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_2),
+            &sak,
+        );
+        // Should return action for target, not Invalid due to sibling
+        match decision {
+            CommandStateDecision::Ready(ArkivOperasjon::Journalfoer { journalpost_id }) => {
+                assert_eq!(journalpost_id, jp_id_2);
+            }
+            _ => panic!("Expected Ready for target journalpost, got {:?}", decision),
+        }
+    }
+
+    // =========================================================================
+    // SettSaksansvarlig tests
+    // =========================================================================
+
+    #[test]
+    fn sett_saksansvarlig_uten_saksnummer_gir_blocked() {
+        let sak = enkel_sak(SakTilstand::Opprettet);
+        let mut sak = sak;
+        sak.oensket_saksansvarlig = Some(Saksansvarlig {
+            saksbehandler_id: "Z123".to_string(),
+            enhet: "42".to_string(),
+        });
+
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::SettSaksansvarlig, CommandTarget::Sak, &sak);
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler)
+        ));
+    }
+
+    #[test]
+    fn sett_saksansvarlig_med_mismatch_gir_ready() {
+        let mut sak = enkel_sak(SakTilstand::Opprettet);
+        sak.saksnummer = Some("2025/1".to_string());
+        sak.oensket_saksansvarlig = Some(Saksansvarlig {
+            saksbehandler_id: "Z123".to_string(),
+            enhet: "42".to_string(),
+        });
+        sak.naavaerende_saksansvarlig = None;
+
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::SettSaksansvarlig, CommandTarget::Sak, &sak);
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::SettSaksansvarlig { .. })
+        ));
+    }
+
+    #[test]
+    fn sett_saksansvarlig_med_match_gir_done() {
+        let saksansvarlig = Saksansvarlig {
+            saksbehandler_id: "Z123".to_string(),
+            enhet: "42".to_string(),
+        };
+        let mut sak = enkel_sak(SakTilstand::Opprettet);
+        sak.saksnummer = Some("2025/1".to_string());
+        sak.oensket_saksansvarlig = Some(saksansvarlig.clone());
+        sak.naavaerende_saksansvarlig = Some(saksansvarlig);
+
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::SettSaksansvarlig, CommandTarget::Sak, &sak);
+        assert!(matches!(decision, CommandStateDecision::Done));
+    }
+
+    #[test]
+    fn sett_saksansvarlig_aldri_returnerer_journalpost_eller_avslutt_ops() {
+        let mut sak = enkel_sak(SakTilstand::Opprettet);
+        sak.saksnummer = Some("2025/1".to_string());
+        sak.oensket_saksansvarlig = Some(Saksansvarlig {
+            saksbehandler_id: "Z123".to_string(),
+            enhet: "42".to_string(),
+        });
+        sak.naavaerende_saksansvarlig = None;
+
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::SettSaksansvarlig, CommandTarget::Sak, &sak);
+        if let CommandStateDecision::Ready(op) = decision {
+            assert!(matches!(op, ArkivOperasjon::SettSaksansvarlig { .. }));
+        }
+    }
+
+    #[test]
+    fn sett_saksansvarlig_med_journalpost_target_gir_invalid() {
+        let sak = enkel_sak(SakTilstand::Opprettet);
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::SettSaksansvarlig,
+            CommandTarget::Journalpost(jp_id()),
+            &sak,
+        );
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Invalid(DomainViolation::TargetMismatch)
+        ));
+    }
+
+    #[test]
+    fn sett_saksansvarlig_sak_feilet_permanent_gir_invalid() {
+        let mut sak = enkel_sak(SakTilstand::FeiletPermanent);
+        sak.saksnummer = Some("2025/1".to_string());
+        sak.oensket_saksansvarlig = Some(Saksansvarlig {
+            saksbehandler_id: "Z123".to_string(),
+            enhet: "42".to_string(),
+        });
+
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::SettSaksansvarlig, CommandTarget::Sak, &sak);
+
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Invalid(DomainViolation::SakFeiletPermanent)
+        ));
+    }
+
+    // =========================================================================
+    // AvsluttSak tests
+    // =========================================================================
+
+    #[test]
+    fn avslutt_sak_allerede_avsluttet_gir_done() {
+        let mut sak = enkel_sak(SakTilstand::Avsluttet);
+        sak.saksnummer = Some("2025/1".to_string());
+
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::AvsluttSak, CommandTarget::Sak, &sak);
+        assert!(matches!(decision, CommandStateDecision::Done));
+    }
+
+    #[test]
+    fn avslutt_sak_sak_feilet_permanent_gir_invalid() {
+        let mut sak = enkel_sak(SakTilstand::FeiletPermanent);
+        sak.saksnummer = Some("2025/1".to_string());
+
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::AvsluttSak, CommandTarget::Sak, &sak);
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Invalid(DomainViolation::SakFeiletPermanent)
+        ));
+    }
+
+    #[test]
+    fn avslutt_sak_uten_saksnummer_gir_blocked() {
+        let sak = enkel_sak(SakTilstand::Opprettet);
+
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::AvsluttSak, CommandTarget::Sak, &sak);
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler)
+        ));
+    }
+
+    #[test]
+    fn avslutt_sak_uferdige_journalposter_gir_blocked() {
+        let jp = lag_journalpost(
+            jp_id(),
+            JournalpostTilstand::Opprettet,
+            JournalpostType::InterntNotat,
+            false,
+            vec![dok(DokumentTilstand::Ok)],
+        );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::AvsluttSak, CommandTarget::Sak, &sak);
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Blocked(BlockedReason::JournalposterIkkeFerdige)
+        ));
+    }
+
+    #[test]
+    fn avslutt_sak_saksansvarlig_ikke_satt_gir_blocked() {
+        let mut sak = enkel_sak(SakTilstand::Opprettet);
+        sak.saksnummer = Some("2025/1".to_string());
+        sak.oensket_saksansvarlig = Some(Saksansvarlig {
+            saksbehandler_id: "Z123".to_string(),
+            enhet: "42".to_string(),
+        });
+        sak.naavaerende_saksansvarlig = None;
+
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::AvsluttSak, CommandTarget::Sak, &sak);
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Blocked(BlockedReason::SaksansvarligIkkeSatt)
+        ));
+    }
+
+    #[test]
+    fn avslutt_sak_prerequisites_met_gir_ready() {
+        let jp_inn = lag_journalpost(
+            jp_id(),
             JournalpostTilstand::Avskrevet,
             JournalpostType::Inngaende,
             false,
-            vec![d],
+            vec![dok(DokumentTilstand::Ok)],
         );
+        let sak = opprettet_sak_med_saksnummer(vec![jp_inn]);
 
-        // Steg 1: sak ikke realisert → opprett sak
-        let mut sak = SakMedBarn {
-            sak_id: sak_id(),
-            tilstand: SakTilstand::IkkeRealisert,
-            oensket_tilstand: SakTilstand::Opprettet,
-            sikri_id: None,
-            saksnummer: None,
-            oensket_saksansvarlig: None,
-            naavaerende_saksansvarlig: None,
-            journalposter: vec![jp],
-        };
-        let r = neste_handling(CommandTypeCode::OpprettInngaaendeJournalpost, &sak).unwrap();
-        assert!(matches!(r, Some(ArkivOperasjon::OpprettSak { .. })));
-
-        // Steg 2: sak opprettet → opprett journalpost
-        sak.tilstand = SakTilstand::Opprettet;
-        sak.sikri_id = Some(1);
-        sak.saksnummer = Some("2025/1".to_string());
-        let r = neste_handling(CommandTypeCode::OpprettInngaaendeJournalpost, &sak).unwrap();
-        assert!(matches!(r, Some(ArkivOperasjon::OpprettJournalpost { .. })));
-
-        // Steg 3: journalpost opprettet → legg til dokument
-        sak.journalposter[0].tilstand = JournalpostTilstand::Opprettet;
-        let r = neste_handling(CommandTypeCode::OpprettInngaaendeJournalpost, &sak).unwrap();
-        assert!(matches!(r, Some(ArkivOperasjon::LeggTilDokument { .. })));
-
-        // Steg 4: dokument ok → journalfør
-        sak.journalposter[0].dokumenter[0].tilstand = DokumentTilstand::Ok;
-        let r = neste_handling(CommandTypeCode::OpprettInngaaendeJournalpost, &sak).unwrap();
-        assert!(matches!(r, Some(ArkivOperasjon::Journalfoer { .. })));
-
-        // Steg 5: journalført → avskriv
-        sak.journalposter[0].tilstand = JournalpostTilstand::Journalfoert;
-        let r = neste_handling(CommandTypeCode::OpprettInngaaendeJournalpost, &sak).unwrap();
-        assert!(matches!(r, Some(ArkivOperasjon::Avskriv { .. })));
-
-        // Steg 6: avskrevet → ferdig
-        sak.journalposter[0].tilstand = JournalpostTilstand::Avskrevet;
-        let r = neste_handling(CommandTypeCode::OpprettInngaaendeJournalpost, &sak).unwrap();
-        assert_eq!(r, None);
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::AvsluttSak, CommandTarget::Sak, &sak);
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::AvsluttSak { .. })
+        ));
     }
 
-    // 4. Feilet dokument gir irrecoverable feil (ikke blokkert — vil aldri bli Ok)
     #[test]
-    fn feilet_dokument_gir_irrecoverable() {
+    fn avslutt_sak_aldri_returnerer_journalpost_eller_saksansvarlig_ops() {
         let jp = lag_journalpost(
-            JournalpostTilstand::DokumenterUnderArbeid,
-            JournalpostTilstand::Journalfoert,
-            JournalpostType::Utgaaende,
+            jp_id(),
+            JournalpostTilstand::Avskrevet,
+            JournalpostType::Inngaende,
             false,
-            vec![
-                dok(DokumentTilstand::Ok),
-                dok(DokumentTilstand::FeiletPermanent),
-            ],
+            vec![dok(DokumentTilstand::Ok)],
         );
         let sak = opprettet_sak_med_saksnummer(vec![jp]);
-        let resultat = neste_handling(CommandTypeCode::OpprettUtgaaendeJournalpost, &sak);
-        assert!(resultat.is_err());
-        assert_eq!(
-            resultat.unwrap_err().feiltype,
-            crate::eksekvering::typer::EksekveringFeiltype::Irrecoverable
-        );
+
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::AvsluttSak, CommandTarget::Sak, &sak);
+        if let CommandStateDecision::Ready(op) = decision {
+            assert!(matches!(op, ArkivOperasjon::AvsluttSak { .. }));
+        }
     }
 
     #[test]
-    fn permanent_feil_vinner_over_rendering() {
-        let jp = lag_journalpost(
-            JournalpostTilstand::Opprettet,
-            JournalpostTilstand::Journalfoert,
-            JournalpostType::Utgaaende,
-            false,
-            vec![
-                template_dok(DokumentTilstand::AvventerRendring, vec![Felt::Saksnummer]),
-                dok(DokumentTilstand::FeiletPermanent),
-            ],
+    fn avslutt_sak_med_journalpost_target_gir_invalid() {
+        let sak = enkel_sak(SakTilstand::Opprettet);
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::AvsluttSak,
+            CommandTarget::Journalpost(jp_id()),
+            &sak,
         );
-        let sak = opprettet_sak_med_saksnummer(vec![jp]);
-        let resultat = neste_handling(CommandTypeCode::OpprettUtgaaendeJournalpost, &sak);
-        assert!(resultat.is_err());
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Invalid(DomainViolation::TargetMismatch)
+        ));
     }
 
+    // =========================================================================
+    // BlockedReason/DomainViolation classification tests
+    // =========================================================================
+
     #[test]
-    fn html_template_venter_paa_saksnummer() {
+    fn html_template_venter_paa_saksnummer_gir_blocked_saksnummer_mangler() {
+        // When saksnummer is None, journalpost commands return SaksnummerMangler first
+        // (guard clause takes precedence over template field checks)
+        // Target journalpost must exist and match type for this test
+        let jp_id_1 = jp_id();
         let jp = lag_journalpost(
+            jp_id_1,
             JournalpostTilstand::Opprettet,
-            JournalpostTilstand::Journalfoert,
             JournalpostType::Utgaaende,
             false,
             vec![template_dok(
@@ -562,16 +1364,24 @@ mod tests {
         let mut sak = opprettet_sak_med_saksnummer(vec![jp]);
         sak.saksnummer = None;
 
-        let resultat = neste_handling(CommandTypeCode::OpprettUtgaaendeJournalpost, &sak).unwrap();
-
-        assert_eq!(resultat, None);
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettUtgaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler)
+        ));
     }
 
     #[test]
-    fn html_template_rendres_for_journalfoering() {
+    fn html_template_rendres_naar_saksnummer_eksisterer() {
+        // When saksnummer exists and template needs saksnummer, rendering is ready
+        let jp_id_1 = jp_id();
         let jp = lag_journalpost(
+            jp_id_1,
             JournalpostTilstand::Opprettet,
-            JournalpostTilstand::Journalfoert,
             JournalpostType::Utgaaende,
             false,
             vec![template_dok(
@@ -581,19 +1391,23 @@ mod tests {
         );
         let sak = opprettet_sak_med_saksnummer(vec![jp]);
 
-        let resultat = neste_handling(CommandTypeCode::OpprettUtgaaendeJournalpost, &sak).unwrap();
-
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettUtgaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
         assert!(matches!(
-            resultat,
-            Some(ArkivOperasjon::RenderDokument { .. })
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::RenderDokument { .. })
         ));
     }
 
     #[test]
-    fn journalfoering_venter_paa_rendered_hoveddokument() {
+    fn uklassifisert_journalposttilstand_gir_presis_blocked_reason() {
+        let jp_id_1 = jp_id();
         let jp = lag_journalpost(
-            JournalpostTilstand::Opprettet,
-            JournalpostTilstand::Journalfoert,
+            jp_id_1,
+            JournalpostTilstand::KlarForJournalforing,
             JournalpostType::Utgaaende,
             false,
             vec![template_dok(
@@ -603,295 +1417,277 @@ mod tests {
         );
         let sak = opprettet_sak_med_saksnummer(vec![jp]);
 
-        let resultat = neste_handling(CommandTypeCode::OpprettUtgaaendeJournalpost, &sak).unwrap();
-
-        assert!(!matches!(
-            resultat,
-            Some(ArkivOperasjon::Journalfoer { .. })
-        ));
-    }
-
-    // 5. Utgående journalpost som er Journalfoert med ønsket Journalfoert → None
-    #[test]
-    fn avskriving_kun_for_inngaende() {
-        let jp = lag_journalpost(
-            JournalpostTilstand::Journalfoert,
-            JournalpostTilstand::Journalfoert,
-            JournalpostType::Utgaaende,
-            false,
-            vec![dok(DokumentTilstand::Ok)],
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettUtgaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
         );
-        let sak = opprettet_sak_med_saksnummer(vec![jp]);
-        let resultat = neste_handling(CommandTypeCode::OpprettUtgaaendeJournalpost, &sak).unwrap();
-        assert_eq!(resultat, None);
-    }
-
-    // 6. AvsluttSak blokkert av uferdige journalposter
-    #[test]
-    fn avslutt_sak_blokkert_av_uferdige_journalposter() {
-        let jp = lag_journalpost(
-            JournalpostTilstand::Opprettet,
-            JournalpostTilstand::Journalfoert,
-            JournalpostType::InterntNotat,
-            false,
-            vec![dok(DokumentTilstand::IkkeRealisert)],
-        );
-        let mut sak = opprettet_sak_med_saksnummer(vec![jp]);
-        sak.oensket_tilstand = SakTilstand::Avsluttet;
-        // Journalpost is not terminal, but no FeiletPermanent docs either → None
-        // (the LeggTilDokument step fires first since doc is IkkeRealisert and jp is Opprettet)
-        let resultat = neste_handling(CommandTypeCode::AvsluttSak, &sak).unwrap();
         assert!(matches!(
-            resultat,
-            Some(ArkivOperasjon::LeggTilDokument { .. })
+            decision,
+            CommandStateDecision::Blocked(BlockedReason::JournalpostTilstandUavklart)
         ));
     }
 
-    // 7. Utgående med utsending, VenterPaaUtsending → None
     #[test]
-    fn venter_paa_utsending_for_utgaaende() {
+    fn dokument_feilet_permanent_gir_invalid() {
+        let jp_id_1 = jp_id();
         let jp = lag_journalpost(
-            JournalpostTilstand::VenterPaaUtsending,
-            JournalpostTilstand::Journalfoert,
-            JournalpostType::Utgaaende,
-            true,
-            vec![dok(DokumentTilstand::Ok)],
-        );
-        let sak = opprettet_sak_med_saksnummer(vec![jp]);
-        let resultat = neste_handling(CommandTypeCode::OpprettUtgaaendeJournalpost, &sak).unwrap();
-        assert_eq!(resultat, None);
-    }
-
-    // 8. Alt ferdig → None
-    #[test]
-    fn alt_ferdig_gir_none() {
-        let jp = lag_journalpost(
-            JournalpostTilstand::Avskrevet,
-            JournalpostTilstand::Avskrevet,
-            JournalpostType::Inngaende,
-            false,
-            vec![dok(DokumentTilstand::Ok)],
-        );
-        let sak = opprettet_sak_med_saksnummer(vec![jp]);
-        let resultat = neste_handling(CommandTypeCode::OpprettInngaaendeJournalpost, &sak).unwrap();
-        assert_eq!(resultat, None);
-    }
-
-    // 9. er_ferdig fungerer
-    #[test]
-    fn er_ferdig_fungerer() {
-        let jp = lag_journalpost(
-            JournalpostTilstand::Avskrevet,
-            JournalpostTilstand::Avskrevet,
-            JournalpostType::Inngaende,
-            false,
-            vec![dok(DokumentTilstand::Ok)],
-        );
-        let sak = opprettet_sak_med_saksnummer(vec![jp]);
-        assert!(er_ferdig(&sak));
-
-        let jp2 = lag_journalpost(
+            jp_id_1,
             JournalpostTilstand::Opprettet,
-            JournalpostTilstand::Avskrevet,
-            JournalpostType::Inngaende,
+            JournalpostType::Utgaaende,
             false,
-            vec![dok(DokumentTilstand::IkkeRealisert)],
+            vec![dok(DokumentTilstand::FeiletPermanent)],
         );
-        let sak2 = opprettet_sak_med_saksnummer(vec![jp2]);
-        assert!(!er_ferdig(&sak2));
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettUtgaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Invalid(DomainViolation::DokumentFeiletPermanent)
+        ));
     }
 
-    // 10. AvsluttSak når alle journalposter er terminale
     #[test]
-    fn avslutt_sak_naar_alle_journalposter_terminale() {
-        let jp_inn = lag_journalpost(
-            JournalpostTilstand::Avskrevet,
-            JournalpostTilstand::Avskrevet,
+    fn avslutt_sak_journalpost_feilet_permanent_gir_invalid() {
+        // Journalpost in FeiletPermanent state with no failed documents
+        // should return Invalid(JournalpostFeiletPermanent), not Blocked(JournalposterIkkeFerdige)
+        let jp = lag_journalpost(
+            jp_id(),
+            JournalpostTilstand::FeiletPermanent,
             JournalpostType::Inngaende,
             false,
             vec![dok(DokumentTilstand::Ok)],
         );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::AvsluttSak, CommandTarget::Sak, &sak);
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Invalid(DomainViolation::JournalpostFeiletPermanent)
+        ));
+    }
+
+    #[test]
+    fn avslutt_sak_dokument_feilet_permanent_gir_invalid() {
+        let jp = lag_journalpost(
+            jp_id(),
+            JournalpostTilstand::Avskrevet,
+            JournalpostType::Inngaende,
+            false,
+            vec![dok(DokumentTilstand::FeiletPermanent)],
+        );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::AvsluttSak, CommandTarget::Sak, &sak);
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Invalid(DomainViolation::DokumentFeiletPermanent)
+        ));
+    }
+
+    #[test]
+    fn avskriv_baseres_paa_journalposttype_ikke_lagret_sluttilstand() {
+        let jp_id_1 = jp_id();
+        let jp = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::Journalfoert,
+            JournalpostType::Inngaende,
+            false,
+            vec![dok(DokumentTilstand::Ok)],
+        );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::Avskriv { .. })
+        ));
+    }
+
+    #[test]
+    fn utgaaende_og_internt_notat_ved_journalfoert_gir_done_ikke_avskriv() {
+        let jp_id_1 = jp_id();
         let jp_ut = lag_journalpost(
-            JournalpostTilstand::Journalfoert,
-            JournalpostTilstand::Journalfoert,
-            JournalpostType::Utgaaende,
-            false,
-            vec![dok(DokumentTilstand::Ok)],
-        );
-        let mut sak = opprettet_sak_med_saksnummer(vec![jp_inn, jp_ut]);
-        sak.oensket_tilstand = SakTilstand::Avsluttet;
-        let resultat = neste_handling(CommandTypeCode::AvsluttSak, &sak).unwrap();
-        assert!(matches!(resultat, Some(ArkivOperasjon::AvsluttSak { .. })));
-    }
-
-    // 11. AvsluttSak med tom journalposter-vektor
-    #[test]
-    fn avslutt_sak_uten_journalposter() {
-        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Avsluttet);
-        sak.saksnummer = Some("2025/1".to_string());
-        let resultat = neste_handling(CommandTypeCode::AvsluttSak, &sak).unwrap();
-        assert!(matches!(resultat, Some(ArkivOperasjon::AvsluttSak { .. })));
-    }
-
-    // 12. Flere journalposter på forskjellige stadier
-    #[test]
-    fn flere_journalposter_forskjellige_stadier() {
-        let jp_ferdig = lag_journalpost(
-            JournalpostTilstand::Journalfoert,
+            jp_id_1,
             JournalpostTilstand::Journalfoert,
             JournalpostType::Utgaaende,
             false,
             vec![dok(DokumentTilstand::Ok)],
         );
-        let jp_under_arbeid = lag_journalpost(
-            JournalpostTilstand::DokumenterUnderArbeid,
+        let sak_ut = opprettet_sak_med_saksnummer(vec![jp_ut]);
+
+        let decision_ut = planlegg_neste_handling(
+            CommandTypeCode::OpprettUtgaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak_ut,
+        );
+        assert!(matches!(decision_ut, CommandStateDecision::Done));
+
+        let jp_id_2 = jp_id();
+        let jp_internt = lag_journalpost(
+            jp_id_2,
             JournalpostTilstand::Journalfoert,
             JournalpostType::InterntNotat,
             false,
-            vec![
-                dok(DokumentTilstand::Ok),
-                dok(DokumentTilstand::IkkeRealisert),
-            ],
+            vec![dok(DokumentTilstand::Ok)],
         );
-        let sak = opprettet_sak_med_saksnummer(vec![jp_ferdig, jp_under_arbeid]);
-        let resultat =
-            neste_handling(CommandTypeCode::OpprettInterntNotatJournalpost, &sak).unwrap();
-        // Bør plukke opp det urealiserte dokumentet på jp_under_arbeid
-        assert!(matches!(
-            resultat,
-            Some(ArkivOperasjon::LeggTilDokument { .. })
-        ));
-    }
+        let sak_internt = opprettet_sak_med_saksnummer(vec![jp_internt]);
 
-    // 13. FeiletPermanent journalpost blokkerer AvsluttSak
-    #[test]
-    fn feilet_permanent_journalpost_blokkerer_avslutt_sak() {
-        let jp = lag_journalpost(
-            JournalpostTilstand::Opprettet,
-            JournalpostTilstand::Journalfoert,
-            JournalpostType::InterntNotat,
-            false,
-            vec![
-                dok(DokumentTilstand::Ok),
-                dok(DokumentTilstand::FeiletPermanent),
-            ],
+        let decision_internt = planlegg_neste_handling(
+            CommandTypeCode::OpprettInterntNotatJournalpost,
+            CommandTarget::Journalpost(jp_id_2),
+            &sak_internt,
         );
-        let mut sak = opprettet_sak_med_saksnummer(vec![jp]);
-        sak.oensket_tilstand = SakTilstand::Avsluttet;
-        let resultat = neste_handling(CommandTypeCode::AvsluttSak, &sak);
-        assert!(resultat.is_err());
+        assert!(matches!(decision_internt, CommandStateDecision::Done));
     }
 
-    // -----------------------------------------------------------------------
-    // SettSaksansvarlig (Noark 5 M306) tests
-    // -----------------------------------------------------------------------
+    // =========================================================================
+    // Full lifecycle tests
+    // =========================================================================
 
-    fn saksansvarlig(id: &str, enhet: &str) -> Option<Saksansvarlig> {
-        Some(Saksansvarlig {
-            saksbehandler_id: id.to_string(),
-            enhet: enhet.to_string(),
-        })
-    }
-
-    // 14. SettSaksansvarlig fires when ønsket != nåværende
     #[test]
-    fn sett_saksansvarlig_naar_oensket_ulik_naavaerende() {
-        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Opprettet);
-        sak.saksnummer = Some("2025/1".to_string());
-        sak.oensket_saksansvarlig = saksansvarlig("Z12345", "42");
-        sak.naavaerende_saksansvarlig = None;
-        let resultat = neste_handling(CommandTypeCode::SettSaksansvarlig, &sak).unwrap();
-        assert!(matches!(
-            resultat,
-            Some(ArkivOperasjon::SettSaksansvarlig { .. })
-        ));
-    }
-
-    // 15. SettSaksansvarlig does NOT fire when ønsket == nåværende (idempotent)
-    #[test]
-    fn sett_saksansvarlig_idempotent_naar_lik() {
-        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Opprettet);
-        sak.saksnummer = Some("2025/1".to_string());
-        sak.oensket_saksansvarlig = saksansvarlig("Z12345", "42");
-        sak.naavaerende_saksansvarlig = saksansvarlig("Z12345", "42");
-        let resultat = neste_handling(CommandTypeCode::SettSaksansvarlig, &sak).unwrap();
-        assert_eq!(resultat, None);
-    }
-
-    // 16. SettSaksansvarlig does NOT fire when ønsket is None
-    #[test]
-    fn sett_saksansvarlig_ikke_naar_oensket_er_none() {
-        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Opprettet);
-        sak.saksnummer = Some("2025/1".to_string());
-        sak.oensket_saksansvarlig = None;
-        sak.naavaerende_saksansvarlig = None;
-        let resultat = neste_handling(CommandTypeCode::SettSaksansvarlig, &sak).unwrap();
-        assert_eq!(resultat, None);
-    }
-
-    // 17. SettSaksansvarlig fires before journalpost work
-    #[test]
-    fn sett_saksansvarlig_foer_journalpost() {
+    fn full_lifecycle_inngaende_journalpost() {
+        let d = dok(DokumentTilstand::IkkeRealisert);
+        let jp_id_1 = jp_id();
         let jp = lag_journalpost(
+            jp_id_1,
             JournalpostTilstand::IkkeRealisert,
-            JournalpostTilstand::Avskrevet,
             JournalpostType::Inngaende,
             false,
-            vec![dok(DokumentTilstand::IkkeRealisert)],
+            vec![d],
         );
-        let mut sak = opprettet_sak_med_saksnummer(vec![jp]);
-        sak.oensket_saksansvarlig = saksansvarlig("Z12345", "42");
-        sak.naavaerende_saksansvarlig = None;
-        let resultat = neste_handling(CommandTypeCode::OpprettInngaaendeJournalpost, &sak).unwrap();
-        // Should pick sett_saksansvarlig BEFORE opprett_journalpost
+
+        // Step 1: Create sak (use OpprettSak command type)
+        let mut sak = SakMedBarn {
+            sak_id: sak_id(),
+            tilstand: SakTilstand::IkkeRealisert,
+            sikri_id: None,
+            saksnummer: None,
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
+            journalposter: vec![jp],
+        };
+        let decision =
+            planlegg_neste_handling(CommandTypeCode::OpprettSak, CommandTarget::Sak, &sak);
         assert!(matches!(
-            resultat,
-            Some(ArkivOperasjon::SettSaksansvarlig { .. })
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::OpprettSak { .. })
         ));
-    }
 
-    // 18. AvsluttSak blocked when saksansvarlig not yet set
-    #[test]
-    fn avslutt_sak_blokkert_naar_saksansvarlig_ikke_satt() {
-        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Avsluttet);
+        // Step 2: Create journalpost
+        sak.tilstand = SakTilstand::Opprettet;
+        sak.sikri_id = Some(1);
         sak.saksnummer = Some("2025/1".to_string());
-        sak.oensket_saksansvarlig = saksansvarlig("Z12345", "42");
-        sak.naavaerende_saksansvarlig = None;
-        let resultat = neste_handling(CommandTypeCode::AvsluttSak, &sak).unwrap();
-        // Should return SettSaksansvarlig instead of AvsluttSak
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
         assert!(matches!(
-            resultat,
-            Some(ArkivOperasjon::SettSaksansvarlig { .. })
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::OpprettJournalpost { .. })
         ));
+
+        // Step 3: Add document
+        sak.journalposter[0].tilstand = JournalpostTilstand::Opprettet;
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::LeggTilDokument { .. })
+        ));
+
+        // Step 4: Journalføre
+        sak.journalposter[0].dokumenter[0].tilstand = DokumentTilstand::Ok;
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::Journalfoer { .. })
+        ));
+
+        // Step 5: Avskriv
+        sak.journalposter[0].tilstand = JournalpostTilstand::Journalfoert;
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::Avskriv { .. })
+        ));
+
+        // Step 6: Done
+        sak.journalposter[0].tilstand = JournalpostTilstand::Avskrevet;
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+        assert!(matches!(decision, CommandStateDecision::Done));
     }
 
-    // 19. AvsluttSak proceeds when saksansvarlig matches
-    #[test]
-    fn avslutt_sak_naar_saksansvarlig_satt() {
-        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Avsluttet);
-        sak.saksnummer = Some("2025/1".to_string());
-        sak.oensket_saksansvarlig = saksansvarlig("Z12345", "42");
-        sak.naavaerende_saksansvarlig = saksansvarlig("Z12345", "42");
-        let resultat = neste_handling(CommandTypeCode::AvsluttSak, &sak).unwrap();
-        assert!(matches!(resultat, Some(ArkivOperasjon::AvsluttSak { .. })));
-    }
+    // =========================================================================
+    // Compatibility wrapper tests
+    // =========================================================================
 
-    // 20. er_ferdig respects saksansvarlig mismatch
-    #[test]
-    fn er_ferdig_sjekker_saksansvarlig() {
-        let mut sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Opprettet);
-        sak.oensket_saksansvarlig = saksansvarlig("Z12345", "42");
-        sak.naavaerende_saksansvarlig = None;
-        assert!(!er_ferdig(&sak));
+    #[allow(deprecated)]
+    mod compatibility_wrapper_tests {
+        use super::*;
 
-        sak.naavaerende_saksansvarlig = saksansvarlig("Z12345", "42");
-        assert!(er_ferdig(&sak));
-    }
+        #[test]
+        fn neste_handling_compat_ready_gir_ok_some() {
+            let sak = enkel_sak(SakTilstand::IkkeRealisert);
+            let result =
+                neste_handling(CommandTypeCode::OpprettSak, CommandTarget::Sak, &sak).unwrap();
+            assert!(result.is_some());
+        }
 
-    // 21. er_ferdig ok when no saksansvarlig requested
-    #[test]
-    fn er_ferdig_ok_uten_saksansvarlig() {
-        let sak = enkel_sak(SakTilstand::Opprettet, SakTilstand::Opprettet);
-        assert!(er_ferdig(&sak));
+        #[test]
+        fn neste_handling_compat_done_gir_ok_none() {
+            let mut sak = enkel_sak(SakTilstand::Opprettet);
+            sak.saksnummer = Some("2025/1".to_string());
+            let result =
+                neste_handling(CommandTypeCode::OpprettSak, CommandTarget::Sak, &sak).unwrap();
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn neste_handling_compat_invalid_gir_err() {
+            let jp_id_1 = jp_id();
+            let jp = lag_journalpost(
+                jp_id_1,
+                JournalpostTilstand::Opprettet,
+                JournalpostType::Utgaaende,
+                false,
+                vec![dok(DokumentTilstand::FeiletPermanent)],
+            );
+            let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+            let result = neste_handling(
+                CommandTypeCode::OpprettUtgaaendeJournalpost,
+                CommandTarget::Journalpost(jp_id_1),
+                &sak,
+            );
+            assert!(result.is_err());
+        }
     }
 }

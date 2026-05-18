@@ -71,3 +71,47 @@ fn is_local_env() -> bool {
     };
     env.trim().eq_ignore_ascii_case("local")
 }
+
+pub(crate) fn safe_nats_server_label(server_url: &str) -> String {
+    let (scheme, rest) = server_url.split_once("://").unwrap_or(("nats", server_url));
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let host_port = authority
+        .rsplit_once('@')
+        .map(|(_, value)| value)
+        .unwrap_or(authority);
+
+    if host_port.is_empty() {
+        return format!("{scheme}://<unknown>");
+    }
+
+    format!("{scheme}://{host_port}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_nats_server_label;
+
+    #[test]
+    fn safe_nats_server_label_redacts_user_password() {
+        assert_eq!(
+            safe_nats_server_label("nats://user:secret@nats.example.invalid:4222"),
+            "nats://nats.example.invalid:4222"
+        );
+    }
+
+    #[test]
+    fn safe_nats_server_label_redacts_token() {
+        assert_eq!(
+            safe_nats_server_label("nats://token@nats.internal:4222"),
+            "nats://nats.internal:4222"
+        );
+    }
+
+    #[test]
+    fn safe_nats_server_label_keeps_credential_free_url() {
+        assert_eq!(
+            safe_nats_server_label("nats://nats.example.invalid:4222"),
+            "nats://nats.example.invalid:4222"
+        );
+    }
+}

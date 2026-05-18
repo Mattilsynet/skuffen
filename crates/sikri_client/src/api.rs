@@ -3,7 +3,7 @@ use crate::dto::elements_dokument_response::ElementsDokumentRespons;
 use crate::dto::elements_journalpost::{ElementsJournalpost, ElementsJournalpostRespons};
 use crate::dto::elements_sak::ElementsSak;
 use crate::dto::elements_sak_response::ElementsSakMedJournalposterResponse;
-use crate::error_mapping::{classify_http_error, marker_for, user_message_for_http_error};
+use crate::error_mapping::{classify_http_error, marker_for, safe_detail_for_http_error};
 use crate::secret::get_secret;
 use anyhow::{Context, Result};
 use reqwest::Client;
@@ -16,14 +16,24 @@ fn base_url() -> String {
     })
 }
 
+fn safe_endpoint_label(url: &str) -> &str {
+    url.split('?')
+        .next()
+        .unwrap_or(url)
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or("unknown")
+}
+
 async fn ensure_success(
     response: reqwest::Response,
     method: &str,
     url: &str,
 ) -> Result<reqwest::Response> {
     let status = response.status();
+    let endpoint = safe_endpoint_label(url);
     if status.is_success() {
-        info!(target: "sikri.http", method, url, status = %status, "Sikri response received");
+        info!(target: "sikri.http", method, endpoint, status = %status, "Sikri response received");
         return Ok(response);
     }
 
@@ -39,18 +49,18 @@ async fn ensure_success(
     };
     let recoverability = classify_http_error(status, Some(&body_for_log));
     let marker = marker_for(recoverability);
-    let user_message = user_message_for_http_error(status, Some(&body_for_log));
+    let safe_detail = safe_detail_for_http_error(status, Some(&body_for_log));
 
     error!(
         target: "sikri.http",
         method,
-        url,
+        endpoint,
         status = %status,
         response_length = body.len(),
         "Sikri response returned error status"
     );
 
-    anyhow::bail!("{marker} {user_message} (method={method}, url={url}, status={status})");
+    anyhow::bail!("{marker} {safe_detail}");
 }
 
 async fn hent_brukernavn_passord_sikri() -> Result<(String, String)> {
@@ -71,21 +81,21 @@ pub async fn alive() -> Result<()> {
         .context("Feil ved henting av Sikri-brukernavn/passord (GCP secret)")?;
 
     let url = format!("{}/api/Archive/Test", base_url());
-    info!(target: "sikri.http", method = "GET", url = %url, "Sending request to Sikri");
+    info!(target: "sikri.http", method = "GET", endpoint = safe_endpoint_label(&url), "Sending request to Sikri");
     let resp = Client::new()
         .get(&url)
         .basic_auth(username, Some(password))
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+        .with_context(|| "Klarte ikke å sende Sikri request")?;
     let _ = ensure_success(resp, "GET", &url)
         .await
-        .with_context(|| format!("Server svarte med feil for GET {url}"))?;
+        .with_context(|| "Sikri server svarte med feil for GET")?;
 
     Ok(())
 }
 
-#[tracing::instrument(skip_all, name = "sikri.get_sak", fields(saksnr = saksnummer, kildesystem))]
+#[tracing::instrument(skip_all, name = "sikri.get_sak")]
 pub async fn get_sak(
     saksnummer: &str,
     kildesystem: &str,
@@ -105,9 +115,7 @@ pub async fn get_sak(
     info!(
         target: "sikri.http",
         method = "GET",
-        url = %url,
-        kildesystem,
-        saksnr = saksnummer,
+        endpoint = safe_endpoint_label(&url),
         inkluder_journalposter,
         "Sending request to Sikri"
     );
@@ -118,16 +126,10 @@ pub async fn get_sak(
         .basic_auth(username, Some(password))
         .send()
         .await
-        .with_context(|| {
-            format!(
-                "Klarte ikke å sende request til {url} (kildesystem={kildesystem}, saksnr={saksnummer})"
-            )
-        })?;
-    let resp = ensure_success(resp, "GET", &url).await.with_context(|| {
-        format!(
-            "Server svarte med feil for GET {url} (kildesystem={kildesystem}, saksnr={saksnummer})"
-        )
-    })?;
+        .with_context(|| "Klarte ikke å sende Sikri get_sak request")?;
+    let resp = ensure_success(resp, "GET", &url)
+        .await
+        .with_context(|| "Sikri server svarte med feil for get_sak")?;
 
     //FIXME bør definere en egen DTO som er vår interne modell
     let parsed = resp
@@ -137,9 +139,7 @@ pub async fn get_sak(
     debug!(
         target: "sikri.http",
         method = "GET",
-        url = %url,
-        kildesystem,
-        saksnr = saksnummer,
+        endpoint = safe_endpoint_label(&url),
         "Sikri get_sak response parsed"
     );
     Ok(parsed)
@@ -154,7 +154,7 @@ pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposter
     info!(
         target: "sikri.http",
         method = "POST",
-        url = %url,
+        endpoint = safe_endpoint_label(&url),
         "Sending OpprettArkivsak request to Sikri"
     );
     let resp = Client::new()
@@ -163,7 +163,7 @@ pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposter
         .json(&data)
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+        .with_context(|| "Klarte ikke å sende Sikri request")?;
     let resp = ensure_success(resp, "POST", &url).await?;
 
     let parsed = resp
@@ -173,13 +173,13 @@ pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposter
     debug!(
         target: "sikri.http",
         method = "POST",
-        url = %url,
+        endpoint = safe_endpoint_label(&url),
         "Sikri create_sak response parsed"
     );
     Ok(parsed)
 }
 
-#[tracing::instrument(skip_all, name = "sikri.opprett_journalpost", fields(saksnr = saksnummer))]
+#[tracing::instrument(skip_all, name = "sikri.opprett_journalpost")]
 pub async fn opprett_journalpost(
     journalpost: ElementsJournalpost,
     saksnummer: &str,
@@ -189,8 +189,7 @@ pub async fn opprett_journalpost(
     info!(
         target: "sikri.http",
         method = "POST",
-        url = %url,
-        saksnr = saksnummer,
+        endpoint = safe_endpoint_label(&url),
         "Sending OpprettJournalpost request to Sikri"
     );
     let resp = Client::new()
@@ -200,7 +199,7 @@ pub async fn opprett_journalpost(
         .json(&journalpost)
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+        .with_context(|| "Klarte ikke å sende Sikri request")?;
     let resp = ensure_success(resp, "POST", &url).await?;
 
     let parsed = resp
@@ -210,14 +209,13 @@ pub async fn opprett_journalpost(
     debug!(
         target: "sikri.http",
         method = "POST",
-        url = %url,
-        saksnr = saksnummer,
+        endpoint = safe_endpoint_label(&url),
         "Sikri opprett_journalpost response parsed"
     );
     Ok(parsed)
 }
 
-#[tracing::instrument(skip_all, name = "sikri.legg_til_vedlegg", fields(journalpost_id, dokument_count = dokumenter.len()))]
+#[tracing::instrument(skip_all, name = "sikri.legg_til_vedlegg", fields(dokument_count = dokumenter.len()))]
 pub async fn legg_til_vedlegg(
     journalpost_id: i32,
     dokumenter: Vec<ElementsDokument>,
@@ -227,8 +225,7 @@ pub async fn legg_til_vedlegg(
     info!(
         target: "sikri.http",
         method = "POST",
-        url = %url,
-        journalpost_id,
+        endpoint = safe_endpoint_label(&url),
         dokument_count = dokumenter.len(),
         "Sending LeggTilVedlegg request to Sikri"
     );
@@ -239,7 +236,7 @@ pub async fn legg_til_vedlegg(
         .json(&dokumenter)
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+        .with_context(|| "Klarte ikke å sende Sikri request")?;
     let resp = ensure_success(resp, "POST", &url).await?;
 
     let parsed = resp
@@ -249,23 +246,21 @@ pub async fn legg_til_vedlegg(
     debug!(
         target: "sikri.http",
         method = "POST",
-        url = %url,
-        journalpost_id,
+        endpoint = safe_endpoint_label(&url),
         dokument_count = parsed.len(),
         "Sikri legg_til_vedlegg response parsed"
     );
     Ok(parsed)
 }
 
-#[tracing::instrument(skip_all, name = "sikri.sett_journalpost_status", fields(journalpost_id, journalpost_status = status))]
+#[tracing::instrument(skip_all, name = "sikri.sett_journalpost_status", fields(journalpost_status = status))]
 pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Result<()> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/SetJournalpostStatus", base_url());
     info!(
         target: "sikri.http",
         method = "PUT",
-        url = %url,
-        journalpost_id,
+        endpoint = safe_endpoint_label(&url),
         journalpost_status = status,
         "Sending request to Sikri"
     );
@@ -278,25 +273,19 @@ pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Resul
         ])
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+        .with_context(|| "Klarte ikke å sende Sikri request")?;
     let _ = ensure_success(resp, "PUT", &url).await?;
     Ok(())
 }
 
-#[tracing::instrument(
-    skip_all,
-    name = "sikri.avskriv_journalpost",
-    fields(journalpost_id, avskrivingsmaate)
-)]
+#[tracing::instrument(skip_all, name = "sikri.avskriv_journalpost", fields(avskrivingsmaate))]
 pub async fn avskriv_journalpost(journalpost_id: i32, avskrivingsmaate: &str) -> Result<()> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/AvskrivJournalpost", base_url());
     info!(
         target: "sikri.http",
         method = "POST",
-        url = %url,
-        journalpost_id,
-        avskrivingsmaate,
+        endpoint = safe_endpoint_label(&url),
         "Sending request to Sikri"
     );
     let resp = Client::new()
@@ -308,21 +297,19 @@ pub async fn avskriv_journalpost(journalpost_id: i32, avskrivingsmaate: &str) ->
         ])
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+        .with_context(|| "Klarte ikke å sende Sikri request")?;
     let _ = ensure_success(resp, "POST", &url).await?;
     Ok(())
 }
 
-#[tracing::instrument(skip_all, name = "sikri.avslutt_sak", fields(saksnr = saksnummer))]
+#[tracing::instrument(skip_all, name = "sikri.avslutt_sak")]
 pub async fn avslutt_sak(saksnummer: &str) -> Result<()> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/SetStatusForArkivSak", base_url());
     info!(
         target: "sikri.http",
         method = "PUT",
-        url = %url,
-        saksnr = saksnummer,
-        ny_saksstatus = "A",
+        endpoint = safe_endpoint_label(&url),
         "Sending request to Sikri"
     );
     let resp = Client::new()
@@ -331,12 +318,12 @@ pub async fn avslutt_sak(saksnummer: &str) -> Result<()> {
         .query(&[("saksnr", saksnummer), ("nySaksstatus", "A")])
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+        .with_context(|| "Klarte ikke å sende Sikri request")?;
     let _ = ensure_success(resp, "PUT", &url).await?;
     Ok(())
 }
 
-#[tracing::instrument(skip_all, name = "sikri.sett_saksansvarlig", fields(saksnr = saksnummer))]
+#[tracing::instrument(skip_all, name = "sikri.sett_saksansvarlig")]
 pub async fn sett_saksansvarlig(
     saksnummer: &str,
     saksbehandler: &str,
@@ -347,8 +334,7 @@ pub async fn sett_saksansvarlig(
     info!(
         target: "sikri.http",
         method = "PUT",
-        url = %url,
-        saksnr = saksnummer,
+        endpoint = safe_endpoint_label(&url),
         "Sending SetSaksansvarligIdForArkivSak request to Sikri"
     );
     let resp = Client::new()
@@ -361,7 +347,7 @@ pub async fn sett_saksansvarlig(
         ])
         .send()
         .await
-        .with_context(|| format!("Klarte ikke å sende request til {url}"))?;
+        .with_context(|| "Klarte ikke å sende Sikri request")?;
     let _ = ensure_success(resp, "PUT", &url).await?;
     Ok(())
 }

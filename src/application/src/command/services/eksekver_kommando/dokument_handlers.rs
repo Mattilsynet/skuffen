@@ -36,7 +36,7 @@ impl EksekverKommandoService {
 
         if rendered_dokument_referanse.is_some() {
             self.entity_tilstand_repo
-                .oppdater_dokument_tilstand(dokument_id, DokumentTilstand::Ok, None)
+                .oppdater_dokument_tilstand(dokument_id, DokumentTilstand::Ok)
                 .await
                 .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
             return Ok(());
@@ -68,11 +68,7 @@ impl EksekverKommandoService {
             Err(err) => {
                 let melding = template_feil_melding(&err);
                 self.entity_tilstand_repo
-                    .oppdater_dokument_tilstand(
-                        dokument_id,
-                        DokumentTilstand::FeiletPermanent,
-                        Some(melding),
-                    )
+                    .oppdater_dokument_tilstand(dokument_id, DokumentTilstand::FeiletPermanent)
                     .await
                     .map_err(|repo_err| EksekveringFeil::recoverable(repo_err.to_string()))?;
                 self.entity_tilstand_repo
@@ -127,7 +123,7 @@ impl EksekverKommandoService {
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
         self.entity_tilstand_repo
-            .oppdater_dokument_tilstand(dokument_id, DokumentTilstand::Ok, None)
+            .oppdater_dokument_tilstand(dokument_id, DokumentTilstand::Ok)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
@@ -184,11 +180,7 @@ impl EksekverKommandoService {
                 if matches!(err.feiltype, EksekveringFeiltype::Irrecoverable) {
                     let _ = self
                         .entity_tilstand_repo
-                        .oppdater_dokument_tilstand(
-                            dokument_id,
-                            DokumentTilstand::FeiletPermanent,
-                            Some(&err.melding),
-                        )
+                        .oppdater_dokument_tilstand(dokument_id, DokumentTilstand::FeiletPermanent)
                         .await;
 
                     let _ = self
@@ -219,7 +211,7 @@ impl EksekverKommandoService {
         }
 
         self.entity_tilstand_repo
-            .oppdater_dokument_tilstand(dokument_id, DokumentTilstand::Ok, None)
+            .oppdater_dokument_tilstand(dokument_id, DokumentTilstand::Ok)
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 

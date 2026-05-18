@@ -4,11 +4,27 @@ use domain::eksekvering::typer::{
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandStatus};
 use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
 
+// Static outward messages for validation non-ok statuses
+const VALIDERT_BLOCKED_OUTWARD_MESSAGE: &str = "Request validation is waiting for prerequisites.";
+const VALIDERT_RETRYING_OUTWARD_MESSAGE: &str =
+    "Request validation is temporarily unavailable and will be retried.";
+const VALIDERT_ERROR_OUTWARD_MESSAGE: &str = "Request validation failed.";
+
 fn outward_message(stage: CommandStage, stage_status: CommandStageStatus) -> &'static str {
     match (stage, stage_status) {
         (CommandStage::Mottatt, CommandStageStatus::Ok) => "Request accepted for processing.",
         (CommandStage::Validert, CommandStageStatus::Ok) => "Request validated successfully.",
+        (CommandStage::Validert, CommandStageStatus::Blocked) => VALIDERT_BLOCKED_OUTWARD_MESSAGE,
+        (CommandStage::Validert, CommandStageStatus::Retrying) => VALIDERT_RETRYING_OUTWARD_MESSAGE,
+        (CommandStage::Validert, CommandStageStatus::Error) => VALIDERT_ERROR_OUTWARD_MESSAGE,
         (CommandStage::Utfores, CommandStageStatus::Venter) => "Command is queued for execution.",
+        (CommandStage::Utfores, CommandStageStatus::Retrying) => {
+            "Command execution is temporarily unavailable and will be retried."
+        }
+        (CommandStage::Utfores, CommandStageStatus::Blocked) => {
+            "Command execution is waiting for prerequisites."
+        }
+        (CommandStage::Utfores, CommandStageStatus::Error) => "Command execution failed.",
         _ => unreachable!("outward_message only supports lifecycle states without explicit detail"),
     }
 }
@@ -69,6 +85,7 @@ pub fn validert_blocked_event(
         context,
         None,
     )
+    .with_outward_message(VALIDERT_BLOCKED_OUTWARD_MESSAGE)
 }
 
 pub fn validert_retrying_event(
@@ -87,6 +104,7 @@ pub fn validert_retrying_event(
         context,
         None,
     )
+    .with_outward_message(VALIDERT_RETRYING_OUTWARD_MESSAGE)
 }
 
 pub fn validert_error_event(
@@ -105,6 +123,7 @@ pub fn validert_error_event(
         context,
         None,
     )
+    .with_outward_message(VALIDERT_ERROR_OUTWARD_MESSAGE)
 }
 
 pub fn utfores_venter_event(
@@ -134,9 +153,6 @@ pub fn utfores_ok_event(
     context: CommandLifecycleContext,
     attempt: Option<u32>,
 ) -> CommandLifecycleEvent {
-    let outward_message = detail
-        .clone()
-        .unwrap_or_else(|| "Command executed successfully.".to_string());
     status_event(
         envelope,
         CommandStatus::Ok,
@@ -147,7 +163,7 @@ pub fn utfores_ok_event(
         context,
         attempt,
     )
-    .with_outward_message(outward_message)
+    .with_outward_message("Command executed successfully.")
 }
 
 pub fn utfores_retrying_event(
@@ -168,7 +184,10 @@ pub fn utfores_retrying_event(
         context,
         attempt,
     )
-    .with_outward_message(detail)
+    .with_outward_message(outward_message(
+        CommandStage::Utfores,
+        CommandStageStatus::Retrying,
+    ))
 }
 
 pub fn utfores_blocked_event(
@@ -189,7 +208,10 @@ pub fn utfores_blocked_event(
         context,
         attempt,
     )
-    .with_outward_message(detail)
+    .with_outward_message(outward_message(
+        CommandStage::Utfores,
+        CommandStageStatus::Blocked,
+    ))
 }
 
 pub fn utfores_error_event(
@@ -210,5 +232,108 @@ pub fn utfores_error_event(
         context,
         attempt,
     )
-    .with_outward_message(detail)
+    .with_outward_message(outward_message(
+        CommandStage::Utfores,
+        CommandStageStatus::Error,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lib_schemas::skuffen::command::sak::{Arkivdel, OpprettSak};
+    use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
+    use uuid::Uuid;
+
+    fn make_test_envelope() -> CommandEnvelope<Command> {
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id: Some(Uuid::new_v4()),
+            payload: Command::OpprettSak(OpprettSak {
+                client_reference: Uuid::new_v4(),
+                sakstittel: Sakstittel("Test sak".to_string()),
+                arkivdel: Arkivdel::Tilsynsdivisjonene,
+                saksbehandler_id: "Z12345".to_string(),
+                saksbehandler_enhet: "42".to_string(),
+                ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
+                tilgang: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn validert_blocked_event_retains_detail_with_static_outward_message() {
+        let envelope = make_test_envelope();
+        let dynamic_detail = "Internal prerequisite details here".to_string();
+        let event = validert_blocked_event(
+            &envelope,
+            dynamic_detail.clone(),
+            None,
+            CommandLifecycleContext::default(),
+        );
+
+        assert_eq!(event.detail, Some(dynamic_detail));
+        assert_eq!(
+            event.outward_message,
+            Some(VALIDERT_BLOCKED_OUTWARD_MESSAGE.to_string())
+        );
+        assert_ne!(event.detail, event.outward_message);
+    }
+
+    #[test]
+    fn validert_retrying_event_retains_detail_with_static_outward_message() {
+        let envelope = make_test_envelope();
+        let dynamic_detail = "Validation service temporarily down".to_string();
+        let event = validert_retrying_event(
+            &envelope,
+            dynamic_detail.clone(),
+            None,
+            CommandLifecycleContext::default(),
+        );
+
+        assert_eq!(event.detail, Some(dynamic_detail));
+        assert_eq!(
+            event.outward_message,
+            Some(VALIDERT_RETRYING_OUTWARD_MESSAGE.to_string())
+        );
+        assert_ne!(event.detail, event.outward_message);
+    }
+
+    #[test]
+    fn validert_error_event_retains_detail_with_static_outward_message() {
+        let envelope = make_test_envelope();
+        let dynamic_detail = "Invalid field: email format".to_string();
+        let event = validert_error_event(
+            &envelope,
+            dynamic_detail.clone(),
+            None,
+            CommandLifecycleContext::default(),
+        );
+
+        assert_eq!(event.detail, Some(dynamic_detail));
+        assert_eq!(
+            event.outward_message,
+            Some(VALIDERT_ERROR_OUTWARD_MESSAGE.to_string())
+        );
+        assert_ne!(event.detail, event.outward_message);
+    }
+
+    #[test]
+    fn utfores_ok_event_keeps_detail_internal_with_static_outward_message() {
+        let envelope = make_test_envelope();
+        let dynamic_detail = Some("Detailed execution result".to_string());
+        let event = utfores_ok_event(
+            &envelope,
+            dynamic_detail.clone(),
+            CommandLifecycleContext::default(),
+            None,
+        );
+
+        assert_eq!(event.detail, dynamic_detail);
+        assert_eq!(
+            event.outward_message,
+            Some("Command executed successfully.".to_string())
+        );
+        assert_ne!(event.detail, event.outward_message);
+    }
 }

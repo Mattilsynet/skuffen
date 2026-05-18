@@ -1,4 +1,6 @@
-use crate::command::services::execution_registration::resolve_registration;
+use crate::command::services::execution_registration::{
+    command_target_for_type, resolve_registration,
+};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -6,11 +8,9 @@ use domain::eksekvering::execution::EksekveringStatus;
 use domain::eksekvering::id::SkuffenSakId;
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
-    er_ferdig, neste_handling, oensket_sluttilstand_for_journalpost, DokumentTilstand, SakTilstand,
+    planlegg_neste_handling, BlockedReason, CommandStateDecision, DokumentTilstand, DomainViolation,
 };
-use domain::eksekvering::typer::{
-    command_metadata, CommandLifecycleEvent, CommandTypeCode, EksekveringFeiltype,
-};
+use domain::eksekvering::typer::{command_metadata, CommandLifecycleEvent, CommandTypeCode};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::dokument::Dokumentform;
 
@@ -26,7 +26,7 @@ use crate::command::status::{utfores_error_event, utfores_venter_event};
 
 /// Tynn registrering inn i eksekveringssystemet for kommandoer som allerede er validert.
 ///
-/// Oppretter entity-tilstandsrader, evaluerer klarhet via `neste_handling`,
+/// Oppretter entity-tilstandsrader, evaluerer klarhet via `planlegg_neste_handling` / `CommandStateDecision`,
 /// registrerer kommandoen i `command_execution`, og publiserer `utfores::venter`
 /// når registreringen faktisk ble opprettet.
 pub struct RegistrerIEksekveringssystemService {
@@ -64,8 +64,12 @@ impl RegistrerIEksekveringssystemService {
         self.opprett_entity_tilstander(envelope, &registration)
             .await?;
 
-        let status = self
-            .evaluer_klarhet(registration.sak_id(), command_type)
+        let (status, last_detail) = self
+            .evaluer_klarhet(
+                registration.sak_id(),
+                registration.journalpost_id(),
+                command_type,
+            )
             .await?;
 
         let ny = NyKommandoEksekvering {
@@ -74,11 +78,7 @@ impl RegistrerIEksekveringssystemService {
             sak_id: registration.sak_id(),
             journalpost_id: registration.journalpost_id(),
             status,
-            last_detail: if status == EksekveringStatus::Feil {
-                Some("Tilstandsfeil ved registrering".to_string())
-            } else {
-                None
-            },
+            last_detail,
         };
 
         let resultat = self.execution_repo.opprett(ny).await?;
@@ -96,7 +96,7 @@ impl RegistrerIEksekveringssystemService {
                     .sak_id()
                     .ok_or_else(|| anyhow::anyhow!("Mangler sak_id for OpprettSak"))?;
                 self.entity_tilstand_repo
-                    .opprett_sak_tilstand(sak_id, SakTilstand::Opprettet, envelope.command_id)
+                    .opprett_sak_tilstand(sak_id, envelope.command_id)
                     .await?;
             }
             Command::OpprettInngåendeJournalpost(_) => {
@@ -123,14 +123,7 @@ impl RegistrerIEksekveringssystemService {
                 )
                 .await?;
             }
-            Command::AvsluttSak(_) => {
-                let sak_id = registration
-                    .sak_id()
-                    .ok_or_else(|| anyhow::anyhow!("Mangler sak_id for AvsluttSak"))?;
-                self.entity_tilstand_repo
-                    .oppdater_sak_oensket_tilstand(sak_id, SakTilstand::Avsluttet)
-                    .await?;
-            }
+            Command::AvsluttSak(_) => {}
             Command::SettSaksansvarlig(cmd) => {
                 let sak_id = registration
                     .sak_id()
@@ -166,7 +159,6 @@ impl RegistrerIEksekveringssystemService {
                 sak_id,
                 journalposttype,
                 false,
-                oensket_sluttilstand_for_journalpost(journalposttype),
                 envelope.command_id,
             )
             .await?;
@@ -205,40 +197,57 @@ impl RegistrerIEksekveringssystemService {
     async fn evaluer_klarhet(
         &self,
         sak_id: Option<SkuffenSakId>,
+        journalpost_id: Option<domain::eksekvering::id::SkuffenJournalpostId>,
         command_type: CommandTypeCode,
-    ) -> Result<EksekveringStatus> {
+    ) -> Result<(EksekveringStatus, Option<String>)> {
         let Some(sak_id) = sak_id else {
             return Err(anyhow::anyhow!("Mangler sak_id"));
         };
 
         // OpprettSak: always Klar (we just created tilstand row as IkkeRealisert → Opprettet)
         if command_type == CommandTypeCode::OpprettSak {
-            return Ok(EksekveringStatus::Klar);
+            return Ok((EksekveringStatus::Klar, None));
         }
 
         let Some(sak_med_barn) = self.entity_tilstand_repo.hent_sak_med_barn(sak_id).await? else {
-            return Ok(EksekveringStatus::BlokkertVenter);
+            return Ok((
+                EksekveringStatus::BlokkertVenter,
+                Some(blocked_detail(BlockedReason::EntityMissing)),
+            ));
         };
 
-        match neste_handling(command_type, &sak_med_barn) {
-            Ok(Some(_)) => Ok(EksekveringStatus::Klar),
-            Ok(None) => {
-                if er_ferdig(&sak_med_barn) {
-                    Ok(EksekveringStatus::Ok)
-                } else {
-                    Ok(EksekveringStatus::BlokkertVenter)
+        let target = command_target_for_type(command_type, journalpost_id)?;
+
+        Ok(
+            match planlegg_neste_handling(command_type, target, &sak_med_barn) {
+                CommandStateDecision::Ready(_) => (EksekveringStatus::Klar, None),
+                CommandStateDecision::Blocked(reason) => (
+                    EksekveringStatus::BlokkertVenter,
+                    Some(blocked_detail(reason)),
+                ),
+                CommandStateDecision::Done => (EksekveringStatus::Ok, None),
+                CommandStateDecision::Invalid(violation) => {
+                    (EksekveringStatus::Feil, Some(invalid_detail(violation)))
                 }
-            }
-            Err(feil) => match feil.feiltype {
-                EksekveringFeiltype::Blocked => Ok(EksekveringStatus::BlokkertVenter),
-                _ => Ok(EksekveringStatus::Feil),
             },
-        }
+        )
     }
 
     async fn emit_status(&self, event: CommandLifecycleEvent) -> Result<()> {
         self.status_publisher.publiser_status(event).await
     }
+}
+
+fn blocked_detail(reason: BlockedReason) -> String {
+    format!(
+        "{} trigger_category={}",
+        reason.safe_detail(),
+        reason.trigger_category().as_code()
+    )
+}
+
+fn invalid_detail(violation: DomainViolation) -> String {
+    violation.safe_detail().to_string()
 }
 
 fn dokumenter_for_envelope(

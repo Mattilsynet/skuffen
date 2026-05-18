@@ -14,7 +14,6 @@ pub trait EntityTilstandRepository: Send + Sync {
     async fn opprett_sak_tilstand(
         &self,
         sak_id: SkuffenSakId,
-        oensket_tilstand: SakTilstand,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error>;
 
@@ -24,13 +23,6 @@ pub trait EntityTilstandRepository: Send + Sync {
         tilstand: SakTilstand,
         sikri_id: Option<i64>,
         saksnummer: Option<&str>,
-        feil_detalj: Option<&str>,
-    ) -> Result<(), anyhow::Error>;
-
-    async fn oppdater_sak_oensket_tilstand(
-        &self,
-        sak_id: SkuffenSakId,
-        oensket_tilstand: SakTilstand,
     ) -> Result<(), anyhow::Error>;
 
     async fn oppdater_oensket_saksansvarlig(
@@ -54,7 +46,6 @@ pub trait EntityTilstandRepository: Send + Sync {
         sak_id: SkuffenSakId,
         journalposttype: JournalpostType,
         med_utsending: bool,
-        oensket_tilstand: JournalpostTilstand,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error>;
 
@@ -64,8 +55,12 @@ pub trait EntityTilstandRepository: Send + Sync {
         tilstand: JournalpostTilstand,
         sikri_id: Option<i64>,
         journalpostnummer: Option<i32>,
-        feil_detalj: Option<&str>,
     ) -> Result<(), anyhow::Error>;
+
+    async fn hent_sak_id_fra_journalpost_id(
+        &self,
+        journalpost_id: SkuffenJournalpostId,
+    ) -> Result<Option<SkuffenSakId>, anyhow::Error>;
 
     // Dokument
     async fn opprett_dokument_tilstand(
@@ -82,8 +77,12 @@ pub trait EntityTilstandRepository: Send + Sync {
         &self,
         dokument_id: SkuffenDokumentId,
         tilstand: DokumentTilstand,
-        feil_detalj: Option<&str>,
     ) -> Result<(), anyhow::Error>;
+
+    async fn hent_journalpost_id_fra_dokument_id(
+        &self,
+        dokument_id: SkuffenDokumentId,
+    ) -> Result<Option<SkuffenJournalpostId>, anyhow::Error>;
 
     async fn oppdater_rendered_dokument_referanse(
         &self,

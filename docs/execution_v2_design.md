@@ -51,7 +51,7 @@ Ikke tillatt:
 
 ## Årsakstyper
 
-Blokkering i `blokkert_venter` er implisitt — `neste_handling` returnerer `None` eller `Blocked` fordi prerequisites ikke er oppfylt. Det finnes ikke lenger eksplisitte `wait_kind`-årsakstyper lagret i databasen. Klarhet vurderes ved å laste `SakMedBarn` og inspisere entity tilstand direkte.
+Blokkering i `blokkert_venter` er implisitt — `planlegg_neste_handling` returnerer `CommandStateDecision::Blocked` når prerequisites ikke er oppfylt. Det finnes ikke lenger eksplisitte `wait_kind`-årsakstyper lagret i databasen. Klarhet vurderes ved å laste `SakMedBarn` og inspisere entity tilstand direkte.
 
 ## Guard vs readiness evaluator
 
@@ -115,7 +115,7 @@ Wake-up skal bruke samme `evaluer_klarhet()` som registrering.
 
 Hvis wake-up reevaluerer en ventende kommando til terminal `feil`, skal Skuffen også publisere terminal outward status. `done` publiseres bare hvis kommandoen allerede har observert outward `utfores::venter`.
 
-Wake-up må også være retry-tolerant: hvis et step allerede er fullfort i entity tilstand og `neste_handling` derfor hopper over det, skal relevante wake-up scopes fortsatt trigges pa nytt.
+Wake-up må også være retry-tolerant: hvis et step allerede er fullført i entity tilstand og `planlegg_neste_handling` derfor returnerer `Done`, skal relevante wake-up scopes fortsatt trigges på nytt.
 
 ## Startup recovery og singleton executor
 
@@ -130,7 +130,7 @@ Dette er tilstrekkelig fordi systemet har nøyaktig én executor.
 
 ## Step idempotency og reconcile-strategi
 
-Execution v2 baserer seg på entity tilstand for replay/skip. Skip-logikken er basert på `neste_handling`: operasjonen returneres ikke hvis entity allerede er i riktig tilstand.
+Execution v2 baserer seg på entity tilstand for replay/skip. Skip-logikken er basert på `planlegg_neste_handling`: `Done` returneres når entity allerede er i riktig tilstand.
 
 Systemet bruker følgende skip-regler:
 

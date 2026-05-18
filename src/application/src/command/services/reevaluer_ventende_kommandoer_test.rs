@@ -9,10 +9,11 @@ use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
 };
-use lib_schemas::skuffen::command::sak::AvsluttSak;
+use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::dokument::Dokument;
 use lib_schemas::skuffen::dokument::{Dokumentform, Felt};
 use lib_schemas::skuffen::query::queries::SakKey;
+use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -44,7 +45,6 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
     async fn opprett_sak_tilstand(
         &self,
         _sak_id: SkuffenSakId,
-        _oensket_tilstand: SakTilstand,
         _command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
         Ok(())
@@ -55,14 +55,6 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         _tilstand: SakTilstand,
         _sikri_id: Option<i64>,
         _saksnummer: Option<&str>,
-        _feil_detalj: Option<&str>,
-    ) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-    async fn oppdater_sak_oensket_tilstand(
-        &self,
-        _sak_id: SkuffenSakId,
-        _oensket_tilstand: SakTilstand,
     ) -> Result<(), anyhow::Error> {
         Ok(())
     }
@@ -88,7 +80,6 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         _sak_id: SkuffenSakId,
         _journalposttype: JournalpostType,
         _med_utsending: bool,
-        _oensket_tilstand: JournalpostTilstand,
         _command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
         Ok(())
@@ -99,10 +90,46 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         _tilstand: JournalpostTilstand,
         _sikri_id: Option<i64>,
         _journalpostnummer: Option<i32>,
-        _feil_detalj: Option<&str>,
     ) -> Result<(), anyhow::Error> {
         Ok(())
     }
+    async fn hent_sak_id_fra_journalpost_id(
+        &self,
+        journalpost_id: SkuffenJournalpostId,
+    ) -> Result<Option<SkuffenSakId>, anyhow::Error> {
+        let journalpost_id = Uuid::from(journalpost_id);
+        Ok(self
+            .sak_med_barn
+            .lock()
+            .unwrap()
+            .values()
+            .find(|sak| {
+                sak.journalposter
+                    .iter()
+                    .any(|journalpost| journalpost.journalpost_id.0 == journalpost_id)
+            })
+            .map(|sak| sak.sak_id))
+    }
+
+    async fn hent_journalpost_id_fra_dokument_id(
+        &self,
+        dokument_id: SkuffenDokumentId,
+    ) -> Result<Option<SkuffenJournalpostId>, anyhow::Error> {
+        Ok(self
+            .sak_med_barn
+            .lock()
+            .unwrap()
+            .values()
+            .flat_map(|sak| &sak.journalposter)
+            .find(|journalpost| {
+                journalpost
+                    .dokumenter
+                    .iter()
+                    .any(|dokument| dokument.dokument_id == dokument_id)
+            })
+            .map(|journalpost| journalpost.journalpost_id))
+    }
+
     async fn opprett_dokument_tilstand(
         &self,
         _dokument_id: SkuffenDokumentId,
@@ -118,7 +145,6 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         &self,
         _dokument_id: SkuffenDokumentId,
         _tilstand: DokumentTilstand,
-        _feil_detalj: Option<&str>,
     ) -> Result<(), anyhow::Error> {
         Ok(())
     }
@@ -163,6 +189,7 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
 struct FakeExecutionData {
     blokkert_venter_for_sak: HashMap<Uuid, Vec<EksekveringKommando>>,
     oppdatert_til_klar: Vec<Uuid>,
+    oppdatert_blokkert_detail: Vec<(Uuid, String)>,
     oppdatert_til_feil: Vec<(Uuid, String)>,
 }
 
@@ -245,6 +272,10 @@ impl CommandExecutionRepository for FakeExecutionRepository {
     ) -> Result<(), anyhow::Error> {
         Ok(())
     }
+    async fn marker_klar(&self, _command_id: Uuid, _attempt_no: i32) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
     async fn marker_ok(&self, _command_id: Uuid, _attempt_no: i32) -> Result<(), anyhow::Error> {
         Ok(())
     }
@@ -296,19 +327,25 @@ impl CommandExecutionRepository for FakeExecutionRepository {
             .unwrap_or_default())
     }
 
-    async fn marker_blokkert_venter_til_klar(
-        &self,
-        _command_id: Uuid,
-    ) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
     async fn oppdater_til_klar(&self, command_id: Uuid) -> Result<(), anyhow::Error> {
         self.data
             .lock()
             .unwrap()
             .oppdatert_til_klar
             .push(command_id);
+        Ok(())
+    }
+
+    async fn oppdater_blokkert_detail(
+        &self,
+        command_id: Uuid,
+        detalj: &str,
+    ) -> Result<(), anyhow::Error> {
+        self.data
+            .lock()
+            .unwrap()
+            .oppdatert_blokkert_detail
+            .push((command_id, detalj.to_string()));
         Ok(())
     }
 
@@ -472,13 +509,12 @@ async fn etter_sak_endret_gjor_journalpostkommando_klar_nar_saksnummer_kommer() 
     }
 
     // Sak is Opprettet with saksnummer, journalpost is IkkeRealisert
-    // → neste_handling returns OpprettJournalpost → command becomes Klar
+    // → planlegg_neste_handling returnerer Ready(OpprettJournalpost) → command blir Klar
     entity_tilstand_repo.sak_med_barn.lock().unwrap().insert(
         sak_id,
         SakMedBarn {
             sak_id: SkuffenSakId::from(sak_id),
             tilstand: SakTilstand::Opprettet,
-            oensket_tilstand: SakTilstand::Opprettet,
             sikri_id: Some(100),
             saksnummer: Some("2026/1".to_string()),
             oensket_saksansvarlig: None,
@@ -486,7 +522,6 @@ async fn etter_sak_endret_gjor_journalpostkommando_klar_nar_saksnummer_kommer() 
             journalposter: vec![JournalpostMedDokumenter {
                 journalpost_id: SkuffenJournalpostId::from(journalpost_id),
                 tilstand: JournalpostTilstand::IkkeRealisert,
-                oensket_tilstand: JournalpostTilstand::Journalfoert,
                 sikri_id: None,
                 journalpostnummer: None,
                 journalposttype: JournalpostType::InterntNotat,
@@ -539,6 +574,331 @@ async fn etter_sak_endret_gjor_journalpostkommando_klar_nar_saksnummer_kommer() 
 }
 
 #[tokio::test]
+async fn etter_sak_endret_gjor_blokkert_command_klar_nar_den_reevaluerer_til_done() {
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_tilstand_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+    let done_publisher = FakeDonePublisher::default();
+
+    let sak_client_reference = Uuid::new_v4();
+    let sak_id = Uuid::new_v4();
+    let command_id = Uuid::new_v4();
+
+    id_mapping_repo
+        .data
+        .lock()
+        .unwrap()
+        .client_to_skuffen
+        .insert(sak_client_reference, sak_id);
+
+    // Sak er allerede opprettet med saksnummer. planlegg_neste_handling returnerer
+    // Done for OpprettSak, men wake-up flytter command til Klar slik at executor
+    // kan publisere terminal success/done.
+    entity_tilstand_repo.sak_med_barn.lock().unwrap().insert(
+        sak_id,
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(sak_id),
+            tilstand: SakTilstand::Opprettet,
+            sikri_id: Some(100),
+            saksnummer: Some("2026/1".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
+            journalposter: vec![],
+        },
+    );
+
+    execution_repo
+        .data
+        .lock()
+        .unwrap()
+        .blokkert_venter_for_sak
+        .insert(
+            sak_id,
+            vec![EksekveringKommando {
+                command_id,
+                envelope: make_opprett_sak_command(sak_client_reference),
+                attempt_no: 0,
+                utfores_venter_publisert: true,
+            }],
+        );
+
+    let service = ReevaluerVentendeKommandoerService::new(
+        Box::new(execution_repo.clone()),
+        Box::new(entity_tilstand_repo),
+        Box::new(id_mapping_repo),
+        Box::new(status_publisher),
+        Box::new(done_publisher),
+        Box::new(FakeStatusProjector),
+    );
+
+    service
+        .etter_sak_endret(SkuffenSakId::from(sak_id))
+        .await
+        .unwrap();
+
+    let data = execution_repo.data.lock().unwrap();
+    assert_eq!(data.oppdatert_til_klar, vec![command_id]);
+    assert!(data.oppdatert_til_feil.is_empty());
+}
+
+#[tokio::test]
+async fn etter_journalpost_endret_gjor_avslutt_sak_klar_nar_journalpost_er_ferdig() {
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_tilstand_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+    let done_publisher = FakeDonePublisher::default();
+
+    let sak_client_reference = Uuid::new_v4();
+    let sak_id = Uuid::new_v4();
+    let journalpost_id = Uuid::new_v4();
+    let command_id = Uuid::new_v4();
+
+    id_mapping_repo
+        .data
+        .lock()
+        .unwrap()
+        .client_to_skuffen
+        .insert(sak_client_reference, sak_id);
+
+    entity_tilstand_repo.sak_med_barn.lock().unwrap().insert(
+        sak_id,
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(sak_id),
+            tilstand: SakTilstand::Opprettet,
+            sikri_id: Some(100),
+            saksnummer: Some("2026/1".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
+            journalposter: vec![JournalpostMedDokumenter {
+                journalpost_id: SkuffenJournalpostId::from(journalpost_id),
+                tilstand: JournalpostTilstand::Journalfoert,
+                sikri_id: Some(200),
+                journalpostnummer: Some(42),
+                journalposttype: JournalpostType::InterntNotat,
+                med_utsending: false,
+                dokumenter: vec![DokumentMedTilstand {
+                    dokument_id: SkuffenDokumentId::from(Uuid::new_v4()),
+                    tilstand: DokumentTilstand::Ok,
+                    kilde: DokumentKildeTilstand::Bytes,
+                }],
+            }],
+        },
+    );
+
+    execution_repo
+        .data
+        .lock()
+        .unwrap()
+        .blokkert_venter_for_sak
+        .insert(
+            sak_id,
+            vec![EksekveringKommando {
+                command_id,
+                envelope: make_avslutt_sak_command(sak_client_reference),
+                attempt_no: 0,
+                utfores_venter_publisert: true,
+            }],
+        );
+
+    let service = ReevaluerVentendeKommandoerService::new(
+        Box::new(execution_repo.clone()),
+        Box::new(entity_tilstand_repo),
+        Box::new(id_mapping_repo),
+        Box::new(status_publisher),
+        Box::new(done_publisher),
+        Box::new(FakeStatusProjector),
+    );
+
+    service
+        .etter_journalpost_endret(SkuffenJournalpostId::from(journalpost_id))
+        .await
+        .unwrap();
+
+    let data = execution_repo.data.lock().unwrap();
+    assert_eq!(data.oppdatert_til_klar, vec![command_id]);
+    assert!(data.oppdatert_til_feil.is_empty());
+}
+
+#[tokio::test]
+async fn etter_sak_endret_gjor_avslutt_sak_klar_naar_saksansvarlig_matcher() {
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_tilstand_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+    let done_publisher = FakeDonePublisher::default();
+
+    let sak_client_reference = Uuid::new_v4();
+    let sak_id = Uuid::new_v4();
+    let command_id = Uuid::new_v4();
+
+    id_mapping_repo
+        .data
+        .lock()
+        .unwrap()
+        .client_to_skuffen
+        .insert(sak_client_reference, sak_id);
+
+    entity_tilstand_repo.sak_med_barn.lock().unwrap().insert(
+        sak_id,
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(sak_id),
+            tilstand: SakTilstand::Opprettet,
+            sikri_id: Some(100),
+            saksnummer: Some("2026/1".to_string()),
+            oensket_saksansvarlig: Some(domain::eksekvering::tilstand::Saksansvarlig {
+                saksbehandler_id: "Z12345".to_string(),
+                enhet: "42".to_string(),
+            }),
+            naavaerende_saksansvarlig: Some(domain::eksekvering::tilstand::Saksansvarlig {
+                saksbehandler_id: "Z12345".to_string(),
+                enhet: "42".to_string(),
+            }),
+            journalposter: vec![],
+        },
+    );
+
+    execution_repo
+        .data
+        .lock()
+        .unwrap()
+        .blokkert_venter_for_sak
+        .insert(
+            sak_id,
+            vec![EksekveringKommando {
+                command_id,
+                envelope: make_avslutt_sak_command(sak_client_reference),
+                attempt_no: 0,
+                utfores_venter_publisert: true,
+            }],
+        );
+
+    let service = ReevaluerVentendeKommandoerService::new(
+        Box::new(execution_repo.clone()),
+        Box::new(entity_tilstand_repo),
+        Box::new(id_mapping_repo),
+        Box::new(status_publisher),
+        Box::new(done_publisher),
+        Box::new(FakeStatusProjector),
+    );
+
+    service
+        .etter_sak_endret(SkuffenSakId::from(sak_id))
+        .await
+        .unwrap();
+
+    let data = execution_repo.data.lock().unwrap();
+    assert_eq!(data.oppdatert_til_klar, vec![command_id]);
+    assert!(data.oppdatert_blokkert_detail.is_empty());
+    assert!(data.oppdatert_til_feil.is_empty());
+}
+
+#[tokio::test]
+async fn etter_sak_endret_holder_avslutt_sak_blokkert_naar_saksansvarlig_mangler() {
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_tilstand_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+    let done_publisher = FakeDonePublisher::default();
+
+    let sak_client_reference = Uuid::new_v4();
+    let sak_id = Uuid::new_v4();
+    let command_id = Uuid::new_v4();
+
+    id_mapping_repo
+        .data
+        .lock()
+        .unwrap()
+        .client_to_skuffen
+        .insert(sak_client_reference, sak_id);
+
+    entity_tilstand_repo.sak_med_barn.lock().unwrap().insert(
+        sak_id,
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(sak_id),
+            tilstand: SakTilstand::Opprettet,
+            sikri_id: Some(100),
+            saksnummer: Some("2026/1".to_string()),
+            oensket_saksansvarlig: Some(domain::eksekvering::tilstand::Saksansvarlig {
+                saksbehandler_id: "Z12345".to_string(),
+                enhet: "42".to_string(),
+            }),
+            naavaerende_saksansvarlig: None,
+            journalposter: vec![],
+        },
+    );
+
+    execution_repo
+        .data
+        .lock()
+        .unwrap()
+        .blokkert_venter_for_sak
+        .insert(
+            sak_id,
+            vec![EksekveringKommando {
+                command_id,
+                envelope: make_avslutt_sak_command(sak_client_reference),
+                attempt_no: 0,
+                utfores_venter_publisert: false,
+            }],
+        );
+
+    let service = ReevaluerVentendeKommandoerService::new(
+        Box::new(execution_repo.clone()),
+        Box::new(entity_tilstand_repo),
+        Box::new(id_mapping_repo),
+        Box::new(status_publisher),
+        Box::new(done_publisher),
+        Box::new(FakeStatusProjector),
+    );
+
+    service
+        .etter_sak_endret(SkuffenSakId::from(sak_id))
+        .await
+        .unwrap();
+
+    let data = execution_repo.data.lock().unwrap();
+    assert!(data.oppdatert_til_klar.is_empty());
+    assert_eq!(
+        data.oppdatert_blokkert_detail,
+        vec![(
+            command_id,
+            "blocked_reason=saksansvarlig_ikke_satt trigger_category=saksansvarlig_oppdatert"
+                .to_string()
+        )]
+    );
+    assert!(data.oppdatert_til_feil.is_empty());
+}
+
+#[tokio::test]
+async fn etter_journalpost_endret_noop_nar_journalpost_mangler() {
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_tilstand_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+    let done_publisher = FakeDonePublisher::default();
+
+    let service = ReevaluerVentendeKommandoerService::new(
+        Box::new(execution_repo.clone()),
+        Box::new(entity_tilstand_repo),
+        Box::new(id_mapping_repo),
+        Box::new(status_publisher),
+        Box::new(done_publisher),
+        Box::new(FakeStatusProjector),
+    );
+
+    service
+        .etter_journalpost_endret(SkuffenJournalpostId::from(Uuid::new_v4()))
+        .await
+        .unwrap();
+
+    let data = execution_repo.data.lock().unwrap();
+    assert!(data.oppdatert_til_klar.is_empty());
+    assert!(data.oppdatert_til_feil.is_empty());
+}
+
+#[tokio::test]
 async fn etter_sak_endret_gir_feil_ved_permanent_feilet_dokument() {
     let execution_repo = FakeExecutionRepository::default();
     let entity_tilstand_repo = FakeEntityTilstandRepository::default();
@@ -559,13 +919,12 @@ async fn etter_sak_endret_gir_feil_ved_permanent_feilet_dokument() {
         .insert(sak_client_reference, sak_id);
 
     // Sak Opprettet, ønsker Avsluttet, men journalpost har feilet dokument permanent.
-    // → neste_handling returns Err(Irrecoverable) → command transitioned to feil
+    // → planlegg_neste_handling returnerer Invalid → command blir Feil
     entity_tilstand_repo.sak_med_barn.lock().unwrap().insert(
         sak_id,
         SakMedBarn {
             sak_id: SkuffenSakId::from(sak_id),
             tilstand: SakTilstand::Opprettet,
-            oensket_tilstand: SakTilstand::Avsluttet,
             sikri_id: Some(100),
             saksnummer: Some("2026/1".to_string()),
             oensket_saksansvarlig: None,
@@ -573,7 +932,6 @@ async fn etter_sak_endret_gir_feil_ved_permanent_feilet_dokument() {
             journalposter: vec![JournalpostMedDokumenter {
                 journalpost_id: SkuffenJournalpostId::from(journalpost_id),
                 tilstand: JournalpostTilstand::DokumenterUnderArbeid,
-                oensket_tilstand: JournalpostTilstand::Journalfoert,
                 sikri_id: Some(200),
                 journalpostnummer: Some(42),
                 journalposttype: JournalpostType::InterntNotat,
@@ -616,7 +974,7 @@ async fn etter_sak_endret_gir_feil_ved_permanent_feilet_dokument() {
         .await
         .unwrap();
 
-    // Irrecoverable error from neste_handling → command transitioned to feil, terminal event published
+    // Invalid fra planlegg_neste_handling → command blir Feil og terminal event publiseres
     let data = execution_repo.data.lock().unwrap();
     assert!(data.oppdatert_til_klar.is_empty());
     assert_eq!(data.oppdatert_til_feil.len(), 1);
@@ -625,6 +983,166 @@ async fn etter_sak_endret_gir_feil_ved_permanent_feilet_dokument() {
     let events = status_publisher.events.lock().unwrap();
     assert_eq!(events.len(), 1);
     assert!(events[0].terminal);
+}
+
+#[tokio::test]
+async fn etter_sak_endret_oppdaterer_blocked_detail_nar_command_fortsatt_er_blokkert() {
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_tilstand_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+    let done_publisher = FakeDonePublisher::default();
+
+    let sak_client_reference = Uuid::new_v4();
+    let sak_id = Uuid::new_v4();
+    let command_id = Uuid::new_v4();
+
+    id_mapping_repo
+        .data
+        .lock()
+        .unwrap()
+        .client_to_skuffen
+        .insert(sak_client_reference, sak_id);
+
+    entity_tilstand_repo.sak_med_barn.lock().unwrap().insert(
+        sak_id,
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(sak_id),
+            tilstand: SakTilstand::IkkeRealisert,
+            sikri_id: None,
+            saksnummer: None,
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
+            journalposter: vec![],
+        },
+    );
+
+    execution_repo
+        .data
+        .lock()
+        .unwrap()
+        .blokkert_venter_for_sak
+        .insert(
+            sak_id,
+            vec![EksekveringKommando {
+                command_id,
+                envelope: make_avslutt_sak_command(sak_client_reference),
+                attempt_no: 0,
+                utfores_venter_publisert: false,
+            }],
+        );
+
+    let service = ReevaluerVentendeKommandoerService::new(
+        Box::new(execution_repo.clone()),
+        Box::new(entity_tilstand_repo),
+        Box::new(id_mapping_repo),
+        Box::new(status_publisher),
+        Box::new(done_publisher),
+        Box::new(FakeStatusProjector),
+    );
+
+    service
+        .etter_sak_endret(SkuffenSakId::from(sak_id))
+        .await
+        .unwrap();
+
+    let data = execution_repo.data.lock().unwrap();
+    assert!(data.oppdatert_til_klar.is_empty());
+    assert_eq!(
+        data.oppdatert_blokkert_detail,
+        vec![(
+            command_id,
+            "blocked_reason=saksnummer_mangler trigger_category=sak_fakta_endret".to_string()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn etter_dokument_endret_gjor_eierkommando_klar_og_dekker_sak_wakeup() {
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_tilstand_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+    let done_publisher = FakeDonePublisher::default();
+
+    let sak_client_reference = Uuid::new_v4();
+    let sak_id = Uuid::new_v4();
+    let journalpost_client_reference = Uuid::new_v4();
+    let journalpost_id = Uuid::new_v4();
+    let dokument_client_reference = Uuid::new_v4();
+    let dokument_id = Uuid::new_v4();
+    let command_id = Uuid::new_v4();
+
+    {
+        let mut data = id_mapping_repo.data.lock().unwrap();
+        data.client_to_skuffen.insert(sak_client_reference, sak_id);
+        data.client_to_skuffen
+            .insert(journalpost_client_reference, journalpost_id);
+        data.client_to_skuffen
+            .insert(dokument_client_reference, dokument_id);
+    }
+
+    entity_tilstand_repo.sak_med_barn.lock().unwrap().insert(
+        sak_id,
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(sak_id),
+            tilstand: SakTilstand::Opprettet,
+            sikri_id: Some(100),
+            saksnummer: Some("2026/1".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
+            journalposter: vec![JournalpostMedDokumenter {
+                journalpost_id: SkuffenJournalpostId::from(journalpost_id),
+                tilstand: JournalpostTilstand::Opprettet,
+                sikri_id: Some(200),
+                journalpostnummer: Some(42),
+                journalposttype: JournalpostType::InterntNotat,
+                med_utsending: false,
+                dokumenter: vec![DokumentMedTilstand {
+                    dokument_id: SkuffenDokumentId::from(dokument_id),
+                    tilstand: DokumentTilstand::Ok,
+                    kilde: DokumentKildeTilstand::Bytes,
+                }],
+            }],
+        },
+    );
+
+    execution_repo
+        .data
+        .lock()
+        .unwrap()
+        .blokkert_venter_for_sak
+        .insert(
+            sak_id,
+            vec![EksekveringKommando {
+                command_id,
+                envelope: make_internt_notat_command(
+                    journalpost_client_reference,
+                    sak_client_reference,
+                    dokument_client_reference,
+                ),
+                attempt_no: 0,
+                utfores_venter_publisert: true,
+            }],
+        );
+
+    let service = ReevaluerVentendeKommandoerService::new(
+        Box::new(execution_repo.clone()),
+        Box::new(entity_tilstand_repo),
+        Box::new(id_mapping_repo),
+        Box::new(status_publisher),
+        Box::new(done_publisher),
+        Box::new(FakeStatusProjector),
+    );
+
+    service
+        .etter_dokument_endret(SkuffenDokumentId::from(dokument_id))
+        .await
+        .unwrap();
+
+    let data = execution_repo.data.lock().unwrap();
+    assert_eq!(data.oppdatert_til_klar, vec![command_id]);
+    assert!(data.oppdatert_til_feil.is_empty());
 }
 
 fn make_internt_notat_command(
@@ -654,6 +1172,22 @@ fn make_internt_notat_command(
                 sak_key: SakKey::ClientReference(sak_client_reference),
                 kildesystem: None,
             },
+        }),
+    }
+}
+
+fn make_opprett_sak_command(sak_client_reference: Uuid) -> CommandEnvelope<Command> {
+    CommandEnvelope {
+        command_id: Uuid::new_v4(),
+        correlation_id: Some(Uuid::new_v4()),
+        payload: Command::OpprettSak(OpprettSak {
+            client_reference: sak_client_reference,
+            sakstittel: Sakstittel("Test sak".to_string()),
+            ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
+            arkivdel: Arkivdel::Tilsynsdivisjonene,
+            saksbehandler_id: "Z12345".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            tilgang: None,
         }),
     }
 }

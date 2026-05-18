@@ -1,5 +1,7 @@
 use anyhow::Result;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
+use domain::eksekvering::tilstand::CommandTarget;
+use domain::eksekvering::typer::CommandTypeCode;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::JournalpostCommon;
 use lib_schemas::skuffen::command::sak::{AvsluttSak, OpprettSak};
@@ -54,6 +56,22 @@ impl ResolvedRegistration {
         self.journalpost
             .as_ref()
             .map(|journalpost| journalpost.journalpost_id)
+    }
+}
+
+pub(crate) fn command_target_for_type(
+    command_type: CommandTypeCode,
+    journalpost_id: Option<SkuffenJournalpostId>,
+) -> Result<CommandTarget> {
+    match command_type {
+        CommandTypeCode::OpprettSak
+        | CommandTypeCode::AvsluttSak
+        | CommandTypeCode::SettSaksansvarlig => Ok(CommandTarget::Sak),
+        CommandTypeCode::OpprettInngaaendeJournalpost
+        | CommandTypeCode::OpprettUtgaaendeJournalpost
+        | CommandTypeCode::OpprettInterntNotatJournalpost => journalpost_id
+            .map(CommandTarget::Journalpost)
+            .ok_or_else(|| anyhow::anyhow!("Mangler journalpost_id for journalpost-kommando")),
     }
 }
 

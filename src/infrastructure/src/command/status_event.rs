@@ -29,12 +29,10 @@ pub fn to_public_status_event(event: &CommandLifecycleEvent) -> SkuffenStatusEve
         status: status_for(event.stage_status),
         terminal: event.terminal,
         error_code: event.error_code.clone(),
-        message: event.outward_message.clone().unwrap_or_else(|| {
-            event
-                .detail
-                .clone()
-                .unwrap_or_else(|| event.message.clone())
-        }),
+        message: event
+            .outward_message
+            .clone()
+            .unwrap_or_else(|| event.message.clone()),
         attempt: event.attempt,
         saksnummer: event
             .context
@@ -96,8 +94,59 @@ mod tests {
         assert_eq!(outward.status, SkuffenStatus::Ok);
         assert!(outward.terminal);
         assert_eq!(outward.error_code, None);
-        assert_eq!(outward.message, "Sak opprettet.");
+        assert_eq!(outward.message, "utfores::ok");
         assert_eq!(outward.saksnummer.unwrap().as_str(), "2026/123");
+    }
+
+    #[test]
+    fn does_not_expose_internal_detail_without_outward_message() {
+        let event = CommandLifecycleEvent::new(
+            CommandLifecycleMetadata::new(
+                Uuid::new_v4(),
+                CommandTypeCode::OpprettInterntNotatJournalpost,
+                CommandEntityType::Journalpost,
+            ),
+            None,
+            CommandStatus::Error,
+            CommandStage::Utfores,
+            CommandStageStatus::Error,
+            Some(SkuffenStatusErrorCode::ProcessingFailed),
+            Some("Sikri responded with internal archive detail".to_string()),
+            CommandLifecycleContext::default(),
+            Some(3),
+        );
+
+        let outward = to_public_status_event(&event);
+
+        assert_eq!(outward.message, "utfores::error");
+        assert_ne!(
+            outward.message,
+            "Sikri responded with internal archive detail"
+        );
+    }
+
+    #[test]
+    fn uses_outward_message_when_provided() {
+        let event = CommandLifecycleEvent::new(
+            CommandLifecycleMetadata::new(
+                Uuid::new_v4(),
+                CommandTypeCode::OpprettInterntNotatJournalpost,
+                CommandEntityType::Journalpost,
+            ),
+            None,
+            CommandStatus::Error,
+            CommandStage::Utfores,
+            CommandStageStatus::Error,
+            Some(SkuffenStatusErrorCode::ProcessingFailed),
+            Some("Sikri responded with internal archive detail".to_string()),
+            CommandLifecycleContext::default(),
+            Some(3),
+        )
+        .with_outward_message("Command execution failed.");
+
+        let outward = to_public_status_event(&event);
+
+        assert_eq!(outward.message, "Command execution failed.");
     }
 
     #[test]

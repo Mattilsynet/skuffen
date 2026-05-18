@@ -1,14 +1,14 @@
 # SKU-0004. Dokument DTO og ekstern skjemakontrakt
 
 Date: 2026-05-13
-Last-reviewed: 2026-05-13
+Last-reviewed: 2026-05-18
 Tier: B
 Status: Proposed
 Crates: skuffen, domain, application
 
 ## Related
 
-References: SKU-0002
+References: SKU-0007
 
 ## Context
 
@@ -26,7 +26,7 @@ R3 [5]: `Dokumentform::HtmlTemplate` skal representere en opplastet HTML-mal med
 
 R4 [5]: `Felt` skal være del av ekstern wire-kontrakt, og v1 støtter `Felt::Saksnummer` som korresponderer med HTML-tokenet `{{saksnummer}}`.
 
-R5 [5]: `felter`-deklarasjonen skal beholdes fordi readiness vurderes fra kommandoens data, mens HTML-tokenene brukes til render-time validering og substitusjon.
+R5 [5]: `felter`-deklarasjonen skal beholdes fordi `CommandStateDecision` vurderer readiness fra kommandoens data og facts, mens HTML-tokenene brukes til render-time validering og substitusjon.
 
 R6 [5]: Wire-JSON skal følge default serde med eksternt taggede enums; ukjente `Dokumentform`- og `Felt`-varianter skal avvises uten fallback-variant.
 

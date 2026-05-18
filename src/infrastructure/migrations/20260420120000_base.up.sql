@@ -45,17 +45,13 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TABLE sak_tilstand (
     sak_id UUID PRIMARY KEY,
     tilstand VARCHAR(20) NOT NULL,
-    oensket_tilstand VARCHAR(20) NOT NULL,
     sikri_id BIGINT NULL,
     saksnummer VARCHAR(64) NULL,
     opprettet_av_command_id UUID NOT NULL,
-    feil_detalj TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (tilstand IN ('ikke_realisert', 'opprettet', 'avsluttet', 'feilet_permanent')),
-    CHECK (oensket_tilstand IN ('opprettet', 'avsluttet')),
-    CHECK (tilstand <> 'avsluttet' OR saksnummer IS NOT NULL),
-    CHECK (tilstand <> 'feilet_permanent' OR feil_detalj IS NOT NULL)
+    CHECK (tilstand <> 'avsluttet' OR saksnummer IS NOT NULL)
 );
 
 DROP TRIGGER IF EXISTS trg_sak_tilstand_set_updated_at ON sak_tilstand;
@@ -70,11 +66,9 @@ CREATE TABLE journalpost_tilstand (
     journalposttype VARCHAR(1) NOT NULL,
     med_utsending BOOLEAN NOT NULL DEFAULT false,
     tilstand VARCHAR(30) NOT NULL,
-    oensket_tilstand VARCHAR(30) NOT NULL,
     sikri_id BIGINT NULL,
     journalpostnummer INTEGER NULL,
     opprettet_av_command_id UUID NOT NULL,
-    feil_detalj TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (journalposttype IN ('I', 'U', 'X')),
@@ -83,9 +77,7 @@ CREATE TABLE journalpost_tilstand (
         'klar_for_journalforing', 'venter_paa_utsending',
         'journalfoert', 'avskrevet', 'feilet_permanent'
     )),
-    CHECK (oensket_tilstand IN ('journalfoert', 'avskrevet')),
-    CHECK (NOT med_utsending OR journalposttype = 'U'),
-    CHECK (tilstand <> 'feilet_permanent' OR feil_detalj IS NOT NULL)
+    CHECK (NOT med_utsending OR journalposttype = 'U')
 );
 
 DROP TRIGGER IF EXISTS trg_journalpost_tilstand_set_updated_at ON journalpost_tilstand;
@@ -98,14 +90,10 @@ CREATE TABLE dokument_tilstand (
     dokument_id UUID PRIMARY KEY,
     journalpost_id UUID NOT NULL REFERENCES journalpost_tilstand(journalpost_id),
     tilstand VARCHAR(20) NOT NULL DEFAULT 'ikke_realisert',
-    oensket_tilstand VARCHAR(20) NOT NULL DEFAULT 'ok',
     opprettet_av_command_id UUID NOT NULL,
-    feil_detalj TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CHECK (tilstand IN ('ikke_realisert', 'ok', 'feilet_permanent')),
-    CHECK (oensket_tilstand IN ('ok')),
-    CHECK (tilstand <> 'feilet_permanent' OR feil_detalj IS NOT NULL)
+    CHECK (tilstand IN ('ikke_realisert', 'ok', 'feilet_permanent'))
 );
 
 DROP TRIGGER IF EXISTS trg_dokument_tilstand_set_updated_at ON dokument_tilstand;
@@ -177,7 +165,7 @@ CREATE TABLE command_execution_attempt (
     detail TEXT NULL,
     PRIMARY KEY (command_id, attempt_no),
     CHECK (attempt_no > 0),
-    CHECK (outcome IS NULL OR outcome IN ('ok', 'blokkert_venter', 'retry_venter', 'feil', 'avbrutt')),
+    CHECK (outcome IS NULL OR outcome IN ('klar', 'ok', 'blokkert_venter', 'retry_venter', 'feil', 'avbrutt')),
     CHECK ((finished_at IS NULL AND outcome IS NULL) OR (finished_at IS NOT NULL AND outcome IS NOT NULL))
 );
 

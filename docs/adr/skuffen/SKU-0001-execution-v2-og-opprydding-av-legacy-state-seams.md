@@ -1,7 +1,7 @@
 # SKU-0001. execution v2 og opprydding av legacy state seams
 
 Date: 2026-04-07
-Last-reviewed: 2026-05-04
+Last-reviewed: 2026-05-18
 Tier: A
 Status: Accepted
 Crates: skuffen, domain, application, infrastructure, sikri_client, skuffen-integration-tests
@@ -38,23 +38,33 @@ R6 [4]: Ventende kommandoer reevalueres når relevant snapshot-state endres for 
 
 R7 [4]: Den gamle `EksekveringStateRepository`-seamen og legacy Postgres-bridge fjernes som del av execution v2 cleanup. Videre utvikling skal bruke eksplisitte porter: `CommandExecutionRepository`, `EksekveringSnapshotRepository`, `VentendeKommandoWakeup`. Nye endringer skal ikke gjeninnføre blandede seams der workflow-state, snapshot-state eller readiness uttrykkes flere steder samtidig.
 
+### Implementeringsnoter fra 2026-05-18
+
+SKU-0007 superseder SKU-0002 og presiserer execution v2-modellen:
+
+- Entity state-tabeller lagrer facts, ikke `oensket_tilstand` eller global desired state.
+- Readiness, blocking, completion og invalidity beregnes som `CommandStateDecision` fra command execution state, entity facts og domeneregler.
+- `command_execution` materialiserer lifecycle/scheduling-status for commanden, men lagrer ikke `next_operation`.
+- `planlegg_neste_handling` erstatter `neste_handling` som command-aware domenefunksjon.
+- One operation per command attempt er standarden for tydelig audit og retry.
+
 ### Implementeringsnoter fra 2026-04-20
 
 Entity state machine execution-modellen (implementert 2026-04-20) er den realiserte implementasjonen av disse målene. Konkrete endringer fra ADR-teksten:
 
-- **Tabellnavn:** Snapshot-tabellene (`sak_state`, `journalpost_state`, `dokument_state`) er erstattet av tilstandsmaskin-tabeller (`sak_tilstand`, `journalpost_tilstand`, `dokument_tilstand`) med eksplisitte `tilstand`/`oensket_tilstand`-kolonner og tilhørende `tilstand_historikk`-tabell for audit trail.
+- **Tabellnavn:** Snapshot-tabellene (`sak_state`, `journalpost_state`, `dokument_state`) er erstattet av tilstandsmaskin-tabeller (`sak_tilstand`, `journalpost_tilstand`, `dokument_tilstand`) og tilhørende `tilstand_historikk`-tabell for audit trail. SKU-0007 fjerner senere `oensket_tilstand`-kolonnene.
 - **Port:** `EksekveringSnapshotRepository` er erstattet av `EntityTilstandRepository`.
 - **Klarhetsvurdering:** `EksekveringsklarhetVurderer` er erstattet av `evaluer_klarhet()` i `RegistrerIEksekveringssystemService`. Samme funksjon brukes ved registrering og ved wake-up via `ReevaluerVentendeKommandoerService`.
 - **Status rename:** `venter` er omdøpt til `blokkert_venter` i `command_execution` for klarhet. `wait_kind`/`wait_sak_id`/`wait_journalpost_id`-kolonnene er fjernet — blokkering er nå implisitt via entity tilstand.
 - **Dokumentfeil:** `FeiletPermanent` dokument gir terminal `feil` for kommandoen (ikke `blokkert_venter`). Et permanent-feilet dokument kan aldri hentes og skal ikke blokkere for alltid.
-- **Eksekveringsmodell:** Ingen in-memory plan. `neste_handling(command_type, &SakMedBarn)` er en ren domenefunksjon som inspiserer entity tilstand og returnerer neste nødvendige `ArkivOperasjon`. `EksekverKommandoService.handle()` kaller denne i løkke.
+- **Eksekveringsmodell:** Ingen in-memory plan. SKU-0007 erstatter `neste_handling(command_type, &SakMedBarn)` med `planlegg_neste_handling`, som returnerer `CommandStateDecision`.
 
-Se SKU-0002 for full beslutningsdokumentasjon om entity state machine-modellen.
+Se SKU-0007 for full beslutningsdokumentasjon om command executor-modellen.
 
 ## Consequences
 
 - schema og repositories må opprettholde streng semantikk for status, wait-grunn og attempts
-- docs og tester må bruke v2-statusene `klar`, `kjorer`, `venter`, `retry_venter`, `ok`, `feil`
+- docs og tester må bruke v2-statusene `klar`, `kjorer`, `blokkert_venter`, `retry_venter`, `ok`, `feil`
 - wake-up og registrering må forbli koblet til samme readiness-vurderer
 - integration tests må validere både workflow-state og observerbar lifecycle
 

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use async_nats::{Client, ConnectOptions};
 
-use super::config::NatsConfig;
+use super::config::{NatsConfig, safe_nats_server_label};
 
 #[derive(Clone, Debug)]
 pub struct NatsClient {
@@ -26,8 +26,8 @@ impl NatsClient {
         let client = options.connect(&config.server_url).await?;
 
         tracing::info!(
-            "Successfully connected read worker to NATS server: {}",
-            config.server_url
+            nats_server = %safe_nats_server_label(&config.server_url),
+            "Successfully connected read worker to NATS server"
         );
 
         Ok(Self {

@@ -8,7 +8,7 @@ use crate::command::status::{
     utfores_blocked_event, utfores_error_event, utfores_ok_event, utfores_retrying_event,
 };
 
-use super::{EksekverKommandoService, ExecutionOutcome};
+use super::{safe_execution_detail, EksekverKommandoService, ExecutionOutcome};
 
 impl EksekverKommandoService {
     pub(super) async fn publish_success(
@@ -22,23 +22,24 @@ impl EksekverKommandoService {
         Ok(ExecutionOutcome::Ok)
     }
 
-    pub(super) async fn publish_blocked(
+    pub(super) async fn publish_blocked_with_detail(
         &self,
         envelope: &CommandEnvelope<Command>,
         attempt: u32,
+        detail: String,
     ) -> Result<ExecutionOutcome, anyhow::Error> {
         let context = self.resolve_execution_context(envelope).await?;
-        let detail = "Kommando venter på at prerequisite fullføres".to_string();
+        let safe_detail = safe_execution_detail(&detail);
         let event = utfores_blocked_event(
             envelope,
-            &detail,
+            &safe_detail,
             Some(SkuffenStatusErrorCode::PrerequisitePending),
             context,
             Some(attempt),
         );
         self.publish_status(event, envelope).await?;
         Ok(ExecutionOutcome::BlokkertVenter {
-            last_error: Some(detail),
+            last_error: Some(safe_detail),
         })
     }
 
@@ -50,44 +51,46 @@ impl EksekverKommandoService {
     ) -> Result<ExecutionOutcome, anyhow::Error> {
         let context = self.resolve_execution_context(envelope).await?;
 
+        let safe_detail = safe_execution_detail(&err.melding);
+
         match err.feiltype {
             EksekveringFeiltype::Recoverable => {
                 let event = utfores_retrying_event(
                     envelope,
-                    &err.melding,
+                    &safe_detail,
                     Some(SkuffenStatusErrorCode::TemporaryUnavailable),
                     context,
                     Some(attempt),
                 );
                 self.publish_status(event, envelope).await?;
                 Ok(ExecutionOutcome::Retrying {
-                    last_error: Some(err.melding),
+                    last_error: Some(safe_detail),
                 })
             }
             EksekveringFeiltype::Irrecoverable => {
                 let event = utfores_error_event(
                     envelope,
-                    &err.melding,
+                    &safe_detail,
                     Some(SkuffenStatusErrorCode::ProcessingFailed),
                     context,
                     Some(attempt),
                 );
                 self.publish_status(event, envelope).await?;
                 Ok(ExecutionOutcome::Feil {
-                    last_error: Some(err.melding),
+                    last_error: Some(safe_detail),
                 })
             }
             EksekveringFeiltype::Blocked => {
                 let event = utfores_blocked_event(
                     envelope,
-                    &err.melding,
+                    &safe_detail,
                     Some(SkuffenStatusErrorCode::PrerequisitePending),
                     context,
                     Some(attempt),
                 );
                 self.publish_status(event, envelope).await?;
                 Ok(ExecutionOutcome::BlokkertVenter {
-                    last_error: Some(err.melding),
+                    last_error: Some(safe_detail),
                 })
             }
         }

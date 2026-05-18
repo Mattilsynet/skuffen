@@ -59,9 +59,12 @@ pub mod fake {
     use super::{DokumentRenderer, RendererFeil};
     use async_trait::async_trait;
 
+    type RenderOutcome = Result<Vec<u8>, RendererFeil>;
+    type ScriptedRenderOutcomes = VecDeque<RenderOutcome>;
+
     #[derive(Clone)]
     pub struct FakeDokumentRenderer {
-        outcomes: Arc<Mutex<VecDeque<Result<Vec<u8>, RendererFeil>>>>,
+        outcomes: Arc<Mutex<ScriptedRenderOutcomes>>,
     }
 
     impl FakeDokumentRenderer {
@@ -69,7 +72,7 @@ pub mod fake {
             Self::scripted(vec![Ok(pdf)])
         }
 
-        pub fn scripted(outcomes: Vec<Result<Vec<u8>, RendererFeil>>) -> Self {
+        pub fn scripted(outcomes: Vec<RenderOutcome>) -> Self {
             Self {
                 outcomes: Arc::new(Mutex::new(outcomes.into())),
             }

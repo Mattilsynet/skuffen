@@ -11,6 +11,7 @@ use lib_schemas::skuffen::dokument::Felt;
 use sqlx::Row;
 use sqlx::postgres::PgPool;
 use std::collections::HashMap;
+use tracing::info;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -119,18 +120,16 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
     async fn opprett_sak_tilstand(
         &self,
         sak_id: SkuffenSakId,
-        oensket_tilstand: SakTilstand,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
         sqlx::query(
             r#"
-            INSERT INTO sak_tilstand (sak_id, tilstand, oensket_tilstand, opprettet_av_command_id)
-            VALUES ($1, 'ikke_realisert', $2, $3)
+            INSERT INTO sak_tilstand (sak_id, tilstand, opprettet_av_command_id)
+            VALUES ($1, 'ikke_realisert', $2)
             ON CONFLICT (sak_id) DO NOTHING
             "#,
         )
         .bind(Uuid::from(sak_id))
-        .bind(sak_tilstand_to_db(oensket_tilstand))
         .bind(command_id)
         .execute(&self.pool)
         .await
@@ -145,12 +144,11 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         tilstand: SakTilstand,
         sikri_id: Option<i64>,
         saksnummer: Option<&str>,
-        feil_detalj: Option<&str>,
     ) -> Result<(), anyhow::Error> {
         sqlx::query(
             r#"
             UPDATE sak_tilstand
-            SET tilstand = $2, sikri_id = $3, saksnummer = $4, feil_detalj = $5
+            SET tilstand = $2, sikri_id = $3, saksnummer = $4
             WHERE sak_id = $1
             "#,
         )
@@ -158,31 +156,9 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         .bind(sak_tilstand_to_db(tilstand))
         .bind(sikri_id)
         .bind(saksnummer)
-        .bind(feil_detalj)
         .execute(&self.pool)
         .await
         .context("oppdater_sak_tilstand")?;
-
-        Ok(())
-    }
-
-    async fn oppdater_sak_oensket_tilstand(
-        &self,
-        sak_id: SkuffenSakId,
-        oensket_tilstand: SakTilstand,
-    ) -> Result<(), anyhow::Error> {
-        sqlx::query(
-            r#"
-            UPDATE sak_tilstand
-            SET oensket_tilstand = $2
-            WHERE sak_id = $1
-            "#,
-        )
-        .bind(Uuid::from(sak_id))
-        .bind(sak_tilstand_to_db(oensket_tilstand))
-        .execute(&self.pool)
-        .await
-        .context("oppdater_sak_oensket_tilstand")?;
 
         Ok(())
     }
@@ -239,19 +215,17 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         sak_id: SkuffenSakId,
         journalposttype: JournalpostType,
         med_utsending: bool,
-        oensket_tilstand: JournalpostTilstand,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
         sqlx::query(
             r#"
             INSERT INTO journalpost_tilstand
-                (journalpost_id, sak_id, tilstand, oensket_tilstand, journalposttype, med_utsending, opprettet_av_command_id)
-            VALUES ($1, $2, 'ikke_realisert', $3, $4, $5, $6)
+                (journalpost_id, sak_id, tilstand, journalposttype, med_utsending, opprettet_av_command_id)
+            VALUES ($1, $2, 'ikke_realisert', $3, $4, $5)
             "#,
         )
         .bind(Uuid::from(journalpost_id))
         .bind(Uuid::from(sak_id))
-        .bind(journalpost_tilstand_to_db(oensket_tilstand))
         .bind(journalposttype_to_db(journalposttype))
         .bind(med_utsending)
         .bind(command_id)
@@ -268,12 +242,11 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         tilstand: JournalpostTilstand,
         sikri_id: Option<i64>,
         journalpostnummer: Option<i32>,
-        feil_detalj: Option<&str>,
     ) -> Result<(), anyhow::Error> {
         sqlx::query(
             r#"
             UPDATE journalpost_tilstand
-            SET tilstand = $2, sikri_id = $3, journalpostnummer = $4, feil_detalj = $5
+            SET tilstand = $2, sikri_id = $3, journalpostnummer = $4
             WHERE journalpost_id = $1
             "#,
         )
@@ -281,12 +254,30 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         .bind(journalpost_tilstand_to_db(tilstand))
         .bind(sikri_id)
         .bind(journalpostnummer)
-        .bind(feil_detalj)
         .execute(&self.pool)
         .await
         .context("oppdater_journalpost_tilstand")?;
 
         Ok(())
+    }
+
+    async fn hent_sak_id_fra_journalpost_id(
+        &self,
+        journalpost_id: SkuffenJournalpostId,
+    ) -> Result<Option<SkuffenSakId>, anyhow::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT sak_id
+            FROM journalpost_tilstand
+            WHERE journalpost_id = $1
+            "#,
+        )
+        .bind(Uuid::from(journalpost_id))
+        .fetch_optional(&self.pool)
+        .await
+        .context("hent_sak_id_fra_journalpost_id")?;
+
+        Ok(row.map(|row| SkuffenSakId::from(row.get::<Uuid, _>("sak_id"))))
     }
 
     async fn opprett_dokument_tilstand(
@@ -306,8 +297,8 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         sqlx::query(
             r#"
             INSERT INTO dokument_tilstand
-                (dokument_id, journalpost_id, tilstand, oensket_tilstand, mal_referanse, felter, opprettet_av_command_id)
-            VALUES ($1, $2, $3, 'ok', $4, $5, $6)
+                (dokument_id, journalpost_id, tilstand, mal_referanse, felter, opprettet_av_command_id)
+            VALUES ($1, $2, $3, $4, $5, $6)
             "#,
         )
         .bind(Uuid::from(dokument_id))
@@ -327,23 +318,40 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         &self,
         dokument_id: SkuffenDokumentId,
         tilstand: DokumentTilstand,
-        feil_detalj: Option<&str>,
     ) -> Result<(), anyhow::Error> {
         sqlx::query(
             r#"
             UPDATE dokument_tilstand
-            SET tilstand = $2, feil_detalj = $3
+            SET tilstand = $2
             WHERE dokument_id = $1
             "#,
         )
         .bind(Uuid::from(dokument_id))
         .bind(dokument_tilstand_to_db(tilstand))
-        .bind(feil_detalj)
         .execute(&self.pool)
         .await
         .context("oppdater_dokument_tilstand")?;
 
         Ok(())
+    }
+
+    async fn hent_journalpost_id_fra_dokument_id(
+        &self,
+        dokument_id: SkuffenDokumentId,
+    ) -> Result<Option<SkuffenJournalpostId>, anyhow::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT journalpost_id
+            FROM dokument_tilstand
+            WHERE dokument_id = $1
+            "#,
+        )
+        .bind(Uuid::from(dokument_id))
+        .fetch_optional(&self.pool)
+        .await
+        .context("hent_journalpost_id_fra_dokument_id")?;
+
+        Ok(row.map(|row| SkuffenJournalpostId::from(row.get::<Uuid, _>("journalpost_id"))))
     }
 
     async fn oppdater_rendered_dokument_referanse(
@@ -374,11 +382,11 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         let rows = sqlx::query(
             r#"
             SELECT
-                s.sak_id, s.tilstand as sak_tilstand, s.oensket_tilstand as sak_oensket_tilstand,
+                s.sak_id, s.tilstand as sak_tilstand,
                 s.sikri_id as sak_sikri_id, s.saksnummer,
                 s.oensket_saksansvarlig_id, s.oensket_saksansvarlig_enhet,
                 s.naavaerende_saksansvarlig_id, s.naavaerende_saksansvarlig_enhet,
-                j.journalpost_id, j.tilstand as jp_tilstand, j.oensket_tilstand as jp_oensket_tilstand,
+                j.journalpost_id, j.tilstand as jp_tilstand,
                 j.sikri_id as jp_sikri_id, j.journalpostnummer, j.journalposttype, j.med_utsending,
                 d.dokument_id, d.tilstand as dok_tilstand, d.mal_referanse,
                 d.felter, d.rendered_dokument_referanse
@@ -400,7 +408,6 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
 
         let first = &rows[0];
         let sak_tilstand = sak_tilstand_from_db(first.get::<&str, _>("sak_tilstand"))?;
-        let sak_oensket = sak_tilstand_from_db(first.get::<&str, _>("sak_oensket_tilstand"))?;
         let sak_sikri_id: Option<i64> = first.get("sak_sikri_id");
         let saksnummer: Option<String> = first.get("saksnummer");
 
@@ -435,15 +442,12 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
             let jp = journalposter.entry(jp_id).or_insert_with(|| {
                 // These unwraps are safe: if jp_id is Some, the join matched
                 let jp_tilstand_str: &str = row.get("jp_tilstand");
-                let jp_oensket_str: &str = row.get("jp_oensket_tilstand");
                 let jp_type_str: &str = row.get("journalposttype");
 
                 JournalpostMedDokumenter {
                     journalpost_id: SkuffenJournalpostId::from(jp_id),
                     tilstand: journalpost_tilstand_from_db(jp_tilstand_str)
                         .expect("ugyldig jp_tilstand i db"),
-                    oensket_tilstand: journalpost_tilstand_from_db(jp_oensket_str)
-                        .expect("ugyldig jp_oensket_tilstand i db"),
                     sikri_id: row.get("jp_sikri_id"),
                     journalpostnummer: row.get("journalpostnummer"),
                     journalposttype: journalposttype_from_db(jp_type_str)
@@ -495,7 +499,6 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         Ok(Some(SakMedBarn {
             sak_id,
             tilstand: sak_tilstand,
-            oensket_tilstand: sak_oensket,
             sikri_id: sak_sikri_id,
             saksnummer,
             oensket_saksansvarlig,
@@ -530,6 +533,17 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         .execute(&self.pool)
         .await
         .context("logg_overgang")?;
+
+        info!(
+            entity_type = %entity_type,
+            entity_id = %entity_id,
+            command_id = %command_id,
+            from_status = %fra_tilstand,
+            to_status = %til_tilstand,
+            operation = %operasjon,
+            has_detail = feil_detalj.is_some(),
+            "entity_state_transition"
+        );
 
         Ok(())
     }

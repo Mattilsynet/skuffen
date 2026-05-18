@@ -51,7 +51,7 @@ impl EksekveringWorker {
         }
     }
 
-    async fn execute_one(
+    pub(crate) async fn execute_one(
         &self,
         command_id: uuid::Uuid,
         envelope: lib_schemas::skuffen::command::commands::CommandEnvelope<
@@ -65,6 +65,11 @@ impl EksekveringWorker {
 
         let outcome = self.executor.handle(envelope, attempt_no as u32).await?;
         match outcome {
+            ExecutionOutcome::Klar => {
+                self.execution_repo
+                    .marker_klar(command_id, attempt_no)
+                    .await?;
+            }
             ExecutionOutcome::Ok => {
                 self.execution_repo
                     .marker_ok(command_id, attempt_no)

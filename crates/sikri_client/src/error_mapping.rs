@@ -13,21 +13,67 @@ pub fn user_message_for_http_error(status: StatusCode, body: Option<&str>) -> St
     if let Some(body_text) = body
         && contains_upstream_bad_gateway_pattern(body_text)
     {
-        return "Sikri/Elements er midlertidig utilgjengelig (upstream 502 Bad Gateway). Prøv igjen senere.".to_string();
+        return "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere.".to_string();
     }
 
     if let Some(body_text) = body
         && classify_http_error(status, Some(body_text)) == Recoverability::Irrecoverable
         && contains_missing_user_pattern(body_text)
     {
-        let bruker = extract_user_from_identification_error(body_text)
-            .unwrap_or_else(|| "ukjent".to_string());
-        return format!(
-            "Ugyldig saksbehandler/systembruker ({bruker}): brukeren finnes ikke i ePhorte (PERSON.PE_BRUKERID)."
-        );
+        return "Ugyldig saksbehandler/systembruker: brukeren finnes ikke i ePhorte.".to_string();
     }
 
-    format!("Sikri svarte med HTTP-feil ({status}).")
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        return "Sikri/Elements avviser midlertidig for mange forespørsler. Prøv igjen senere."
+            .to_string();
+    }
+
+    if status.is_server_error() {
+        return "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere.".to_string();
+    }
+
+    "Sikri/Elements avviste forespørselen.".to_string()
+}
+
+pub fn safe_detail_for_http_error(status: StatusCode, body: Option<&str>) -> &'static str {
+    if let Some(body_text) = body
+        && contains_upstream_bad_gateway_pattern(body_text)
+    {
+        return "sikri_upstream_unavailable";
+    }
+
+    if let Some(body_text) = body
+        && classify_http_error(status, Some(body_text)) == Recoverability::Irrecoverable
+        && contains_missing_user_pattern(body_text)
+    {
+        return "sikri_unknown_user";
+    }
+
+    if let Some(body_text) = body
+        && body_text
+            .to_lowercase()
+            .contains("ny journalpost har dokument-filer som mangler innhold")
+    {
+        return "sikri_missing_document_content";
+    }
+
+    if status == StatusCode::NOT_FOUND {
+        return "sikri_resource_not_found";
+    }
+
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        return "sikri_rate_limited";
+    }
+
+    if status.is_server_error() {
+        return "sikri_upstream_error";
+    }
+
+    if status.is_client_error() {
+        return "sikri_invalid_request";
+    }
+
+    "sikri_unknown_error"
 }
 
 struct ErrorRule {
@@ -110,19 +156,6 @@ fn contains_upstream_bad_gateway_pattern(body: &str) -> bool {
         && normalized.contains("bad gateway")
 }
 
-fn extract_user_from_identification_error(body: &str) -> Option<String> {
-    let normalized = body.to_lowercase();
-    let needle = "identifisering av bruker ";
-    let start = normalized.find(needle)? + needle.len();
-    let tail = body.get(start..)?;
-    let user: String = tail
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-        .collect();
-
-    if user.is_empty() { None } else { Some(user) }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,13 +197,14 @@ mod tests {
     }
 
     #[test]
-    fn maps_known_missing_user_error_to_friendly_message() {
+    fn maps_known_missing_user_error_to_friendly_message_without_user_id() {
         let body = "Feil ved identifisering av bruker Z12345. Person.Brukernavn Z12345 ble ikke funnet i ePhorte Person-tabell!";
         let message = user_message_for_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
         assert_eq!(
             message,
-            "Ugyldig saksbehandler/systembruker (Z12345): brukeren finnes ikke i ePhorte (PERSON.PE_BRUKERID)."
+            "Ugyldig saksbehandler/systembruker: brukeren finnes ikke i ePhorte."
         );
+        assert!(!message.contains("Z12345"));
     }
 
     #[test]
@@ -179,7 +213,41 @@ mod tests {
         let message = user_message_for_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
         assert_eq!(
             message,
-            "Sikri/Elements er midlertidig utilgjengelig (upstream 502 Bad Gateway). Prøv igjen senere."
+            "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere."
+        );
+    }
+
+    #[test]
+    fn safe_detail_returns_stable_code_without_user_id() {
+        let body = "Feil ved identifisering av bruker Z12345. Person.Brukernavn Z12345 ble ikke funnet i ePhorte Person-tabell!";
+        let detail = safe_detail_for_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+        assert_eq!(detail, "sikri_unknown_user");
+        assert!(!detail.contains("Z12345"));
+        assert!(!detail.contains("bruker"));
+    }
+
+    #[test]
+    fn safe_detail_returns_stable_code_without_upstream_text_or_url() {
+        let body = "temporary backend issue at https://internal.example.invalid/api";
+        let detail = safe_detail_for_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+        assert_eq!(detail, "sikri_upstream_error");
+        assert!(!detail.contains("http"));
+        assert!(!detail.contains("temporary"));
+    }
+
+    #[test]
+    fn safe_detail_maps_known_status_codes() {
+        assert_eq!(
+            safe_detail_for_http_error(StatusCode::NOT_FOUND, None),
+            "sikri_resource_not_found"
+        );
+        assert_eq!(
+            safe_detail_for_http_error(StatusCode::TOO_MANY_REQUESTS, None),
+            "sikri_rate_limited"
+        );
+        assert_eq!(
+            safe_detail_for_http_error(StatusCode::BAD_REQUEST, None),
+            "sikri_invalid_request"
         );
     }
 }

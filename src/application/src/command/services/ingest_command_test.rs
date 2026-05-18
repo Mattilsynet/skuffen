@@ -21,10 +21,12 @@ use uuid::Uuid;
 
 // --- Fakes ---
 
+type IdMappingRecord = (Uuid, Uuid, Uuid, String, Option<String>);
+
 #[derive(Clone, Default)]
 struct FakeIdMappingRepository {
     // (command_id, client_reference, skuffen_id, entity_type, arkiv_id)
-    pub mappings: Arc<Mutex<Vec<(Uuid, Uuid, Uuid, String, Option<String>)>>>,
+    pub mappings: Arc<Mutex<Vec<IdMappingRecord>>>,
     pub should_fail: bool,
 }
 
@@ -520,8 +522,10 @@ async fn test_ingest_command_allows_multiple_mappings_per_command_id() {
 #[tokio::test]
 async fn test_ingest_command_mapping_failure() {
     // Arrange
-    let mut fake_mapping = FakeIdMappingRepository::default();
-    fake_mapping.should_fail = true;
+    let fake_mapping = FakeIdMappingRepository {
+        should_fail: true,
+        ..Default::default()
+    };
 
     let fake_dispatcher = FakeCommandDispatcher::default();
 
@@ -572,8 +576,10 @@ async fn test_ingest_command_mapping_failure() {
 async fn test_ingest_command_dispatch_failure() {
     // Arrange
     let fake_mapping = FakeIdMappingRepository::default();
-    let mut fake_dispatcher = FakeCommandDispatcher::default();
-    fake_dispatcher.should_fail = true;
+    let fake_dispatcher = FakeCommandDispatcher {
+        should_fail: true,
+        ..Default::default()
+    };
 
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
@@ -660,7 +666,7 @@ async fn test_ingest_command_idempotent_duplicate_command_id() {
     });
 
     let envelope2 = CommandEnvelope {
-        command_id: command_id,
+        command_id,
         correlation_id: Some(Uuid::new_v4()),
         payload: command2,
     };
