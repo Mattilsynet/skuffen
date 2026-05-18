@@ -15,9 +15,9 @@ use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
 };
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettSaksansvarlig};
-use lib_schemas::skuffen::dokument::{Dokument as DtoDokument, Dokumentform};
+use lib_schemas::skuffen::dokument::{Dokument as DtoDokument, Dokumentform, Felt};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
-use lib_schemas::skuffen::status::SkuffenStatusEventV1;
+use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1};
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -26,6 +26,9 @@ const RESOURCES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/resources");
 const JOURNALPOST_PDF: &str = "dummy_journal_entry_report.pdf";
 const ATTACHMENT_FOOD_SAFETY: &str = "attachment_food_safety_inspection.png";
 const ATTACHMENT_ANIMAL_WELFARE: &str = "attachment_animal_welfare_inspection.png";
+const INTERNAL_NOTE_TEMPLATE: &str = "internal_note_template.html";
+const HTML_TEMPLATE_CONTENT_TYPE: &str = "text/html; charset=utf-8";
+const DEFAULT_WATCH_STATUS_TIMEOUT_SECONDS: u64 = 300;
 
 struct ManualAttachment {
     title: &'static str,
@@ -122,7 +125,7 @@ fn parse_connection_args(raw_args: &[String]) -> Result<(ConnectionConfig, Vec<S
             url,
             creds: std::env::var("APP_NATS_CREDENTIALS")
                 .ok()
-                .and_then(|value| non_empty(value)),
+                .and_then(non_empty),
             context_name: None,
         }
     } else {
@@ -216,14 +219,14 @@ fn print_usage() {
     );
     eprintln!("  skuffen-manual send-sequence [--context NAME] [--nats-url URL]");
     eprintln!(
-        "  skuffen-manual watch-status [--context NAME] [--nats-url URL] <COMMAND_ID> [COMMAND_ID...]"
+        "  skuffen-manual watch-status [--context NAME] [--nats-url URL] [--timeout-seconds SECONDS] <COMMAND_ID> [COMMAND_ID...]"
     );
 }
 
 async fn ready(config: &ConnectionConfig) -> Result<()> {
     let response = request_json(config, "skuffen.ready", &"ping").await?;
     if response.get("status").and_then(|value| value.as_str()) == Some("Ok") {
-        println!("Skuffen ready on {}", config.url);
+        println!("Skuffen ready on {}", redact_url_userinfo(&config.url));
         return Ok(());
     }
     anyhow::bail!("Unexpected ready response: {response}");
@@ -235,7 +238,10 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
     let attachments = manual_attachments()?;
 
     let sak_client_reference = Uuid::new_v4();
-    let journalpost_client_reference = Uuid::new_v4();
+    let bytes_journalpost_client_reference = Uuid::new_v4();
+    let template_journalpost_client_reference = Uuid::new_v4();
+    let template_dokument_client_reference = Uuid::new_v4();
+    let mal_referanse = Uuid::new_v4();
     let dokumenter: Vec<(DtoDokument, Uuid, &'static str, PathBuf)> = attachments
         .into_iter()
         .map(|attachment| {
@@ -266,6 +272,20 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
         );
     }
 
+    let template_path = resource_path(INTERNAL_NOTE_TEMPLATE)?;
+    publish_media(
+        config,
+        mal_referanse,
+        &template_path,
+        HTML_TEMPLATE_CONTENT_TYPE,
+    )
+    .await?;
+    println!(
+        "Uploaded HTML template from {} as mal_referanse={}",
+        template_path.display(),
+        mal_referanse
+    );
+
     let correlation_id = Some(Uuid::new_v4());
     let command_sequence = vec![
         CommandEnvelope {
@@ -289,7 +309,7 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
             correlation_id,
             payload: Command::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
                 felles: JournalpostCommon {
-                    client_reference: journalpost_client_reference,
+                    client_reference: bytes_journalpost_client_reference,
                     tittel: format!("Internt notat {}", Uuid::new_v4()),
                     dokument_dato: "2025-01-01".to_string(),
                     saksbehandler: saksbehandler_id.clone(),
@@ -299,6 +319,30 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
                         .iter()
                         .map(|(dokument, ..)| dokument.clone())
                         .collect(),
+                    sak_key: DtoSakKey::ClientReference(sak_client_reference),
+                    kildesystem: None,
+                },
+            }),
+        },
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id,
+            payload: Command::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
+                felles: JournalpostCommon {
+                    client_reference: template_journalpost_client_reference,
+                    tittel: format!("Internt notat med HTML-mal {}", Uuid::new_v4()),
+                    dokument_dato: "2025-01-01".to_string(),
+                    saksbehandler: saksbehandler_id.clone(),
+                    saksbehandler_enhet: saksbehandler_enhet.clone(),
+                    tilgang: None,
+                    dokumenter: vec![DtoDokument {
+                        client_reference: template_dokument_client_reference,
+                        tittel: "HTML-template notat".to_string(),
+                        form: Dokumentform::HtmlTemplate {
+                            mal_referanse,
+                            felter: vec![Felt::Saksnummer],
+                        },
+                    }],
                     sak_key: DtoSakKey::ClientReference(sak_client_reference),
                     kildesystem: None,
                 },
@@ -327,9 +371,12 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
         anyhow::bail!("Unexpected send response: {response}");
     }
 
-    println!("Sent sequence to {}", config.url);
+    println!("Sent sequence to {}", redact_url_userinfo(&config.url));
     println!("sak_client_reference={sak_client_reference}");
-    println!("journalpost_client_reference={journalpost_client_reference}");
+    println!("bytes_journalpost_client_reference={bytes_journalpost_client_reference}");
+    println!("template_journalpost_client_reference={template_journalpost_client_reference}");
+    println!("template_dokument_client_reference={template_dokument_client_reference}");
+    println!("mal_referanse={mal_referanse}");
     println!("dokument_referanser:");
     for (dokument, dokument_referanse, _, path) in &dokumenter {
         println!(
@@ -340,14 +387,24 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
         );
     }
     println!("command_ids:");
-    for command in &command_sequence {
-        println!("- {}", command.command_id);
+    let command_roles = [
+        "OpprettSak",
+        "OpprettInterntNotatJournalpost(bytes)",
+        "OpprettInterntNotatJournalpost(html-template)",
+        "SettSaksansvarlig",
+        "AvsluttSak",
+    ];
+    for (role, command) in command_roles.iter().zip(&command_sequence) {
+        println!("- {role}: {}", command.command_id);
     }
     let command_ids: Vec<String> = command_sequence
         .iter()
         .map(|command| command.command_id.to_string())
         .collect();
     println!();
+    println!(
+        "HTML-template rendering requires SKUFFEN_HTML2PDF_RENDERER_ENDPOINT in the deployed Skuffen environment."
+    );
     println!("Copy and run this command to watch status history + live updates:");
     match config.context_name.as_deref() {
         Some(context) => println!(
@@ -357,23 +414,69 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
         ),
         None => println!(
             "cargo run -p skuffen-integration-tests --bin skuffen-manual -- watch-status --nats-url {} {}",
-            config.url,
+            redact_url_userinfo(&config.url),
             command_ids.join(" ")
         ),
     }
     Ok(())
 }
 
-async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Result<()> {
-    if command_ids.is_empty() {
+fn redact_url_userinfo(url: &str) -> String {
+    let authority_start = url.find("://").map_or(0, |scheme_end| scheme_end + 3);
+    let authority = &url[authority_start..];
+    let authority_end = authority
+        .char_indices()
+        .find_map(|(index, ch)| matches!(ch, '/' | '?' | '#').then_some(index))
+        .unwrap_or(authority.len());
+    let authority = &authority[..authority_end];
+
+    let Some(at_index) = authority.rfind('@') else {
+        return url.to_string();
+    };
+
+    let credentials_end = authority_start + at_index + 1;
+    format!(
+        "{}<redacted>@{}",
+        &url[..authority_start],
+        &url[credentials_end..]
+    )
+}
+
+fn parse_watch_status_args(raw_args: &[String]) -> Result<(Vec<Uuid>, Duration)> {
+    let mut timeout_seconds = DEFAULT_WATCH_STATUS_TIMEOUT_SECONDS;
+    let mut command_ids = Vec::new();
+
+    let mut index = 0;
+    while index < raw_args.len() {
+        match raw_args[index].as_str() {
+            "--timeout-seconds" => {
+                let value = raw_args
+                    .get(index + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--timeout-seconds requires a value"))?;
+                timeout_seconds = value.parse::<u64>().map_err(|err| {
+                    anyhow::anyhow!("Invalid --timeout-seconds value {value:?}: {err}")
+                })?;
+                if timeout_seconds == 0 {
+                    anyhow::bail!("--timeout-seconds must be greater than zero");
+                }
+                index += 2;
+            }
+            value => {
+                command_ids.push(Uuid::parse_str(value)?);
+                index += 1;
+            }
+        }
+    }
+
+    Ok((command_ids, Duration::from_secs(timeout_seconds)))
+}
+
+async fn watch_status(config: &ConnectionConfig, raw_args: &[String]) -> Result<()> {
+    let (ids, timeout) = parse_watch_status_args(raw_args)?;
+    if ids.is_empty() {
         print_usage();
         anyhow::bail!("watch-status requires at least one COMMAND_ID");
     }
-
-    let ids: Vec<Uuid> = command_ids
-        .iter()
-        .map(|id| Uuid::parse_str(id))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let client = connect_client(config).await?;
     let js = jetstream::new(client);
@@ -396,6 +499,7 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
         final_status: Option<String>,
         final_message: Option<String>,
         error_code: Option<String>,
+        reached_terminal_ok: bool,
     }
 
     let mut summaries: Vec<CommandSummary> = ids
@@ -409,10 +513,9 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
             final_status: None,
             final_message: None,
             error_code: None,
+            reached_terminal_ok: false,
         })
         .collect();
-
-    let timeout = Duration::from_secs(90);
 
     for summary in &mut summaries {
         let command_id = summary.command_id;
@@ -436,17 +539,51 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
         while !terminal_seen {
             let now = Instant::now();
             if now >= deadline {
-                anyhow::bail!("Timed out waiting for status events for command_id={command_id}");
+                summary.final_status = Some("TimedOut".to_string());
+                summary.final_message = Some(format!(
+                    "Timed out after {} seconds waiting for terminal status event",
+                    timeout.as_secs()
+                ));
+                break;
             }
             let wait_for = deadline
                 .checked_duration_since(now)
                 .unwrap_or_else(|| Duration::from_secs(0));
-            let msg = tokio::time::timeout(wait_for, messages.next()).await?;
-            let Some(msg) = msg else {
-                anyhow::bail!("Status consumer closed for command_id={command_id}");
+            let msg = match tokio::time::timeout(wait_for, messages.next()).await {
+                Ok(msg) => msg,
+                Err(_) => {
+                    summary.final_status = Some("TimedOut".to_string());
+                    summary.final_message = Some(format!(
+                        "Timed out after {} seconds waiting for terminal status event",
+                        timeout.as_secs()
+                    ));
+                    break;
+                }
             };
-            let msg = msg?;
-            let event: SkuffenStatusEventV1 = serde_json::from_slice(&msg.payload)?;
+            let Some(msg) = msg else {
+                summary.final_status = Some("ConsumerClosed".to_string());
+                summary.final_message =
+                    Some("Status consumer closed before terminal event".to_string());
+                break;
+            };
+            let msg = match msg {
+                Ok(msg) => msg,
+                Err(err) => {
+                    summary.final_status = Some("ConsumerError".to_string());
+                    summary.final_message = Some(format!("Status consumer error: {err}"));
+                    summary.error_code = Some("status_consumer_error".to_string());
+                    break;
+                }
+            };
+            let event: SkuffenStatusEventV1 = match serde_json::from_slice(&msg.payload) {
+                Ok(event) => event,
+                Err(err) => {
+                    summary.final_status = Some("InvalidStatusPayload".to_string());
+                    summary.final_message = Some(format!("Failed to parse status payload: {err}"));
+                    summary.error_code = Some("invalid_status_payload".to_string());
+                    break;
+                }
+            };
 
             // Accumulate archive IDs — later events may fill them in.
             if let Some(ref c) = event.correlation_id {
@@ -462,6 +599,7 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
                 summary.dokument_ids = docs.iter().map(|d| d.0.clone()).collect();
             }
             if event.terminal {
+                summary.reached_terminal_ok = event.status == SkuffenStatus::Ok;
                 summary.final_status = Some(format!("{:?}", event.status));
                 summary.final_message = Some(event.message.clone());
                 summary.error_code = event.error_code.as_ref().map(|e| format!("{e:?}"));
@@ -504,9 +642,13 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
                 }
             }
 
-            msg.ack()
-                .await
-                .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+            if let Err(err) = msg.ack().await {
+                summary.reached_terminal_ok = false;
+                summary.final_status = Some("AckFailed".to_string());
+                summary.final_message = Some(format!("Failed to ack status message: {err}"));
+                summary.error_code = Some("status_ack_failed".to_string());
+                break;
+            }
             terminal_seen = event.terminal;
         }
     }
@@ -540,13 +682,21 @@ async fn watch_status(config: &ConnectionConfig, command_ids: &[String]) -> Resu
         }
     }
     println!();
-    println!("All tracked command IDs reached terminal status.");
+    let failure_count = summaries
+        .iter()
+        .filter(|summary| !summary.reached_terminal_ok)
+        .count();
+    if failure_count > 0 {
+        anyhow::bail!("{failure_count} tracked command ID(s) did not reach terminal Ok status");
+    }
+
+    println!("All tracked command IDs reached terminal Ok status.");
     Ok(())
 }
 
 async fn publish_media(
     config: &ConnectionConfig,
-    dokument_id: Uuid,
+    upload_reference: Uuid,
     path: &Path,
     content_type: &str,
 ) -> Result<()> {
@@ -562,7 +712,7 @@ async fn publish_media(
     };
     let config = ChunkedUploadConfig::default();
     let chunks = split_payload(&payload, config.chunk_size)?;
-    let upload_id = dokument_id.to_string();
+    let upload_id = upload_reference.to_string();
     let chunk_count = chunks.len() as u32;
     let total_size = payload.len();
 

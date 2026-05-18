@@ -26,6 +26,7 @@ Skuffen skal støtte dokumenter der klienten laster opp en HTML-mal som trenger 
 - Maler er single-use i Skuffen: én mal, én rendered PDF, én command. TTL rydder opp malobjekter.
 - Rendered PDF lagres i samme NATS object store med deterministisk UUID v5 basert på dokument-id. Provenance ligger i object metadata.
 - Ingen HTML, PDF-bytes, substituert `saksnummer`, OIDC-token eller `Authorization` header skal logges.
+- Template upload/rendering/status failures in `watch-status` fail hard with non-zero exit code.
 
 ## Viktige forutsetninger før bygg
 
@@ -77,7 +78,7 @@ Disse er ikke låst som ADR-beslutninger ennå og skal avgjøres tidlig i build:
 
 **Gate:** Schema PR har stabil commit hash som Skuffen kan pinne. ADR-lint har ingen infrastructure errors.
 
-**Build note 2026-05-13:** Under lokal implementering var `lib-schemas` midlertidig path-patchet til
+**Build note 2026-05-13:** Under lokal implementering var `lib-schemas` midlertidig path-patched til
 `../landdyrtilsyn-libs/lib-schemas`. Dette er erstattet med pushed commit
 `91e69423239d3e6b496506e9e48699a26896124e`.
 
@@ -163,7 +164,9 @@ Disse er ikke låst som ADR-beslutninger ennå og skal avgjøres tidlig i build:
 - Recoverable renderer: fake feiler én gang, command går til retry, neste attempt lykkes.
 - Manglende `mal_referanse`: command avvises ved intake.
 - Mixed-list test: HtmlTemplate hoveddokument + byte vedlegg, med eksplisitt assertion av faktisk operasjonssekvens.
-- Manual binary flow i `integration-tests/src/bin/skuffen-manual.rs` for ad-hoc test.
+- Ad-hoc test: `skuffen-manual send-sequence` sends both `Bytes` documents and one `HtmlTemplate`
+  document by default. Use `watch-status` to monitor template upload/rendering/status with a
+  300s default timeout (configurable via `--timeout-seconds`).
 
 **Gate:** `cargo test -p skuffen-integration-tests` mot lokal stack.
 

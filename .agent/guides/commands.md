@@ -1,5 +1,5 @@
 ---
-description: Kjor vanlige utviklingskommandoer
+description: Kjør vanlige utviklingskommandoer
 ---
 
 Denne guiden beskriver trygge, vanlige bygg-, test- og kvalitetssjekker for `skuffen`.
@@ -8,11 +8,11 @@ Denne guiden beskriver trygge, vanlige bygg-, test- og kvalitetssjekker for `sku
 
 1. Sjekk kode
    `cargo check`
-2. Kjor workspace-tester uten integration package
+2. Kjør workspace-tester uten integration package
    `cargo test --workspace --exclude skuffen-integration-tests`
 3. Sjekk formatting
    `cargo fmt --check`
-4. Kjor clippy
+4. Kjør clippy
    `cargo clippy --all-targets --all-features`
 
 ## CI-equivalent commands
@@ -39,6 +39,19 @@ Denne guiden beskriver trygge, vanlige bygg-, test- og kvalitetssjekker for `sku
   The endpoint must use `https://` unless `APP_ENV=local`.
 - `SKUFFEN_HTML2PDF_RENDERER_AUDIENCE=<audience>` overrides the Cloud Run ID-token
   audience. If unset, the renderer endpoint is used as audience.
+- `SIKRI_SAKSBEHANDLER_ID` and `SIKRI_SAKSBEHANDLER_ENHET` are required for deployed
+  test/dev environments to identify the case handler and unit.
+
+## Deployed test/dev workflow
+
+- `skuffen-manual send-sequence` against deployed test/dev includes both `Bytes`
+  documents and one `HtmlTemplate` document by default.
+- Environments must have `SKUFFEN_HTML2PDF_RENDERER_ENDPOINT` configured to process
+  `HtmlTemplate` documents.
+- The `watch-status` subcommand monitors template upload/rendering/status and fails
+  hard (non-zero exit) if any tracked command reaches non-`Ok`, times out, or the
+  status stream closes/errors before terminal status. Default timeout is 300s.
+- Use `--timeout-seconds <SECONDS>` to override the default timeout.
 
 ## Test suites
 
