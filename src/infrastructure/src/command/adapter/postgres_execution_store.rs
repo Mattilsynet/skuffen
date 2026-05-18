@@ -644,6 +644,7 @@ fn log_command_execution_outcome(
             outcome,
             sak_id = %sak_id,
             journalpost_id = %journalpost_id,
+            detail = %last_error,
             last_error = %last_error,
             error_classification = "irrecoverable",
             error_category = %error_category,
@@ -657,6 +658,7 @@ fn log_command_execution_outcome(
             outcome,
             sak_id = %sak_id,
             journalpost_id = %journalpost_id,
+            detail = %last_error,
             last_error = %last_error,
             error_classification = "recoverable",
             error_category = %error_category,
@@ -670,6 +672,7 @@ fn log_command_execution_outcome(
             outcome,
             sak_id = %sak_id,
             journalpost_id = %journalpost_id,
+            detail = %last_error,
             last_error = %last_error,
             error_classification = "blocked",
             error_category = %error_category,
@@ -683,6 +686,7 @@ fn log_command_execution_outcome(
             outcome,
             sak_id = %sak_id,
             journalpost_id = %journalpost_id,
+            detail = %last_error,
             last_error = %last_error,
             error_classification = "unknown",
             error_category = %error_category,
@@ -747,6 +751,16 @@ fn error_category_for_detail(detail: &str) -> &'static str {
         "felter_ikke_klare"
     } else if detail.starts_with("blocked_reason=permanent_feil") {
         "permanent_feil"
+    } else if detail.starts_with("html2pdf_auth_failed") {
+        "html2pdf_auth_failed"
+    } else if detail.starts_with("html2pdf_client_error") {
+        "html2pdf_client_error"
+    } else if detail.starts_with("html2pdf_server_error") {
+        "html2pdf_server_error"
+    } else if detail.starts_with("html2pdf_request_failed") {
+        "html2pdf_request_failed"
+    } else if detail.starts_with("html2pdf_response_read_failed") {
+        "html2pdf_response_read_failed"
     } else if detail.contains("Ugyldig kommando") {
         "invalid_command"
     } else {

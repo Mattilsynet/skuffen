@@ -103,6 +103,23 @@ Application lifecycle helpers that accept dynamic detail must set a static, safe
 especially validation blocked/retrying/error and execution outcomes. This prevents infrastructure
 fallback from exposing diagnostics if outward messages are omitted.
 
+## HTML2PDF renderer logging
+
+Internal HTML2PDF renderer logs include:
+- HTTP status code/class (2xx/4xx/5xx)
+- Safe endpoint/audience labels
+- Content-type and content-length headers
+- Error category classification
+- Bounded sanitized error response snippets (truncated, redacted)
+
+Never logged:
+- HTML payloads or request bodies
+- Authorization headers or tokens
+- PDF bytes or generated content
+- Secrets, credentials, or PII
+
+The public outward status remains static and safe. Command execution internal details are for operators only.
+
 ## Test logging
 
 Suggested environment:

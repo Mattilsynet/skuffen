@@ -288,7 +288,7 @@ fn safe_execution_detail(detail: &str) -> String {
     let stripped = detail
         .replace("sikri_recoverability=irrecoverable", "")
         .replace("sikri_recoverability=recoverable", "");
-    let normalized = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = normalize_execution_detail(&stripped);
 
     if let Some(code) = normalized
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
@@ -301,7 +301,118 @@ fn safe_execution_detail(detail: &str) -> String {
         return "execution_upstream_error".to_string();
     }
 
+    if let Some(renderer_detail) = safe_html2pdf_execution_detail(&normalized) {
+        return renderer_detail;
+    }
+
     "execution_error".to_string()
+}
+
+fn safe_html2pdf_execution_detail(detail: &str) -> Option<String> {
+    const PREFIXES: [&str; 5] = [
+        "html2pdf_auth_failed",
+        "html2pdf_client_error",
+        "html2pdf_server_error",
+        "html2pdf_request_failed",
+        "html2pdf_response_read_failed",
+    ];
+
+    let start = PREFIXES
+        .iter()
+        .filter_map(|prefix| detail.find(prefix).map(|index| (index, *prefix)))
+        .min_by_key(|(index, _)| *index)
+        .map(|(index, _)| index)?;
+
+    let candidate = strip_embedded_execution_payload(&detail[start..]);
+    let redacted = redact_sensitive_execution_tokens(&candidate);
+    let bounded = truncate_execution_detail(redacted.trim(), 500);
+
+    (!bounded.is_empty()).then_some(bounded)
+}
+
+fn normalize_execution_detail(detail: &str) -> String {
+    detail
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn redact_sensitive_execution_tokens(detail: &str) -> String {
+    let mut redacted = Vec::new();
+    let mut redact_next = 0;
+
+    for token in detail.split_whitespace() {
+        if redact_next > 0 {
+            redacted.push("redacted".to_string());
+            redact_next -= 1;
+            continue;
+        }
+
+        let lower = token.to_ascii_lowercase();
+        if is_sensitive_execution_token(&lower) {
+            redacted.push(redact_sensitive_execution_token(token));
+            redact_next = sensitive_execution_following_token_count(token, &lower);
+        } else {
+            redacted.push(token.to_string());
+        }
+    }
+
+    redacted.join(" ")
+}
+
+fn is_sensitive_execution_token(lower: &str) -> bool {
+    lower.contains("authorization")
+        || lower == "bearer"
+        || lower == "basic"
+        || lower.contains("password")
+        || lower.contains("passwd")
+        || lower.contains("token")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("secret")
+}
+
+fn sensitive_execution_following_token_count(token: &str, lower: &str) -> usize {
+    if lower == "bearer" || lower == "basic" {
+        1
+    } else if lower.contains("authorization") && token.ends_with(':') {
+        2
+    } else if token.ends_with(':') || token == "=" {
+        1
+    } else {
+        0
+    }
+}
+
+fn redact_sensitive_execution_token(token: &str) -> String {
+    token
+        .find(['=', ':'])
+        .map(|index| format!("{}redacted", &token[..=index]))
+        .unwrap_or_else(|| "redacted".to_string())
+}
+
+fn strip_embedded_execution_payload(detail: &str) -> String {
+    let Some(index) = detail.find('{') else {
+        return detail.to_string();
+    };
+
+    let prefix = detail[..index].trim_end();
+    if prefix.is_empty() {
+        "[payload stripped]".to_string()
+    } else {
+        format!("{prefix} [payload stripped]")
+    }
+}
+
+fn truncate_execution_detail(detail: &str, max_chars: usize) -> String {
+    let mut value: String = detail.chars().take(max_chars).collect();
+    if detail.chars().count() > max_chars {
+        value.push_str("...");
+    }
+    value
 }
 
 fn blocked_detail(reason: BlockedReason) -> String {
@@ -368,5 +479,109 @@ fn extract_dokument_client_references(envelope: &CommandEnvelope<Command>) -> Ve
             .map(|d| d.client_reference)
             .collect(),
         _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_execution_detail;
+
+    #[test]
+    fn safe_execution_detail_preserves_html2pdf_auth_failed() {
+        let detail = "html2pdf_auth_failed status=403 endpoint_host=renderer.example audience=renderer.example body=forbidden";
+
+        assert_eq!(safe_execution_detail(detail), detail);
+    }
+
+    #[test]
+    fn safe_execution_detail_preserves_html2pdf_client_error_from_error_chain() {
+        let detail =
+            "render failed: html2pdf_client_error status=404 endpoint_path=/render body=not_found";
+
+        assert_eq!(
+            safe_execution_detail(detail),
+            "html2pdf_client_error status=404 endpoint_path=/render body=not_found"
+        );
+    }
+
+    #[test]
+    fn safe_execution_detail_preserves_html2pdf_server_error() {
+        let detail = "html2pdf_server_error status=503 status_class=server_error endpoint_host=renderer.example";
+
+        assert_eq!(safe_execution_detail(detail), detail);
+    }
+
+    #[test]
+    fn safe_execution_detail_preserves_html2pdf_request_failed() {
+        let detail = "html2pdf_request_failed category=timeout endpoint_host=renderer.example";
+
+        assert_eq!(safe_execution_detail(detail), detail);
+    }
+
+    #[test]
+    fn safe_execution_detail_preserves_html2pdf_response_read_failed() {
+        let detail =
+            "html2pdf_response_read_failed category=body_read endpoint_host=renderer.example";
+
+        assert_eq!(safe_execution_detail(detail), detail);
+    }
+
+    #[test]
+    fn safe_execution_detail_redacts_sensitive_renderer_tokens() {
+        let detail = "html2pdf_server_error token=secret Authorization: Bearer abc123 body=failed";
+
+        let safe = safe_execution_detail(detail);
+
+        assert!(safe.contains("html2pdf_server_error"));
+        assert!(!safe.contains("secret"));
+        assert!(!safe.contains("abc123"));
+        assert!(safe.contains("token=redacted"));
+        assert!(safe.contains("Authorization:redacted"));
+    }
+
+    #[test]
+    fn safe_execution_detail_strips_embedded_payload_for_renderer_detail() {
+        let detail = "html2pdf_client_error status=400 {\"html\":\"<body>payload</body>\"}";
+
+        let safe = safe_execution_detail(detail);
+
+        assert_eq!(safe, "html2pdf_client_error status=400 [payload stripped]");
+    }
+
+    #[test]
+    fn safe_execution_detail_bounds_renderer_detail() {
+        let detail = format!("html2pdf_server_error body={}", "a".repeat(800));
+
+        let safe = safe_execution_detail(&detail);
+
+        assert!(safe.starts_with("html2pdf_server_error"));
+        assert!(safe.len() <= 503);
+        assert!(safe.ends_with("..."));
+    }
+
+    #[test]
+    fn safe_execution_detail_preserves_sikri_code() {
+        let detail =
+            "Sikri error sikri_missing_document_content sikri_recoverability=irrecoverable";
+
+        assert_eq!(
+            safe_execution_detail(detail),
+            "sikri_missing_document_content"
+        );
+    }
+
+    #[test]
+    fn safe_execution_detail_keeps_sikri_upstream_fallback() {
+        let detail = "upstream failed sikri_recoverability=recoverable";
+
+        assert_eq!(safe_execution_detail(detail), "execution_upstream_error");
+    }
+
+    #[test]
+    fn safe_execution_detail_collapses_generic_errors() {
+        assert_eq!(
+            safe_execution_detail("database unavailable"),
+            "execution_error"
+        );
     }
 }

@@ -32,6 +32,7 @@ serde_json = "1.0.149"
 reqwest = { version = "0.13.2" }
 base64 = "0.22.1"
 gcp_auth = "0.12.6"
+url = "2.5.7"
 
 
 # Feilhåndtering

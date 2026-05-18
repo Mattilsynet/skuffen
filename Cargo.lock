@@ -1635,6 +1635,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-stackdriver",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
