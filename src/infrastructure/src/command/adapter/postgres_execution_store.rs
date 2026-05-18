@@ -10,6 +10,7 @@ use sqlx::types::chrono;
 use sqlx::{Postgres, pool::PoolConnection};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -200,7 +201,7 @@ impl CommandExecutionRepository for PostgresExecutionStore {
 
     async fn marker_ok(&self, command_id: Uuid, attempt_no: i32) -> Result<(), anyhow::Error> {
         let mut tx = self.pool.begin().await?;
-        let result = sqlx::query(
+        let log_context = sqlx::query_as::<_, ExecutionLogContext>(
             r#"
             UPDATE command_execution
             SET status = 'ok',
@@ -210,21 +211,23 @@ impl CommandExecutionRepository for PostgresExecutionStore {
             WHERE command_id = $1
               AND status = 'kjorer'
               AND attempt_no = $2
+            RETURNING correlation_id, command_type, sak_id, journalpost_id
             "#,
         )
         .bind(command_id)
         .bind(attempt_no)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
-        if result.rows_affected() == 0 {
+        let Some(log_context) = log_context else {
             return Err(anyhow::anyhow!(
                 "Kunne ikke markere command {} som ok for attempt {}",
                 command_id,
                 attempt_no
             ));
-        }
+        };
         avslutt_forsok(&mut tx, command_id, attempt_no, "ok", None).await?;
         tx.commit().await?;
+        log_command_execution_outcome(command_id, Some(attempt_no), "ok", None, &log_context);
         Ok(())
     }
 
@@ -236,7 +239,7 @@ impl CommandExecutionRepository for PostgresExecutionStore {
         retry_ready_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), anyhow::Error> {
         let mut tx = self.pool.begin().await?;
-        let result = sqlx::query(
+        let log_context = sqlx::query_as::<_, ExecutionLogContext>(
             r#"
             UPDATE command_execution
             SET status = 'retry_venter',
@@ -247,21 +250,22 @@ impl CommandExecutionRepository for PostgresExecutionStore {
             WHERE command_id = $1
               AND status = 'kjorer'
               AND attempt_no = $2
+            RETURNING correlation_id, command_type, sak_id, journalpost_id
             "#,
         )
         .bind(command_id)
         .bind(attempt_no)
         .bind(retry_ready_at)
         .bind(detalj)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
-        if result.rows_affected() == 0 {
+        let Some(log_context) = log_context else {
             return Err(anyhow::anyhow!(
                 "Kunne ikke markere command {} som retry_venter for attempt {}",
                 command_id,
                 attempt_no
             ));
-        }
+        };
         avslutt_forsok(
             &mut tx,
             command_id,
@@ -271,6 +275,13 @@ impl CommandExecutionRepository for PostgresExecutionStore {
         )
         .await?;
         tx.commit().await?;
+        log_command_execution_outcome(
+            command_id,
+            Some(attempt_no),
+            "retry_venter",
+            Some(detalj),
+            &log_context,
+        );
         Ok(())
     }
 
@@ -281,7 +292,7 @@ impl CommandExecutionRepository for PostgresExecutionStore {
         detalj: &str,
     ) -> Result<(), anyhow::Error> {
         let mut tx = self.pool.begin().await?;
-        let result = sqlx::query(
+        let log_context = sqlx::query_as::<_, ExecutionLogContext>(
             r#"
             UPDATE command_execution
             SET status = 'blokkert_venter',
@@ -292,20 +303,21 @@ impl CommandExecutionRepository for PostgresExecutionStore {
             WHERE command_id = $1
               AND status = 'kjorer'
               AND attempt_no = $2
+            RETURNING correlation_id, command_type, sak_id, journalpost_id
             "#,
         )
         .bind(command_id)
         .bind(attempt_no)
         .bind(detalj)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
-        if result.rows_affected() == 0 {
+        let Some(log_context) = log_context else {
             return Err(anyhow::anyhow!(
                 "Kunne ikke markere command {} som blokkert_venter for attempt {}",
                 command_id,
                 attempt_no
             ));
-        }
+        };
         avslutt_forsok(
             &mut tx,
             command_id,
@@ -315,6 +327,13 @@ impl CommandExecutionRepository for PostgresExecutionStore {
         )
         .await?;
         tx.commit().await?;
+        log_command_execution_outcome(
+            command_id,
+            Some(attempt_no),
+            "blokkert_venter",
+            Some(detalj),
+            &log_context,
+        );
         Ok(())
     }
 
@@ -325,7 +344,7 @@ impl CommandExecutionRepository for PostgresExecutionStore {
         detalj: &str,
     ) -> Result<(), anyhow::Error> {
         let mut tx = self.pool.begin().await?;
-        let result = sqlx::query(
+        let log_context = sqlx::query_as::<_, ExecutionLogContext>(
             r#"
             UPDATE command_execution
             SET status = 'feil',
@@ -336,22 +355,30 @@ impl CommandExecutionRepository for PostgresExecutionStore {
             WHERE command_id = $1
               AND status = 'kjorer'
               AND attempt_no = $2
+            RETURNING correlation_id, command_type, sak_id, journalpost_id
             "#,
         )
         .bind(command_id)
         .bind(attempt_no)
         .bind(detalj)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
-        if result.rows_affected() == 0 {
+        let Some(log_context) = log_context else {
             return Err(anyhow::anyhow!(
                 "Kunne ikke markere command {} som feil for attempt {}",
                 command_id,
                 attempt_no
             ));
-        }
+        };
         avslutt_forsok(&mut tx, command_id, attempt_no, "feil", Some(detalj)).await?;
         tx.commit().await?;
+        log_command_execution_outcome(
+            command_id,
+            Some(attempt_no),
+            "feil",
+            Some(detalj),
+            &log_context,
+        );
         Ok(())
     }
 
@@ -446,7 +473,7 @@ impl CommandExecutionRepository for PostgresExecutionStore {
     }
 
     async fn oppdater_til_feil(&self, command_id: Uuid, detalj: &str) -> Result<(), anyhow::Error> {
-        sqlx::query(
+        let log_context = sqlx::query_as::<_, ExecutionLogContext>(
             r#"
             UPDATE command_execution
             SET status = 'feil',
@@ -455,12 +482,18 @@ impl CommandExecutionRepository for PostgresExecutionStore {
                 updated_at = now(),
                 finished_at = now()
             WHERE command_id = $1
+            RETURNING correlation_id, command_type, sak_id, journalpost_id
             "#,
         )
         .bind(command_id)
         .bind(detalj)
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
+
+        if let Some(log_context) = log_context {
+            log_command_execution_outcome(command_id, None, "feil", Some(detalj), &log_context);
+        }
+
         Ok(())
     }
 
@@ -494,6 +527,213 @@ impl CommandExecutionRepository for PostgresExecutionStore {
         tx.commit().await?;
         Ok(result.rows_affected())
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct ExecutionLogContext {
+    correlation_id: Option<Uuid>,
+    command_type: String,
+    sak_id: Option<Uuid>,
+    journalpost_id: Option<Uuid>,
+}
+
+fn log_command_execution_outcome(
+    command_id: Uuid,
+    attempt_no: Option<i32>,
+    outcome: &'static str,
+    detail: Option<&str>,
+    context: &ExecutionLogContext,
+) {
+    let correlation_id = format_optional_uuid(context.correlation_id);
+    let sak_id = format_optional_uuid(context.sak_id);
+    let journalpost_id = format_optional_uuid(context.journalpost_id);
+    let attempt_no = attempt_no
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let sanitized_detail = detail.and_then(sanitize_log_detail);
+    let last_error = sanitized_detail.as_deref().unwrap_or("omitted");
+    let error_category = detail.map(error_category_for_detail).unwrap_or("none");
+
+    match outcome {
+        "ok" => info!(
+            command_id = %command_id,
+            correlation_id = %correlation_id,
+            command_type = %context.command_type,
+            attempt_no = %attempt_no,
+            outcome,
+            sak_id = %sak_id,
+            journalpost_id = %journalpost_id,
+            "command_execution_outcome"
+        ),
+        "feil" => error!(
+            command_id = %command_id,
+            correlation_id = %correlation_id,
+            command_type = %context.command_type,
+            attempt_no = %attempt_no,
+            outcome,
+            sak_id = %sak_id,
+            journalpost_id = %journalpost_id,
+            last_error = %last_error,
+            error_classification = "irrecoverable",
+            error_category = %error_category,
+            "command_execution_outcome"
+        ),
+        "retry_venter" => warn!(
+            command_id = %command_id,
+            correlation_id = %correlation_id,
+            command_type = %context.command_type,
+            attempt_no = %attempt_no,
+            outcome,
+            sak_id = %sak_id,
+            journalpost_id = %journalpost_id,
+            last_error = %last_error,
+            error_classification = "recoverable",
+            error_category = %error_category,
+            "command_execution_outcome"
+        ),
+        "blokkert_venter" => warn!(
+            command_id = %command_id,
+            correlation_id = %correlation_id,
+            command_type = %context.command_type,
+            attempt_no = %attempt_no,
+            outcome,
+            sak_id = %sak_id,
+            journalpost_id = %journalpost_id,
+            last_error = %last_error,
+            error_classification = "blocked",
+            error_category = %error_category,
+            "command_execution_outcome"
+        ),
+        _ => warn!(
+            command_id = %command_id,
+            correlation_id = %correlation_id,
+            command_type = %context.command_type,
+            attempt_no = %attempt_no,
+            outcome,
+            sak_id = %sak_id,
+            journalpost_id = %journalpost_id,
+            last_error = %last_error,
+            error_classification = "unknown",
+            error_category = %error_category,
+            "command_execution_outcome"
+        ),
+    }
+}
+
+fn format_optional_uuid(id: Option<Uuid>) -> String {
+    id.map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn sanitize_log_detail(detail: &str) -> Option<String> {
+    const MAX_LOG_DETAIL_CHARS: usize = 500;
+
+    let stripped = detail
+        .replace("sikri_recoverability=irrecoverable", "")
+        .replace("sikri_recoverability=recoverable", "");
+    let normalized = stripped
+        .chars()
+        .filter(|c| !c.is_control() || c.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let redacted = redact_sensitive_log_tokens(&normalized);
+    let payload_stripped = strip_embedded_payload(&redacted);
+    let trimmed = payload_stripped.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(truncate_log_detail(trimmed, MAX_LOG_DETAIL_CHARS))
+}
+
+fn error_category_for_detail(detail: &str) -> &'static str {
+    if detail.contains("Ugyldig kommando") {
+        "invalid_command"
+    } else {
+        "execution_error"
+    }
+}
+
+fn redact_sensitive_log_tokens(detail: &str) -> String {
+    let mut redacted = Vec::new();
+    let mut redacted_remaining = 0;
+
+    for token in detail.split_whitespace() {
+        if redacted_remaining > 0 {
+            redacted.push("redacted".to_string());
+            redacted_remaining -= 1;
+            continue;
+        }
+
+        let lower = token.to_ascii_lowercase();
+        if is_sensitive_log_token(&lower) {
+            redacted.push(redact_sensitive_log_token(token));
+            redacted_remaining = sensitive_following_token_count(token, &lower);
+        } else {
+            redacted.push(token.to_string());
+        }
+    }
+
+    redacted.join(" ")
+}
+
+fn is_sensitive_log_token(lower: &str) -> bool {
+    lower.contains("authorization")
+        || lower == "bearer"
+        || lower == "basic"
+        || lower.contains("password")
+        || lower.contains("passwd")
+        || lower.contains("token")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("secret")
+}
+
+fn sensitive_following_token_count(token: &str, lower: &str) -> usize {
+    if lower == "bearer" || lower == "basic" {
+        1
+    } else if lower.contains("authorization") && token.ends_with(':') {
+        2
+    } else if token.ends_with(':') || token == "=" {
+        1
+    } else {
+        0
+    }
+}
+
+fn redact_sensitive_log_token(token: &str) -> String {
+    token
+        .find(['=', ':'])
+        .map(|index| format!("{}redacted", &token[..=index]))
+        .unwrap_or_else(|| "redacted".to_string())
+}
+
+fn strip_embedded_payload(detail: &str) -> String {
+    let Some(index) = detail.find('{') else {
+        return detail.to_string();
+    };
+
+    let prefix = detail[..index].trim_end();
+    if prefix.is_empty() {
+        "[payload stripped]".to_string()
+    } else {
+        format!("{prefix} [payload stripped]")
+    }
+}
+
+fn truncate_log_detail(detail: &str, max_chars: usize) -> String {
+    let mut value: String = detail.chars().take(max_chars).collect();
+    if detail.chars().count() > max_chars {
+        value.push_str("...");
+    }
+    value
 }
 
 fn command_type_code(command_type: CommandTypeCode) -> &'static str {
