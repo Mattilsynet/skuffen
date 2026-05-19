@@ -301,20 +301,29 @@ fn safe_execution_detail(detail: &str) -> String {
         return "execution_upstream_error".to_string();
     }
 
-    if let Some(renderer_detail) = safe_html2pdf_execution_detail(&normalized) {
-        return renderer_detail;
+    if let Some(diagnostic_detail) = safe_internal_execution_detail(&normalized) {
+        return diagnostic_detail;
     }
 
     "execution_error".to_string()
 }
 
-fn safe_html2pdf_execution_detail(detail: &str) -> Option<String> {
-    const PREFIXES: [&str; 5] = [
+fn safe_internal_execution_detail(detail: &str) -> Option<String> {
+    const PREFIXES: [&str; 14] = [
         "html2pdf_auth_failed",
         "html2pdf_client_error",
         "html2pdf_server_error",
         "html2pdf_request_failed",
         "html2pdf_response_read_failed",
+        "render_dokument_mangler",
+        "render_journalpost_mangler",
+        "render_ikke_html_template",
+        "render_saksnummer_mangler",
+        "render_html_mal_mangler",
+        "render_html_mal_lager_unavailable",
+        "render_token_substitution_failed",
+        "rendered_dokument_save_failed",
+        "render_state_update_failed",
     ];
 
     let start = PREFIXES
@@ -366,12 +375,16 @@ fn redact_sensitive_execution_tokens(detail: &str) -> String {
 fn is_sensitive_execution_token(lower: &str) -> bool {
     lower.contains("authorization")
         || lower == "bearer"
+        || lower.starts_with("bearer=")
         || lower == "basic"
+        || lower.starts_with("basic=")
         || lower.contains("password")
         || lower.contains("passwd")
+        || lower.contains("credential")
         || lower.contains("token")
         || lower.contains("api_key")
         || lower.contains("apikey")
+        || lower.contains("x-api-key")
         || lower.contains("secret")
 }
 
@@ -555,6 +568,44 @@ mod tests {
         let safe = safe_execution_detail(&detail);
 
         assert!(safe.starts_with("html2pdf_server_error"));
+        assert!(safe.len() <= 503);
+        assert!(safe.ends_with("..."));
+    }
+
+    #[test]
+    fn safe_execution_detail_preserves_render_diagnostics() {
+        let detail = "render_html_mal_lager_unavailable mal_referanse=019e3d15-0000-7000-8000-000000000001 error=\"object store unavailable\"";
+
+        assert_eq!(safe_execution_detail(detail), detail);
+    }
+
+    #[test]
+    fn safe_execution_detail_redacts_render_diagnostics() {
+        let detail = "rendered_dokument_save_failed token=secret Authorization: Bearer abc123 Authorization: Basic xyz789 credential=abc x-api-key=def Bearer=ghi Basic=jkl";
+
+        let safe = safe_execution_detail(detail);
+
+        assert!(safe.starts_with("rendered_dokument_save_failed"));
+        assert!(!safe.contains("secret"));
+        assert!(!safe.contains("abc123"));
+        assert!(!safe.contains("xyz789"));
+        assert!(!safe.contains("credential=abc"));
+        assert!(!safe.contains("x-api-key=def"));
+        assert!(!safe.contains("Bearer=ghi"));
+        assert!(!safe.contains("Basic=jkl"));
+        assert!(safe.contains("credential=redacted"));
+        assert!(safe.contains("x-api-key=redacted"));
+        assert!(safe.contains("Bearer=redacted"));
+        assert!(safe.contains("Basic=redacted"));
+    }
+
+    #[test]
+    fn safe_execution_detail_bounds_render_diagnostics() {
+        let detail = format!("render_state_update_failed error={}", "a".repeat(800));
+
+        let safe = safe_execution_detail(&detail);
+
+        assert!(safe.starts_with("render_state_update_failed"));
         assert!(safe.len() <= 503);
         assert!(safe.ends_with("..."));
     }

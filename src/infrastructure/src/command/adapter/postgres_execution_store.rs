@@ -624,9 +624,11 @@ fn log_command_execution_outcome(
     let sanitized_detail = detail.and_then(sanitize_log_detail);
     let last_error = sanitized_detail.as_deref().unwrap_or("omitted");
     let error_category = detail.map(error_category_for_detail).unwrap_or("none");
+    let headline = command_outcome_headline(outcome, error_category);
 
     match outcome {
         "ok" => info!(
+            event = "command_execution_outcome",
             command_id = %command_id,
             correlation_id = %correlation_id,
             command_type = %context.command_type,
@@ -634,9 +636,28 @@ fn log_command_execution_outcome(
             outcome,
             sak_id = %sak_id,
             journalpost_id = %journalpost_id,
-            "command_execution_outcome"
+            diagnostic_code = %error_category,
+            error_category = %error_category,
+            "{}", headline
+        ),
+        "klar" => info!(
+            event = "command_execution_outcome",
+            command_id = %command_id,
+            correlation_id = %correlation_id,
+            command_type = %context.command_type,
+            attempt_no = %attempt_no,
+            outcome,
+            sak_id = %sak_id,
+            journalpost_id = %journalpost_id,
+            detail = %last_error,
+            last_error = %last_error,
+            error_classification = "none",
+            diagnostic_code = %error_category,
+            error_category = %error_category,
+            "{}", headline
         ),
         "feil" => error!(
+            event = "command_execution_outcome",
             command_id = %command_id,
             correlation_id = %correlation_id,
             command_type = %context.command_type,
@@ -647,10 +668,12 @@ fn log_command_execution_outcome(
             detail = %last_error,
             last_error = %last_error,
             error_classification = "irrecoverable",
+            diagnostic_code = %error_category,
             error_category = %error_category,
-            "command_execution_outcome"
+            "{}", headline
         ),
         "retry_venter" => warn!(
+            event = "command_execution_outcome",
             command_id = %command_id,
             correlation_id = %correlation_id,
             command_type = %context.command_type,
@@ -661,10 +684,12 @@ fn log_command_execution_outcome(
             detail = %last_error,
             last_error = %last_error,
             error_classification = "recoverable",
+            diagnostic_code = %error_category,
             error_category = %error_category,
-            "command_execution_outcome"
+            "{}", headline
         ),
         "blokkert_venter" => warn!(
+            event = "command_execution_outcome",
             command_id = %command_id,
             correlation_id = %correlation_id,
             command_type = %context.command_type,
@@ -675,10 +700,12 @@ fn log_command_execution_outcome(
             detail = %last_error,
             last_error = %last_error,
             error_classification = "blocked",
+            diagnostic_code = %error_category,
             error_category = %error_category,
-            "command_execution_outcome"
+            "{}", headline
         ),
         _ => warn!(
+            event = "command_execution_outcome",
             command_id = %command_id,
             correlation_id = %correlation_id,
             command_type = %context.command_type,
@@ -689,9 +716,25 @@ fn log_command_execution_outcome(
             detail = %last_error,
             last_error = %last_error,
             error_classification = "unknown",
+            diagnostic_code = %error_category,
             error_category = %error_category,
-            "command_execution_outcome"
+            "{}", headline
         ),
+    }
+}
+
+fn command_outcome_headline(outcome: &str, diagnostic_code: &str) -> String {
+    match (outcome, diagnostic_code) {
+        ("ok", _) => "command ok".to_string(),
+        ("klar", _) => "command ready".to_string(),
+        ("retry_venter", "none") => "command retrying".to_string(),
+        ("retry_venter", code) => format!("command retrying: {code}"),
+        ("blokkert_venter", "none") => "command blocked".to_string(),
+        ("blokkert_venter", code) => format!("command blocked: {code}"),
+        ("feil", "none") => "command failed".to_string(),
+        ("feil", code) => format!("command failed: {code}"),
+        (other, "none") => format!("command outcome: {other}"),
+        (other, code) => format!("command outcome: {other}: {code}"),
     }
 }
 
@@ -761,6 +804,24 @@ fn error_category_for_detail(detail: &str) -> &'static str {
         "html2pdf_request_failed"
     } else if detail.starts_with("html2pdf_response_read_failed") {
         "html2pdf_response_read_failed"
+    } else if detail.starts_with("render_dokument_mangler") {
+        "render_dokument_mangler"
+    } else if detail.starts_with("render_journalpost_mangler") {
+        "render_journalpost_mangler"
+    } else if detail.starts_with("render_ikke_html_template") {
+        "render_ikke_html_template"
+    } else if detail.starts_with("render_saksnummer_mangler") {
+        "render_saksnummer_mangler"
+    } else if detail.starts_with("render_html_mal_mangler") {
+        "render_html_mal_mangler"
+    } else if detail.starts_with("render_html_mal_lager_unavailable") {
+        "render_html_mal_lager_unavailable"
+    } else if detail.starts_with("render_token_substitution_failed") {
+        "render_token_substitution_failed"
+    } else if detail.starts_with("rendered_dokument_save_failed") {
+        "rendered_dokument_save_failed"
+    } else if detail.starts_with("render_state_update_failed") {
+        "render_state_update_failed"
     } else if detail.contains("Ugyldig kommando") {
         "invalid_command"
     } else {
@@ -794,12 +855,16 @@ fn redact_sensitive_log_tokens(detail: &str) -> String {
 fn is_sensitive_log_token(lower: &str) -> bool {
     lower.contains("authorization")
         || lower == "bearer"
+        || lower.starts_with("bearer=")
         || lower == "basic"
+        || lower.starts_with("basic=")
         || lower.contains("password")
         || lower.contains("passwd")
+        || lower.contains("credential")
         || lower.contains("token")
         || lower.contains("api_key")
         || lower.contains("apikey")
+        || lower.contains("x-api-key")
         || lower.contains("secret")
 }
 

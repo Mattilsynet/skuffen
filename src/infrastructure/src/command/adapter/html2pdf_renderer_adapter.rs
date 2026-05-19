@@ -432,12 +432,16 @@ fn redact_sensitive_tokens(value: &str) -> String {
 fn is_sensitive_token(lower: &str) -> bool {
     lower.contains("authorization")
         || lower == "bearer"
+        || lower.starts_with("bearer=")
         || lower == "basic"
+        || lower.starts_with("basic=")
         || lower.contains("password")
         || lower.contains("passwd")
+        || lower.contains("credential")
         || lower.contains("token")
         || lower.contains("api_key")
         || lower.contains("apikey")
+        || lower.contains("x-api-key")
         || lower.contains("secret")
 }
 
@@ -561,15 +565,22 @@ mod tests {
 
     #[test]
     fn sanitize_error_message_redacts_queries_and_secrets() {
-        let message =
-            "failed url=https://renderer.example/render?token=secret Authorization: Bearer abc123";
+        let message = "failed url=https://renderer.example/render?token=secret Authorization: Bearer abc123 credential=abc x-api-key=def Bearer=ghi Basic=jkl";
 
         let sanitized = sanitize_error_message(message);
 
         assert!(sanitized.contains("https://renderer.example/render?redacted"));
         assert!(!sanitized.contains("secret"));
         assert!(!sanitized.contains("abc123"));
+        assert!(!sanitized.contains("credential=abc"));
+        assert!(!sanitized.contains("x-api-key=def"));
+        assert!(!sanitized.contains("Bearer=ghi"));
+        assert!(!sanitized.contains("Basic=jkl"));
         assert!(sanitized.contains("Authorization:redacted"));
+        assert!(sanitized.contains("credential=redacted"));
+        assert!(sanitized.contains("x-api-key=redacted"));
+        assert!(sanitized.contains("Bearer=redacted"));
+        assert!(sanitized.contains("Basic=redacted"));
     }
 
     #[test]

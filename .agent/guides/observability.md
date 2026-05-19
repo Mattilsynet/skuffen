@@ -87,6 +87,44 @@ Application layer does not use tracing (per repo rule: no I/O or tracing in
 Domain/Application). Application service execution time is visible as the gap
 between the listener span start and the first infrastructure child span.
 
+## Cloud Logging command outcomes
+
+Cloud Logging list rows use scan-friendly command outcome headlines while retaining structured `event="command_execution_outcome"`. This enables operators to quickly scan command execution results in logs while preserving structured filtering capability.
+
+## Render diagnostics
+
+Application-rendered document failures propagate stable safe detail codes:
+- `render_dokument_mangler` — Target document missing from the command facts
+- `render_journalpost_mangler` — Target journalpost missing from the command facts
+- `render_ikke_html_template` — Render operation targeted a non-template document
+- `render_saksnummer_mangler` — Sak number is not available for substitution
+- `render_html_mal_mangler` — HTML document content unavailable
+- `render_html_mal_lager_unavailable` — HTML document storage layer unavailable
+- `render_token_substitution_failed` — Template token substitution error
+- `rendered_dokument_save_failed` — Rendered document persist to storage failed
+- `render_state_update_failed` — Render state update to database failed
+
+These codes appear in `last_detail` on `command_execution` and structured logs. They are safe to surface in dashboards and alerts. `detail` and `last_error` are duplicated in command-outcome logs as a compatibility bridge for existing log queries while dashboards migrate to `diagnostic_code`.
+
+## Media store logs
+
+Media store operations emit structured events with `media_get_*` and `media_save_*` event types, including:
+- `media_id` — unique media identifier
+- `operation` — get or save action
+- `byte_len` — content size in bytes (when available)
+- `content_type` — MIME type of media content
+- `origin/source ids` — upstream arkiv system identifiers
+
+## Safety constraints
+
+Never logged:
+- HTML/PDF document contents or generated payloads
+- Authorization headers, tokens, or secrets
+- Raw request/response payload bodies
+- Secrets, credentials, or PII
+
+The public outward status remains static and safe. Command execution internal details are for operators only.
+
 ## Error reply sanitization
 
 NATS error replies to callers must not echo internal details:

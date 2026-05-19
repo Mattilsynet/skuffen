@@ -7,6 +7,7 @@ use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
 use bytes::Bytes;
+use tracing::{error, info, warn};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MediaMetadata {
@@ -48,13 +49,81 @@ impl ObjectStoreMediaStore {
 impl MediaStore for ObjectStoreMediaStore {
     async fn save(&self, file: MediaFile) -> Result<(), anyhow::Error> {
         let object_name = file.id.to_string();
+        let byte_len = file.data.len();
+        let content_type = file.content_type.as_deref().unwrap_or("unknown");
+        let origin = file.metadata.origin.as_deref().unwrap_or("unknown");
+        let source_template_reference =
+            format_optional_uuid(file.metadata.source_template_reference);
+        let source_document_id = format_optional_uuid(file.metadata.source_document_id);
+        let source_command_id = format_optional_uuid(file.metadata.source_command_id);
+
+        info!(
+            event = "media_save_start",
+            operation = "save",
+            media_id = %file.id,
+            byte_len,
+            content_type,
+            origin,
+            source_template_reference = %source_template_reference,
+            source_document_id = %source_document_id,
+            source_command_id = %source_command_id,
+            "media save started: {} bytes {}", byte_len, content_type
+        );
+
         let mut reader = std::io::Cursor::new(Bytes::from(file.data));
-        self.store.put(object_name.as_str(), &mut reader).await?;
-        if let Some(metadata) = object_metadata(&object_name, &file.metadata) {
-            self.store
-                .update_metadata(object_name.as_str(), metadata)
-                .await?;
+        if let Err(err) = self.store.put(object_name.as_str(), &mut reader).await {
+            let error_message = sanitize_media_error(&err.to_string());
+            error!(
+                event = "media_save_failed",
+                operation = "save",
+                media_id = %object_name,
+                byte_len,
+                content_type,
+                origin,
+                source_template_reference = %source_template_reference,
+                source_document_id = %source_document_id,
+                source_command_id = %source_command_id,
+                error_category = "object_store_put_failed",
+                error_message = %error_message,
+                "media save failed: object_store_put_failed"
+            );
+            return Err(anyhow::anyhow!(err));
         }
+        if let Some(metadata) = object_metadata(&object_name, &file.metadata)
+            && let Err(err) = self
+                .store
+                .update_metadata(object_name.as_str(), metadata)
+                .await
+        {
+            let error_message = sanitize_media_error(&err.to_string());
+            error!(
+                event = "media_save_failed",
+                operation = "save_metadata",
+                media_id = %object_name,
+                byte_len,
+                content_type,
+                origin,
+                source_template_reference = %source_template_reference,
+                source_document_id = %source_document_id,
+                source_command_id = %source_command_id,
+                error_category = "object_store_metadata_failed",
+                error_message = %error_message,
+                "media save failed: object_store_metadata_failed"
+            );
+            return Err(anyhow::anyhow!(err));
+        }
+        info!(
+            event = "media_save_ok",
+            operation = "save",
+            media_id = %object_name,
+            byte_len,
+            content_type,
+            origin,
+            source_template_reference = %source_template_reference,
+            source_document_id = %source_document_id,
+            source_command_id = %source_command_id,
+            "media save ok: {} bytes {}", byte_len, content_type
+        );
         Ok(())
     }
 
@@ -69,6 +138,12 @@ impl MediaStore for ObjectStoreMediaStore {
 
     async fn get(&self, id: Uuid) -> Result<Option<MediaFile>, anyhow::Error> {
         let object_name = id.to_string();
+        info!(
+            event = "media_get_start",
+            operation = "get",
+            media_id = %id,
+            "media get started"
+        );
         let mut object = match self.store.get(object_name.as_str()).await {
             Ok(object) => object,
             Err(err)
@@ -77,14 +152,52 @@ impl MediaStore for ObjectStoreMediaStore {
                     async_nats::jetstream::object_store::GetErrorKind::NotFound
                 ) =>
             {
+                warn!(
+                    event = "media_get_missing",
+                    operation = "get",
+                    media_id = %id,
+                    error_category = "object_store_not_found",
+                    "media get missing: object_store_not_found"
+                );
                 return Ok(None);
             }
-            Err(err) => return Err(anyhow::anyhow!(err)),
+            Err(err) => {
+                let error_message = sanitize_media_error(&err.to_string());
+                error!(
+                    event = "media_get_failed",
+                    operation = "get",
+                    media_id = %id,
+                    error_category = "object_store_get_failed",
+                    error_message = %error_message,
+                    "media get failed: object_store_get_failed"
+                );
+                return Err(anyhow::anyhow!(err));
+            }
         };
 
         let mut data = Vec::new();
-        object.read_to_end(&mut data).await?;
+        if let Err(err) = object.read_to_end(&mut data).await {
+            let error_message = sanitize_media_error(&err.to_string());
+            error!(
+                event = "media_get_failed",
+                operation = "read",
+                media_id = %id,
+                error_category = "object_store_read_failed",
+                error_message = %error_message,
+                "media get failed: object_store_read_failed"
+            );
+            return Err(anyhow::anyhow!(err));
+        }
         let info = object.info;
+        let byte_len = data.len();
+        info!(
+            event = "media_get_ok",
+            operation = "get",
+            media_id = %id,
+            byte_len,
+            object_name = %info.name,
+            "media get ok: {} bytes", byte_len
+        );
 
         Ok(Some(MediaFile {
             id,
@@ -93,6 +206,90 @@ impl MediaStore for ObjectStoreMediaStore {
             content_type: None,
             metadata: MediaMetadata::default(),
         }))
+    }
+}
+
+fn format_optional_uuid(id: Option<Uuid>) -> String {
+    id.map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn sanitize_media_error(detail: &str) -> String {
+    let normalized = detail
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let redacted = redact_media_error_tokens(&normalized);
+    const MAX_MEDIA_ERROR_DETAIL: usize = 300;
+    if redacted.chars().count() <= MAX_MEDIA_ERROR_DETAIL {
+        redacted
+    } else {
+        format!(
+            "{}…",
+            redacted
+                .chars()
+                .take(MAX_MEDIA_ERROR_DETAIL)
+                .collect::<String>()
+        )
+    }
+}
+
+fn redact_media_error_tokens(detail: &str) -> String {
+    let mut redacted = Vec::new();
+    let mut redact_next = 0;
+    for token in detail.split_whitespace() {
+        if redact_next > 0 {
+            redacted.push("redacted".to_string());
+            redact_next -= 1;
+            continue;
+        }
+        let lower = token.to_ascii_lowercase();
+        if is_sensitive_media_token(&lower) {
+            redacted.push(redact_media_token(token));
+            redact_next = sensitive_media_following_token_count(token, &lower);
+        } else {
+            redacted.push(token.to_string());
+        }
+    }
+    redacted.join(" ")
+}
+
+fn is_sensitive_media_token(lower: &str) -> bool {
+    lower.contains("authorization")
+        || lower == "bearer"
+        || lower.starts_with("bearer=")
+        || lower == "basic"
+        || lower.starts_with("basic=")
+        || lower.contains("token")
+        || lower.contains("secret")
+        || lower.contains("password")
+        || lower.contains("passwd")
+        || lower.contains("credential")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("x-api-key")
+}
+
+fn sensitive_media_following_token_count(token: &str, lower: &str) -> usize {
+    if lower.contains("authorization") && token.ends_with(':') {
+        2
+    } else if token.ends_with(':') || lower == "bearer" || lower == "basic" {
+        1
+    } else {
+        0
+    }
+}
+
+fn redact_media_token(token: &str) -> String {
+    if let Some((key, _)) = token.split_once('=') {
+        format!("{key}=redacted")
+    } else if let Some((key, _)) = token.split_once(':') {
+        format!("{key}:redacted")
+    } else {
+        "redacted".to_string()
     }
 }
 

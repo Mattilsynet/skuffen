@@ -68,7 +68,12 @@ impl MediaListener {
             Ok(Some(payload)) => payload,
             Ok(None) => return,
             Err(err) => {
-                error!("Chunk assembly failed: {err}");
+                error!(
+                    event = "media_upload_failed",
+                    error_category = "chunk_assembly_failed",
+                    error_message = %sanitize_media_listener_error(&err.to_string()),
+                    "media upload failed: chunk_assembly_failed"
+                );
                 self.publish_error(&reply_subject, "Internal error").await;
                 return;
             }
@@ -77,12 +82,25 @@ impl MediaListener {
         let file_id = match Uuid::parse_str(payload.upload_id.as_str()) {
             Ok(id) => id,
             Err(err) => {
-                error!("Invalid upload id: {err}");
+                error!(
+                    event = "media_upload_failed",
+                    error_category = "invalid_upload_id",
+                    error_message = %sanitize_media_listener_error(&err.to_string()),
+                    "media upload failed: invalid_upload_id"
+                );
                 self.publish_error(&reply_subject, "Invalid upload id")
                     .await;
                 return;
             }
         };
+
+        let byte_len = payload.data.len();
+        let content_type = payload
+            .content_type
+            .as_deref()
+            .unwrap_or("unknown")
+            .to_string();
+        let filename_ext = safe_filename_extension(payload.filename.as_deref());
 
         let file = MediaFile {
             id: file_id,
@@ -93,11 +111,28 @@ impl MediaListener {
         };
 
         if let Err(err) = self.store.save(file).await {
-            error!("Failed to store media: {err}");
+            error!(
+                event = "media_upload_failed",
+                upload_id = %file_id,
+                byte_len,
+                content_type = %content_type,
+                filename_ext = %filename_ext,
+                error_category = "media_store_save_failed",
+                error_message = %sanitize_media_listener_error(&err.to_string()),
+                "media upload failed: media_store_save_failed"
+            );
             self.publish_error(&reply_subject, "Internal error").await;
             return;
         }
 
+        info!(
+            event = "media_upload_ok",
+            upload_id = %file_id,
+            byte_len,
+            content_type = %content_type,
+            filename_ext = %filename_ext,
+            "media upload ok: {} bytes {}", byte_len, content_type
+        );
         self.publish_ok(&reply_subject, file_id).await;
     }
 
@@ -115,5 +150,92 @@ impl MediaListener {
         let payload = serde_json::to_vec(&response).unwrap_or_default();
         let subject = reply_subject.to_string();
         let _ = self.client.inner().publish(subject, payload.into()).await;
+    }
+}
+
+fn safe_filename_extension(filename: Option<&str>) -> String {
+    filename
+        .and_then(|name| name.rsplit_once('.').map(|(_, ext)| ext))
+        .filter(|ext| ext.len() <= 16 && ext.chars().all(|c| c.is_ascii_alphanumeric()))
+        .map(|ext| format!(".{ext}"))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn sanitize_media_listener_error(detail: &str) -> String {
+    let normalized = detail
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let redacted = redact_media_listener_tokens(&normalized);
+    const MAX_MEDIA_LISTENER_ERROR_DETAIL: usize = 240;
+    if redacted.chars().count() <= MAX_MEDIA_LISTENER_ERROR_DETAIL {
+        redacted
+    } else {
+        format!(
+            "{}…",
+            redacted
+                .chars()
+                .take(MAX_MEDIA_LISTENER_ERROR_DETAIL)
+                .collect::<String>()
+        )
+    }
+}
+
+fn redact_media_listener_tokens(detail: &str) -> String {
+    let mut redacted = Vec::new();
+    let mut redact_next = 0;
+    for token in detail.split_whitespace() {
+        if redact_next > 0 {
+            redacted.push("redacted".to_string());
+            redact_next -= 1;
+            continue;
+        }
+        let lower = token.to_ascii_lowercase();
+        if is_sensitive_media_listener_token(&lower) {
+            redacted.push(redact_media_listener_token(token));
+            redact_next = sensitive_media_listener_following_token_count(token, &lower);
+        } else {
+            redacted.push(token.to_string());
+        }
+    }
+    redacted.join(" ")
+}
+
+fn is_sensitive_media_listener_token(lower: &str) -> bool {
+    lower.contains("authorization")
+        || lower == "bearer"
+        || lower.starts_with("bearer=")
+        || lower == "basic"
+        || lower.starts_with("basic=")
+        || lower.contains("token")
+        || lower.contains("secret")
+        || lower.contains("password")
+        || lower.contains("passwd")
+        || lower.contains("credential")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("x-api-key")
+}
+
+fn sensitive_media_listener_following_token_count(token: &str, lower: &str) -> usize {
+    if lower.contains("authorization") && token.ends_with(':') {
+        2
+    } else if token.ends_with(':') || lower == "bearer" || lower == "basic" {
+        1
+    } else {
+        0
+    }
+}
+
+fn redact_media_listener_token(token: &str) -> String {
+    if let Some((key, _)) = token.split_once('=') {
+        format!("{key}=redacted")
+    } else if let Some((key, _)) = token.split_once(':') {
+        format!("{key}:redacted")
+    } else {
+        "redacted".to_string()
     }
 }

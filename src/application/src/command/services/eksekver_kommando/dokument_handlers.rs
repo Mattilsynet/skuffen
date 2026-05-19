@@ -29,9 +29,10 @@ impl EksekverKommandoService {
             rendered_dokument_referanse,
         } = &dokument.kilde
         else {
-            return Err(EksekveringFeil::irrecoverable(
-                "RenderDokument kan bare brukes for HTML-template dokument".to_string(),
-            ));
+            return Err(EksekveringFeil::irrecoverable(format!(
+                "render_ikke_html_template dokument_id={} journalpost_id={}",
+                dokument_id.0, journalpost_id.0
+            )));
         };
 
         if rendered_dokument_referanse.is_some() {
@@ -45,16 +46,22 @@ impl EksekverKommandoService {
         let saksnummer = sak
             .saksnummer
             .as_deref()
-            .ok_or_else(|| EksekveringFeil::blocked("Saksnummer mangler for rendering"))?;
+            .ok_or_else(|| EksekveringFeil::blocked("render_saksnummer_mangler"))?;
 
         let html = match self.dokument_lager.get(*mal_referanse).await {
             Ok(Some(media)) => media.data,
             Ok(None) => {
-                return Err(EksekveringFeil::recoverable(
-                    "HTML-mal mangler i media store".to_string(),
-                ));
+                return Err(EksekveringFeil::recoverable(format!(
+                    "render_html_mal_mangler mal_referanse={mal_referanse}"
+                )));
             }
-            Err(err) => return Err(EksekveringFeil::recoverable(err.to_string())),
+            Err(err) => {
+                return Err(EksekveringFeil::recoverable(format!(
+                    "render_html_mal_lager_unavailable mal_referanse={} error=\"{}\"",
+                    mal_referanse,
+                    quote_diagnostic_value(&sanitize_render_error(&err.to_string()))
+                )));
+            }
         };
 
         let substituert = match substituer_tokens(
@@ -67,10 +74,16 @@ impl EksekverKommandoService {
             Ok(html) => html,
             Err(err) => {
                 let melding = template_feil_melding(&err);
+                let diagnostic = format!(
+                    "render_token_substitution_failed reason={}",
+                    template_feil_kode(&err)
+                );
                 self.entity_tilstand_repo
                     .oppdater_dokument_tilstand(dokument_id, DokumentTilstand::FeiletPermanent)
                     .await
-                    .map_err(|repo_err| EksekveringFeil::recoverable(repo_err.to_string()))?;
+                    .map_err(|repo_err| {
+                        render_state_update_failed("oppdater_dokument_tilstand", repo_err)
+                    })?;
                 self.entity_tilstand_repo
                     .logg_overgang(
                         "dokument",
@@ -82,8 +95,8 @@ impl EksekverKommandoService {
                         Some(melding),
                     )
                     .await
-                    .map_err(|repo_err| EksekveringFeil::recoverable(repo_err.to_string()))?;
-                return Err(EksekveringFeil::irrecoverable(melding.to_string()));
+                    .map_err(|repo_err| render_state_update_failed("logg_overgang", repo_err))?;
+                return Err(EksekveringFeil::irrecoverable(diagnostic));
             }
         };
 
@@ -115,17 +128,25 @@ impl EksekverKommandoService {
                 },
             })
             .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+            .map_err(|err| {
+                EksekveringFeil::recoverable(format!(
+                    "rendered_dokument_save_failed rendered_id={} error=\"{}\"",
+                    rendered_id,
+                    quote_diagnostic_value(&sanitize_render_error(&err.to_string()))
+                ))
+            })?;
 
         self.entity_tilstand_repo
             .oppdater_rendered_dokument_referanse(dokument_id, rendered_id)
             .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+            .map_err(|err| {
+                render_state_update_failed("oppdater_rendered_dokument_referanse", err)
+            })?;
 
         self.entity_tilstand_repo
             .oppdater_dokument_tilstand(dokument_id, DokumentTilstand::Ok)
             .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+            .map_err(|err| render_state_update_failed("oppdater_dokument_tilstand", err))?;
 
         self.entity_tilstand_repo
             .logg_overgang(
@@ -138,7 +159,7 @@ impl EksekverKommandoService {
                 None,
             )
             .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+            .map_err(|err| render_state_update_failed("logg_overgang", err))?;
 
         Ok(())
     }
@@ -269,7 +290,21 @@ fn finn_dokument(
                 .find(|dok| dok.dokument_id == dokument_id)
         })
         .ok_or_else(|| {
-            EksekveringFeil::recoverable(format!("Fant ikke dokument {}", dokument_id.0))
+            let journalpost_exists = sak
+                .journalposter
+                .iter()
+                .any(|jp| jp.journalpost_id == journalpost_id);
+            if journalpost_exists {
+                EksekveringFeil::recoverable(format!(
+                    "render_dokument_mangler dokument_id={} journalpost_id={}",
+                    dokument_id.0, journalpost_id.0
+                ))
+            } else {
+                EksekveringFeil::recoverable(format!(
+                    "render_journalpost_mangler journalpost_id={} dokument_id={}",
+                    journalpost_id.0, dokument_id.0
+                ))
+            }
         })
 }
 
@@ -284,6 +319,111 @@ fn template_feil_melding(err: &HtmlTemplateFeil) -> &'static str {
         HtmlTemplateFeil::TommeFelter => "Deklarerte felter kan ikke være tomme",
         HtmlTemplateFeil::ManglerSaksnummer => "Saksnummer mangler",
     }
+}
+
+fn template_feil_kode(err: &HtmlTemplateFeil) -> &'static str {
+    match err {
+        HtmlTemplateFeil::ForStor => "for_stor",
+        HtmlTemplateFeil::UgyldigUtf8 => "ugyldig_utf8",
+        HtmlTemplateFeil::UkjentToken => "ukjent_token",
+        HtmlTemplateFeil::ManglerToken => "mangler_token",
+        HtmlTemplateFeil::DuplikatToken => "duplikat_token",
+        HtmlTemplateFeil::DuplikatFelt => "duplikat_felt",
+        HtmlTemplateFeil::TommeFelter => "tomme_felter",
+        HtmlTemplateFeil::ManglerSaksnummer => "mangler_saksnummer",
+    }
+}
+
+fn render_state_update_failed(operation: &'static str, err: anyhow::Error) -> EksekveringFeil {
+    EksekveringFeil::recoverable(format!(
+        "render_state_update_failed operation={} error=\"{}\"",
+        operation,
+        quote_diagnostic_value(&sanitize_render_error(&err.to_string()))
+    ))
+}
+
+fn sanitize_render_error(detail: &str) -> String {
+    let normalized = detail
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let redacted = redact_diagnostic_tokens(&normalized);
+
+    const MAX_RENDER_ERROR_DETAIL: usize = 240;
+    if redacted.chars().count() <= MAX_RENDER_ERROR_DETAIL {
+        redacted
+    } else {
+        format!(
+            "{}…",
+            redacted
+                .chars()
+                .take(MAX_RENDER_ERROR_DETAIL)
+                .collect::<String>()
+        )
+    }
+}
+
+fn redact_diagnostic_tokens(detail: &str) -> String {
+    let mut redacted = Vec::new();
+    let mut redact_next = 0;
+    for token in detail.split_whitespace() {
+        if redact_next > 0 {
+            redacted.push("redacted".to_string());
+            redact_next -= 1;
+            continue;
+        }
+        let lower = token.to_ascii_lowercase();
+        if is_sensitive_diagnostic_token(&lower) {
+            redacted.push(redact_diagnostic_token(token));
+            redact_next = sensitive_following_token_count(token, &lower);
+        } else {
+            redacted.push(token.to_string());
+        }
+    }
+    redacted.join(" ")
+}
+
+fn is_sensitive_diagnostic_token(lower: &str) -> bool {
+    lower.contains("authorization")
+        || lower == "bearer"
+        || lower.starts_with("bearer=")
+        || lower == "basic"
+        || lower.starts_with("basic=")
+        || lower.contains("token")
+        || lower.contains("secret")
+        || lower.contains("password")
+        || lower.contains("passwd")
+        || lower.contains("credential")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("x-api-key")
+}
+
+fn sensitive_following_token_count(token: &str, lower: &str) -> usize {
+    if lower.contains("authorization") && token.ends_with(':') {
+        2
+    } else if token.ends_with(':') || lower == "bearer" || lower == "basic" {
+        1
+    } else {
+        0
+    }
+}
+
+fn redact_diagnostic_token(token: &str) -> String {
+    if let Some((key, _)) = token.split_once('=') {
+        format!("{key}=redacted")
+    } else if let Some((key, _)) = token.split_once(':') {
+        format!("{key}:redacted")
+    } else {
+        "redacted".to_string()
+    }
+}
+
+fn quote_diagnostic_value(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn rendered_dokument_id(dokument_id: SkuffenDokumentId) -> Uuid {
