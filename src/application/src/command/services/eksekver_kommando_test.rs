@@ -21,7 +21,9 @@ use crate::command::ports::command_execution_port::{
     NyKommandoEksekvering,
 };
 use crate::command::ports::dokument_lager_port::{DokumentFil, DokumentLager};
-use crate::command::ports::dokument_renderer_port::{DokumentRenderer, RendererFeil};
+use crate::command::ports::dokument_renderer_port::{
+    DokumentRenderer, RendererFeil, RendererKontekst,
+};
 use crate::command::ports::eksekvering_port::{
     ArkivGateway, EksekveringKvitteringPublisher, EksekveringStatusPublisher,
     OpprettJournalpostResultat, Utsendingsvalg,
@@ -198,9 +200,28 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
 
     async fn oppdater_rendered_dokument_referanse(
         &self,
-        _dokument_id: SkuffenDokumentId,
-        _rendered_dokument_referanse: Uuid,
+        dokument_id: SkuffenDokumentId,
+        rendered_dokument_referanse: Uuid,
     ) -> Result<(), anyhow::Error> {
+        let mut saker = self.sak_med_barn.lock().unwrap();
+        for sak in saker.values_mut() {
+            for jp in &mut sak.journalposter {
+                let Some(dokument) = jp
+                    .dokumenter
+                    .iter_mut()
+                    .find(|dokument| dokument.dokument_id == dokument_id)
+                else {
+                    continue;
+                };
+                if let DokumentKildeTilstand::HtmlTemplate {
+                    rendered_dokument_referanse: reference,
+                    ..
+                } = &mut dokument.kilde
+                {
+                    *reference = Some(rendered_dokument_referanse);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -248,6 +269,7 @@ impl ArkivGateway for FakeArkivGateway {
     async fn opprett_journalpost(
         &self,
         command: &CommandEnvelope<Command>,
+        _journalpost: &JournalpostMedDokumenter,
         _saksnummer: &str,
         _utsending: Option<Utsendingsvalg>,
     ) -> Result<OpprettJournalpostResultat, anyhow::Error> {
@@ -642,22 +664,51 @@ struct FakeDokumentRenderer;
 
 #[async_trait]
 impl DokumentRenderer for FakeDokumentRenderer {
-    async fn render(&self, _html: &[u8]) -> Result<Vec<u8>, RendererFeil> {
+    async fn render(
+        &self,
+        _html: &[u8],
+        _kontekst: RendererKontekst,
+    ) -> Result<Vec<u8>, RendererFeil> {
         Ok(Vec::new())
     }
 }
 
 #[derive(Clone, Default)]
-struct FakeDokumentLager;
+struct PanickingDokumentRenderer;
+
+#[async_trait]
+impl DokumentRenderer for PanickingDokumentRenderer {
+    async fn render(
+        &self,
+        _html: &[u8],
+        _kontekst: RendererKontekst,
+    ) -> Result<Vec<u8>, RendererFeil> {
+        panic!("renderer skal ikke kalles når rendered_dokument_referanse finnes")
+    }
+}
+
+#[derive(Clone, Default)]
+struct FakeDokumentLager {
+    files: Arc<Mutex<HashMap<Uuid, DokumentFil>>>,
+}
+
+impl FakeDokumentLager {
+    fn with_file(file: DokumentFil) -> Self {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        files.lock().unwrap().insert(file.id, file);
+        Self { files }
+    }
+}
 
 #[async_trait]
 impl DokumentLager for FakeDokumentLager {
-    async fn save(&self, _file: DokumentFil) -> Result<(), anyhow::Error> {
+    async fn save(&self, file: DokumentFil) -> Result<(), anyhow::Error> {
+        self.files.lock().unwrap().insert(file.id, file);
         Ok(())
     }
 
-    async fn get(&self, _id: Uuid) -> Result<Option<DokumentFil>, anyhow::Error> {
-        Ok(None)
+    async fn get(&self, id: Uuid) -> Result<Option<DokumentFil>, anyhow::Error> {
+        Ok(self.files.lock().unwrap().get(&id).cloned())
     }
 }
 
@@ -745,13 +796,14 @@ async fn handle_utfoerer_akkurat_en_operasjon_og_returnerer_klar_nar_mer_arbeid_
 }
 
 #[tokio::test]
-async fn opprett_journalpost_med_html_template_hoveddokument_beholder_avventer_rendring() {
+async fn html_template_mangler_mal_retryer_uten_opprett_journalpost() {
     let command_id = Uuid::new_v4();
     let sak_client_reference = Uuid::new_v4();
     let sak_id = Uuid::new_v4();
     let journalpost_client_reference = Uuid::new_v4();
     let journalpost_id = Uuid::new_v4();
     let dokument_id = Uuid::new_v4();
+    let mal_referanse = Uuid::new_v4();
     let envelope = make_internt_notat_command(
         command_id,
         journalpost_client_reference,
@@ -779,7 +831,7 @@ async fn opprett_journalpost_med_html_template_hoveddokument_beholder_avventer_r
                     dokument_id: SkuffenDokumentId::from(dokument_id),
                     tilstand: DokumentTilstand::AvventerRendring,
                     kilde: DokumentKildeTilstand::HtmlTemplate {
-                        mal_referanse: Uuid::new_v4(),
+                        mal_referanse,
                         felter: vec![Felt::Saksnummer],
                         rendered_dokument_referanse: None,
                     },
@@ -803,14 +855,23 @@ async fn opprett_journalpost_med_html_template_hoveddokument_beholder_avventer_r
 
     let service = build_executor(
         entity_repo.clone(),
-        arkiv_gateway,
+        arkiv_gateway.clone(),
         id_mapping,
         FakeWakeup::default(),
     );
 
     let outcome = service.handle(envelope, 1).await.unwrap();
 
-    assert_eq!(outcome, ExecutionOutcome::Klar);
+    assert!(matches!(
+        outcome,
+        ExecutionOutcome::Retrying { last_error: Some(ref detail) }
+            if detail.starts_with("render_html_mal_mangler")
+    ));
+    assert!(arkiv_gateway
+        .opprett_journalpost_calls
+        .lock()
+        .unwrap()
+        .is_empty());
     assert!(entity_repo.oppdaterte_dokumenter.lock().unwrap().is_empty());
     let sak = entity_repo
         .sak_med_barn
@@ -822,6 +883,217 @@ async fn opprett_journalpost_med_html_template_hoveddokument_beholder_avventer_r
     assert_eq!(
         sak.journalposter[0].dokumenter[0].tilstand,
         DokumentTilstand::AvventerRendring
+    );
+}
+
+#[tokio::test]
+async fn html_template_rendres_for_opprett_journalpost() {
+    let command_id = Uuid::new_v4();
+    let sak_client_reference = Uuid::new_v4();
+    let sak_id = Uuid::new_v4();
+    let journalpost_client_reference = Uuid::new_v4();
+    let journalpost_id = Uuid::new_v4();
+    let dokument_id = Uuid::new_v4();
+    let mal_referanse = Uuid::new_v4();
+    let envelope = make_internt_notat_command(
+        command_id,
+        journalpost_client_reference,
+        sak_client_reference,
+    );
+
+    let entity_repo = FakeEntityTilstandRepository::default();
+    entity_repo.sak_med_barn.lock().unwrap().insert(
+        sak_id,
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(sak_id),
+            tilstand: SakTilstand::Opprettet,
+            sikri_id: Some(100),
+            saksnummer: Some("2026/1".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
+            journalposter: vec![JournalpostMedDokumenter {
+                journalpost_id: SkuffenJournalpostId::from(journalpost_id),
+                tilstand: JournalpostTilstand::IkkeRealisert,
+                sikri_id: None,
+                journalpostnummer: None,
+                journalposttype: JournalpostType::InterntNotat,
+                med_utsending: false,
+                dokumenter: vec![DokumentMedTilstand {
+                    dokument_id: SkuffenDokumentId::from(dokument_id),
+                    tilstand: DokumentTilstand::AvventerRendring,
+                    kilde: DokumentKildeTilstand::HtmlTemplate {
+                        mal_referanse,
+                        felter: vec![Felt::Saksnummer],
+                        rendered_dokument_referanse: None,
+                    },
+                }],
+            }],
+        },
+    );
+
+    let arkiv_gateway = FakeArkivGateway::default();
+    let id_mapping = FakeIdMappingRepository::default();
+    id_mapping
+        .sak_mapping
+        .lock()
+        .unwrap()
+        .insert(sak_client_reference, sak_id);
+    id_mapping
+        .journalpost_mapping
+        .lock()
+        .unwrap()
+        .insert(journalpost_client_reference, journalpost_id);
+
+    let service = EksekverKommandoService::new(
+        Box::new(entity_repo.clone()),
+        Box::new(arkiv_gateway.clone()),
+        Box::new(FakeDokumentRenderer),
+        Box::new(FakeDokumentLager::with_file(DokumentFil {
+            id: mal_referanse,
+            data: b"<html>{{saksnummer}}</html>".to_vec(),
+            filename: Some("template.html".to_string()),
+            content_type: Some("text/html".to_string()),
+            metadata: Default::default(),
+        })),
+        Box::new(FakeStatusPublisher::default()),
+        Box::new(FakeDonePublisher),
+        Box::new(id_mapping),
+        Box::new(FakeStatusProjector),
+        Box::new(FakeWakeup::default()),
+    );
+
+    let outcome = service.handle(envelope, 1).await.unwrap();
+
+    assert_eq!(outcome, ExecutionOutcome::Klar);
+    assert!(
+        arkiv_gateway
+            .opprett_journalpost_calls
+            .lock()
+            .unwrap()
+            .is_empty(),
+        "journalpost must not be created before HTML-template hoveddokument is rendered"
+    );
+    let sak = entity_repo
+        .sak_med_barn
+        .lock()
+        .unwrap()
+        .get(&sak_id)
+        .cloned()
+        .unwrap();
+    let dokument = &sak.journalposter[0].dokumenter[0];
+    assert_eq!(dokument.tilstand, DokumentTilstand::Ok);
+    assert!(matches!(
+        dokument.kilde,
+        DokumentKildeTilstand::HtmlTemplate {
+            rendered_dokument_referanse: Some(_),
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn html_template_med_rendered_referanse_fullfoerer_retry_uten_rendering() {
+    let command_id = Uuid::new_v4();
+    let sak_client_reference = Uuid::new_v4();
+    let sak_id = Uuid::new_v4();
+    let journalpost_client_reference = Uuid::new_v4();
+    let journalpost_id = Uuid::new_v4();
+    let dokument_id = Uuid::new_v4();
+    let mal_referanse = Uuid::new_v4();
+    let rendered_dokument_referanse = Uuid::new_v4();
+    let envelope = make_internt_notat_command(
+        command_id,
+        journalpost_client_reference,
+        sak_client_reference,
+    );
+
+    let entity_repo = FakeEntityTilstandRepository::default();
+    entity_repo.sak_med_barn.lock().unwrap().insert(
+        sak_id,
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(sak_id),
+            tilstand: SakTilstand::Opprettet,
+            sikri_id: Some(100),
+            saksnummer: Some("2026/1".to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
+            journalposter: vec![JournalpostMedDokumenter {
+                journalpost_id: SkuffenJournalpostId::from(journalpost_id),
+                tilstand: JournalpostTilstand::IkkeRealisert,
+                sikri_id: None,
+                journalpostnummer: None,
+                journalposttype: JournalpostType::InterntNotat,
+                med_utsending: false,
+                dokumenter: vec![DokumentMedTilstand {
+                    dokument_id: SkuffenDokumentId::from(dokument_id),
+                    tilstand: DokumentTilstand::AvventerRendring,
+                    kilde: DokumentKildeTilstand::HtmlTemplate {
+                        mal_referanse,
+                        felter: vec![Felt::Saksnummer],
+                        rendered_dokument_referanse: Some(rendered_dokument_referanse),
+                    },
+                }],
+            }],
+        },
+    );
+
+    let arkiv_gateway = FakeArkivGateway::default();
+    let id_mapping = FakeIdMappingRepository::default();
+    id_mapping
+        .sak_mapping
+        .lock()
+        .unwrap()
+        .insert(sak_client_reference, sak_id);
+    id_mapping
+        .journalpost_mapping
+        .lock()
+        .unwrap()
+        .insert(journalpost_client_reference, journalpost_id);
+
+    let dokument_lager = FakeDokumentLager::default();
+    let service = EksekverKommandoService::new(
+        Box::new(entity_repo.clone()),
+        Box::new(arkiv_gateway.clone()),
+        Box::new(PanickingDokumentRenderer),
+        Box::new(dokument_lager.clone()),
+        Box::new(FakeStatusPublisher::default()),
+        Box::new(FakeDonePublisher),
+        Box::new(id_mapping),
+        Box::new(FakeStatusProjector),
+        Box::new(FakeWakeup::default()),
+    );
+
+    let outcome = service.handle(envelope.clone(), 1).await.unwrap();
+
+    assert_eq!(outcome, ExecutionOutcome::Klar);
+    assert!(
+        arkiv_gateway
+            .opprett_journalpost_calls
+            .lock()
+            .unwrap()
+            .is_empty(),
+        "retry-attempten skal bare fullføre RenderDokument og ikke opprette journalpost"
+    );
+    assert!(
+        dokument_lager.files.lock().unwrap().is_empty(),
+        "eksisterende rendered_dokument_referanse skal ikke lagres på nytt"
+    );
+    assert_eq!(
+        entity_repo.oppdaterte_dokumenter.lock().unwrap().as_slice(),
+        &[(dokument_id, DokumentTilstand::Ok)]
+    );
+
+    let outcome = service.handle(envelope, 2).await.unwrap();
+
+    assert_eq!(outcome, ExecutionOutcome::Klar);
+    assert_eq!(
+        arkiv_gateway
+            .opprett_journalpost_calls
+            .lock()
+            .unwrap()
+            .len(),
+        1,
+        "neste attempt skal kunne fortsette til OpprettJournalpost"
     );
 }
 
@@ -875,7 +1147,7 @@ async fn sikri_feil_publiserer_kun_stabil_safe_detail() {
             ..FakeArkivGateway::default()
         }),
         Box::new(FakeDokumentRenderer),
-        Box::new(FakeDokumentLager),
+        Box::new(FakeDokumentLager::default()),
         Box::new(status_publisher.clone()),
         Box::new(FakeDonePublisher),
         Box::new(id_mapping),
@@ -946,7 +1218,7 @@ async fn ukjent_sikri_feil_publiserer_generisk_upstream_safe_detail() {
             ..FakeArkivGateway::default()
         }),
         Box::new(FakeDokumentRenderer),
-        Box::new(FakeDokumentLager),
+        Box::new(FakeDokumentLager::default()),
         Box::new(status_publisher.clone()),
         Box::new(FakeDonePublisher),
         Box::new(id_mapping),
@@ -1066,7 +1338,7 @@ fn build_executor(
         Box::new(entity_repo),
         Box::new(arkiv_gateway),
         Box::new(FakeDokumentRenderer),
-        Box::new(FakeDokumentLager),
+        Box::new(FakeDokumentLager::default()),
         Box::new(FakeStatusPublisher::default()),
         Box::new(FakeDonePublisher),
         Box::new(id_mapping),

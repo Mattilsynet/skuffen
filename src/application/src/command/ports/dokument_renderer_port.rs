@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RendererFeil {
@@ -6,6 +8,14 @@ pub enum RendererFeil {
     Recoverable { message: String },
     #[error("renderer avviste dokumentet")]
     Irrecoverable { message: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RendererKontekst {
+    pub command_id: Uuid,
+    pub correlation_id: Option<Uuid>,
+    pub journalpost_id: SkuffenJournalpostId,
+    pub dokument_id: SkuffenDokumentId,
 }
 
 impl RendererFeil {
@@ -21,6 +31,10 @@ impl RendererFeil {
         }
     }
 
+    /// Sanitized internal diagnostic detail for command execution/logging.
+    ///
+    /// This may include bounded external response error messages. It is not an
+    /// outward/client-facing status message.
     pub fn safe_message(&self) -> &str {
         match self {
             RendererFeil::Recoverable { message } | RendererFeil::Irrecoverable { message } => {
@@ -36,7 +50,11 @@ impl RendererFeil {
 
 #[async_trait]
 pub trait DokumentRenderer: Send + Sync {
-    async fn render(&self, html: &[u8]) -> Result<Vec<u8>, RendererFeil>;
+    async fn render(
+        &self,
+        html: &[u8],
+        kontekst: RendererKontekst,
+    ) -> Result<Vec<u8>, RendererFeil>;
 }
 
 #[derive(Clone)]
@@ -44,7 +62,11 @@ pub struct IkkeKonfigurertDokumentRenderer;
 
 #[async_trait]
 impl DokumentRenderer for IkkeKonfigurertDokumentRenderer {
-    async fn render(&self, _html: &[u8]) -> Result<Vec<u8>, RendererFeil> {
+    async fn render(
+        &self,
+        _html: &[u8],
+        _kontekst: RendererKontekst,
+    ) -> Result<Vec<u8>, RendererFeil> {
         Err(RendererFeil::recoverable(
             "HTML-template rendering er ikke konfigurert",
         ))
@@ -56,7 +78,7 @@ pub mod fake {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
-    use super::{DokumentRenderer, RendererFeil};
+    use super::{DokumentRenderer, RendererFeil, RendererKontekst};
     use async_trait::async_trait;
 
     type RenderOutcome = Result<Vec<u8>, RendererFeil>;
@@ -81,7 +103,11 @@ pub mod fake {
 
     #[async_trait]
     impl DokumentRenderer for FakeDokumentRenderer {
-        async fn render(&self, _html: &[u8]) -> Result<Vec<u8>, RendererFeil> {
+        async fn render(
+            &self,
+            _html: &[u8],
+            _kontekst: RendererKontekst,
+        ) -> Result<Vec<u8>, RendererFeil> {
             self.outcomes
                 .lock()
                 .unwrap()

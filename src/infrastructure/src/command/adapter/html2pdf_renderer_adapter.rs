@@ -1,14 +1,17 @@
 use std::time::Duration;
 
-use application::command::ports::dokument_renderer_port::{DokumentRenderer, RendererFeil};
+use application::command::ports::dokument_renderer_port::{
+    DokumentRenderer, RendererFeil, RendererKontekst,
+};
 use async_trait::async_trait;
 use reqwest::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};
 use tracing::{debug, error, info, warn};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
-const ERROR_BODY_SNIPPET_BYTES: usize = 1024;
 const ERROR_MESSAGE_CHARS: usize = 500;
+const EXTERNAL_RESPONSE_MESSAGE_CHARS: usize = 500;
+const EXTERNAL_RESPONSE_MESSAGE_BYTES: usize = 2048;
 
 #[async_trait]
 pub trait IdTokenProvider: Send + Sync {
@@ -105,12 +108,21 @@ struct RendererDiagnosticsContext {
 
 #[async_trait]
 impl DokumentRenderer for Html2PdfRendererAdapter {
-    async fn render(&self, html: &[u8]) -> Result<Vec<u8>, RendererFeil> {
+    async fn render(
+        &self,
+        html: &[u8],
+        kontekst: RendererKontekst,
+    ) -> Result<Vec<u8>, RendererFeil> {
         let context = self.diagnostics_context();
         let html_byte_len = html.len();
+        let correlation_id = format_optional_uuid(kontekst.correlation_id);
 
         info!(
             event = "html2pdf_request_start",
+            command_id = %kontekst.command_id,
+            correlation_id = %correlation_id,
+            journalpost_id = %kontekst.journalpost_id.0,
+            dokument_id = %kontekst.dokument_id.0,
             endpoint_host = %context.endpoint_host,
             endpoint_path = %context.endpoint_path,
             endpoint_label = %context.endpoint_label,
@@ -126,6 +138,10 @@ impl DokumentRenderer for Html2PdfRendererAdapter {
                 let error_message = sanitize_error_message(err.safe_message());
                 error!(
                     event = "html2pdf_auth_failed",
+                    command_id = %kontekst.command_id,
+                    correlation_id = %correlation_id,
+                    journalpost_id = %kontekst.journalpost_id.0,
+                    dokument_id = %kontekst.dokument_id.0,
                     category = "token_acquisition",
                     endpoint_host = %context.endpoint_host,
                     endpoint_path = %context.endpoint_path,
@@ -152,6 +168,10 @@ impl DokumentRenderer for Html2PdfRendererAdapter {
                 let error_message = sanitize_error_message(&err.to_string());
                 warn!(
                     event = "html2pdf_request_failed",
+                    command_id = %kontekst.command_id,
+                    correlation_id = %correlation_id,
+                    journalpost_id = %kontekst.journalpost_id.0,
+                    dokument_id = %kontekst.dokument_id.0,
                     category,
                     endpoint_host = %context.endpoint_host,
                     endpoint_path = %context.endpoint_path,
@@ -179,6 +199,10 @@ impl DokumentRenderer for Html2PdfRendererAdapter {
 
         debug!(
             event = "html2pdf_response_received",
+            command_id = %kontekst.command_id,
+            correlation_id = %correlation_id,
+            journalpost_id = %kontekst.journalpost_id.0,
+            dokument_id = %kontekst.dokument_id.0,
             status_code,
             status_class,
             content_type = %content_type,
@@ -194,6 +218,10 @@ impl DokumentRenderer for Html2PdfRendererAdapter {
                 let error_message = sanitize_error_message(&err.to_string());
                 error!(
                     event = "html2pdf_response_read_failed",
+                    command_id = %kontekst.command_id,
+                    correlation_id = %correlation_id,
+                    journalpost_id = %kontekst.journalpost_id.0,
+                    dokument_id = %kontekst.dokument_id.0,
                     category,
                     status_code,
                     status_class,
@@ -215,19 +243,16 @@ impl DokumentRenderer for Html2PdfRendererAdapter {
             });
         }
 
-        let body = match response.bytes().await {
-            Ok(bytes) => sanitize_body_snippet(&bytes, ERROR_BODY_SNIPPET_BYTES),
-            Err(err) => format!(
-                "unreadable:{}",
-                quote_value(&sanitize_error_message(&err.to_string()))
-            ),
-        };
-        let body_field = format!("body=\"{}\"", quote_value(&body));
-
+        let category = classify_error_category(status_code);
         let prefix = renderer_error_prefix(status_code);
+        let external_error_message =
+            read_external_response_error_message(status_code, &content_type, response).await;
+        let external_error_message_value =
+            external_error_message.as_deref().unwrap_or("suppressed");
         let diagnostic = format!(
-            "{} status={} status_class={} endpoint_host={} endpoint_path={} audience={} content_type=\"{}\" content_length={} {}",
+            "{} category={} status={} status_class={} endpoint_host={} endpoint_path={} audience={} content_type=\"{}\" content_length={} external_error_message=\"{}\"",
             prefix,
+            category,
             status_code,
             status_class,
             context.endpoint_host,
@@ -235,74 +260,105 @@ impl DokumentRenderer for Html2PdfRendererAdapter {
             context.audience,
             quote_value(&content_type),
             content_length,
-            body_field
+            quote_value(external_error_message_value)
         );
 
-        if status_code == 401 || status_code == 403 {
-            warn!(
-                event = "html2pdf_auth_failed",
-                category = "auth_failure",
-                status_code,
-                status_class,
-                content_type = %content_type,
-                content_length = %content_length,
-                endpoint_host = %context.endpoint_host,
-                endpoint_path = %context.endpoint_path,
-                audience = %context.audience,
-                error_body = %body,
-                "html2pdf renderer auth failure"
-            );
-            return Err(RendererFeil::recoverable(diagnostic));
+        match category {
+            "auth_failure" => {
+                warn!(
+                    event = "html2pdf_auth_failed",
+                    command_id = %kontekst.command_id,
+                    correlation_id = %correlation_id,
+                    journalpost_id = %kontekst.journalpost_id.0,
+                    dokument_id = %kontekst.dokument_id.0,
+                    category,
+                    status_code,
+                    status_class,
+                    content_type = %content_type,
+                    content_length = %content_length,
+                    endpoint_host = %context.endpoint_host,
+                    endpoint_path = %context.endpoint_path,
+                    audience = %context.audience,
+                    external_error_message = %external_error_message_value,
+                    "html2pdf renderer auth failure"
+                );
+            }
+            "client_error" => {
+                error!(
+                    event = "html2pdf_client_error",
+                    command_id = %kontekst.command_id,
+                    correlation_id = %correlation_id,
+                    journalpost_id = %kontekst.journalpost_id.0,
+                    dokument_id = %kontekst.dokument_id.0,
+                    category,
+                    status_code,
+                    status_class,
+                    content_type = %content_type,
+                    content_length = %content_length,
+                    endpoint_host = %context.endpoint_host,
+                    endpoint_path = %context.endpoint_path,
+                    audience = %context.audience,
+                    external_error_message = %external_error_message_value,
+                    "html2pdf renderer returned client error"
+                );
+            }
+            "server_error" => {
+                error!(
+                    event = "html2pdf_server_error",
+                    command_id = %kontekst.command_id,
+                    correlation_id = %correlation_id,
+                    journalpost_id = %kontekst.journalpost_id.0,
+                    dokument_id = %kontekst.dokument_id.0,
+                    category,
+                    status_code,
+                    status_class,
+                    content_type = %content_type,
+                    content_length = %content_length,
+                    endpoint_host = %context.endpoint_host,
+                    endpoint_path = %context.endpoint_path,
+                    audience = %context.audience,
+                    external_error_message = %external_error_message_value,
+                    "html2pdf renderer returned server error"
+                );
+            }
+            _ => {
+                warn!(
+                    event = "html2pdf_request_failed",
+                    command_id = %kontekst.command_id,
+                    correlation_id = %correlation_id,
+                    journalpost_id = %kontekst.journalpost_id.0,
+                    dokument_id = %kontekst.dokument_id.0,
+                    category,
+                    status_code,
+                    status_class,
+                    content_type = %content_type,
+                    content_length = %content_length,
+                    endpoint_host = %context.endpoint_host,
+                    endpoint_path = %context.endpoint_path,
+                    audience = %context.audience,
+                    external_error_message = %external_error_message_value,
+                    "html2pdf renderer returned unexpected status"
+                );
+            }
         }
 
-        if status.is_client_error() {
-            error!(
-                event = "html2pdf_client_error",
-                category = "client_error",
-                status_code,
-                status_class,
-                content_type = %content_type,
-                content_length = %content_length,
-                endpoint_host = %context.endpoint_host,
-                endpoint_path = %context.endpoint_path,
-                audience = %context.audience,
-                error_body = %body,
-                "html2pdf renderer returned client error"
-            );
-            return Err(RendererFeil::irrecoverable(diagnostic));
-        }
+        let err_kind = match category {
+            "auth_failure" | "server_error" | "unexpected_status" => {
+                RendererFeil::recoverable(diagnostic)
+            }
+            "client_error" => RendererFeil::irrecoverable(diagnostic),
+            _ => RendererFeil::recoverable(diagnostic),
+        };
+        Err(err_kind)
+    }
+}
 
-        if status.is_server_error() {
-            error!(
-                event = "html2pdf_server_error",
-                category = "server_error",
-                status_code,
-                status_class,
-                content_type = %content_type,
-                content_length = %content_length,
-                endpoint_host = %context.endpoint_host,
-                endpoint_path = %context.endpoint_path,
-                audience = %context.audience,
-                error_body = %body,
-                "html2pdf renderer returned server error"
-            );
-            return Err(RendererFeil::recoverable(diagnostic));
-        }
-
-        warn!(
-            event = "html2pdf_request_failed",
-            category = "unexpected_status",
-            status_code,
-            status_class,
-            content_type = %content_type,
-            content_length = %content_length,
-            endpoint_host = %context.endpoint_host,
-            endpoint_path = %context.endpoint_path,
-            audience = %context.audience,
-            error_body = %body,
-            "html2pdf renderer returned unexpected status"
-        );
-        Err(RendererFeil::recoverable(diagnostic))
+fn classify_error_category(status_code: u16) -> &'static str {
+    match status_code {
+        401 | 403 => "auth_failure",
+        400..=499 => "client_error",
+        500..=599 => "server_error",
+        _ => "unexpected_status",
     }
 }
 
@@ -364,16 +420,45 @@ fn safe_header_value(value: Option<&reqwest::header::HeaderValue>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn sanitize_body_snippet(bytes: &[u8], max_bytes: usize) -> String {
-    let limited = bytes.get(..max_bytes).unwrap_or(bytes);
-    let text = String::from_utf8_lossy(limited);
-    let normalized = normalize_control_chars(&text);
-    let redacted = redact_sensitive_tokens(&strip_url_queries(&normalized));
-    if bytes.len() > max_bytes {
-        truncate_chars(&redacted, max_bytes)
-    } else {
-        redacted
+async fn read_external_response_error_message(
+    status_code: u16,
+    content_type: &str,
+    mut response: reqwest::Response,
+) -> Option<String> {
+    if matches!(status_code, 401 | 403) || !content_type_allows_external_message(content_type) {
+        return None;
     }
+
+    let mut bytes = Vec::new();
+    while bytes.len() < EXTERNAL_RESPONSE_MESSAGE_BYTES {
+        let Some(chunk) = response.chunk().await.ok().flatten() else {
+            break;
+        };
+        let remaining = EXTERNAL_RESPONSE_MESSAGE_BYTES - bytes.len();
+        bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+    }
+
+    let text = String::from_utf8_lossy(&bytes);
+    let message = sanitize_external_response_message(&text);
+    (!message.is_empty()).then_some(message)
+}
+
+fn content_type_allows_external_message(content_type: &str) -> bool {
+    let content_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
+        .to_ascii_lowercase();
+
+    matches!(content_type.as_str(), "text/plain" | "application/json")
+}
+
+fn sanitize_external_response_message(message: &str) -> String {
+    truncate_chars(
+        sanitize_error_message(message).trim(),
+        EXTERNAL_RESPONSE_MESSAGE_CHARS,
+    )
 }
 
 fn sanitize_error_message(message: &str) -> String {
@@ -381,6 +466,11 @@ fn sanitize_error_message(message: &str) -> String {
     let without_queries = strip_url_queries(&normalized);
     let redacted = redact_sensitive_tokens(&without_queries);
     truncate_chars(redacted.trim(), ERROR_MESSAGE_CHARS)
+}
+
+fn format_optional_uuid(id: Option<uuid::Uuid>) -> String {
+    id.map(|id| id.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn normalize_control_chars(value: &str) -> String {
@@ -507,6 +597,20 @@ mod tests {
     }
 
     #[test]
+    fn classify_error_category_maps_auth_client_server_and_unexpected() {
+        assert_eq!(classify_error_category(401), "auth_failure");
+        assert_eq!(classify_error_category(403), "auth_failure");
+        assert_eq!(classify_error_category(400), "client_error");
+        assert_eq!(classify_error_category(404), "client_error");
+        assert_eq!(classify_error_category(499), "client_error");
+        assert_eq!(classify_error_category(500), "server_error");
+        assert_eq!(classify_error_category(503), "server_error");
+        assert_eq!(classify_error_category(599), "server_error");
+        assert_eq!(classify_error_category(302), "unexpected_status");
+        assert_eq!(classify_error_category(200), "unexpected_status");
+    }
+
+    #[test]
     fn renderer_error_prefix_maps_auth_client_and_server_errors() {
         assert_eq!(renderer_error_prefix(401), "html2pdf_auth_failed");
         assert_eq!(renderer_error_prefix(403), "html2pdf_auth_failed");
@@ -537,30 +641,6 @@ mod tests {
             safe_audience_label("https://renderer.example/audience/path?token=secret"),
             "renderer.example"
         );
-    }
-
-    #[test]
-    fn body_snippet_is_bounded_and_sanitized() {
-        let body = format!(
-            "forbidden\nAuthorization: Bearer abc123 token=secret {}",
-            "a".repeat(1200)
-        );
-
-        let snippet = sanitize_body_snippet(body.as_bytes(), ERROR_BODY_SNIPPET_BYTES);
-
-        assert!(snippet.len() <= ERROR_BODY_SNIPPET_BYTES + 3);
-        assert!(snippet.ends_with("..."));
-        assert!(!snippet.contains("abc123"));
-        assert!(!snippet.contains("secret"));
-        assert!(!snippet.contains('\n'));
-    }
-
-    #[test]
-    fn body_snippet_replaces_invalid_utf8() {
-        let snippet = sanitize_body_snippet(b"bad\xff\xfe body", ERROR_BODY_SNIPPET_BYTES);
-
-        assert!(snippet.contains("bad"));
-        assert!(snippet.contains("body"));
     }
 
     #[test]
@@ -598,5 +678,147 @@ mod tests {
         );
 
         assert!(err.safe_message().starts_with("html2pdf_request_failed"));
+    }
+
+    #[test]
+    fn diagnostic_format_includes_external_response_message_without_body_fields() {
+        let prefix = "html2pdf_client_error";
+        let category = "client_error";
+        let status_code = 404;
+        let status_class = "client_error";
+        let endpoint_host = "renderer.example";
+        let endpoint_path = "/render";
+        let audience = "https://renderer.example/audience";
+        let content_type = "text/html";
+        let content_length = "unknown";
+        let external_error_message = "suppressed";
+
+        let diagnostic = format!(
+            "{} category={} status={} status_class={} endpoint_host={} endpoint_path={} audience={} content_type=\"{}\" content_length={} external_error_message=\"{}\"",
+            prefix,
+            category,
+            status_code,
+            status_class,
+            endpoint_host,
+            endpoint_path,
+            audience,
+            content_type,
+            content_length,
+            external_error_message
+        );
+
+        assert!(!diagnostic.contains("body="));
+        assert!(!diagnostic.contains("body_snippet"));
+        assert!(!diagnostic.contains("error_body"));
+        assert!(!diagnostic.contains("html_content"));
+        assert!(!diagnostic.contains("pdf_content"));
+        assert!(diagnostic.contains("category=client_error"));
+        assert!(diagnostic.contains("status=404"));
+        assert!(diagnostic.contains("status_class=client_error"));
+        assert!(diagnostic.contains("endpoint_host=renderer.example"));
+        assert!(diagnostic.contains("endpoint_path=/render"));
+        assert!(diagnostic.contains("audience="));
+        assert!(diagnostic.contains("content_type=\"text/html\""));
+        assert!(diagnostic.contains("content_length=unknown"));
+        assert!(diagnostic.contains("external_error_message=\"suppressed\""));
+    }
+
+    #[test]
+    fn external_response_message_policy_allows_plain_text_and_json() {
+        assert!(content_type_allows_external_message("text/plain"));
+        assert!(content_type_allows_external_message(
+            "text/plain; charset=utf-8"
+        ));
+        assert!(content_type_allows_external_message("application/json"));
+        assert!(content_type_allows_external_message(
+            "application/json; charset=utf-8"
+        ));
+    }
+
+    #[test]
+    fn external_response_message_policy_suppresses_html_pdf_unknown_and_auth() {
+        assert!(!content_type_allows_external_message("text/html"));
+        assert!(!content_type_allows_external_message("application/pdf"));
+        assert!(!content_type_allows_external_message("unknown"));
+        assert_eq!(
+            external_response_error_message_from_text(
+                401,
+                "application/json",
+                "credentials expired"
+            ),
+            None
+        );
+        assert_eq!(
+            external_response_error_message_from_text(403, "text/plain", "forbidden"),
+            None
+        );
+        assert_eq!(
+            external_response_error_message_from_text(
+                400,
+                "text/html",
+                "<html><body>echoed request</body></html>"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn external_response_message_is_sanitized_bounded_and_useful() {
+        let message = external_response_error_message_from_text(
+            500,
+            "text/plain",
+            &format!(
+                "renderer queue unavailable token=secret Authorization: Bearer abc123 {}",
+                "a".repeat(800)
+            ),
+        );
+
+        let message = message.expect("plain text response message should be logged");
+        assert!(message.starts_with("renderer queue unavailable"));
+        assert!(message.contains("token=redacted"));
+        assert!(message.contains("Authorization:redacted"));
+        assert!(!message.contains("secret"));
+        assert!(!message.contains("abc123"));
+        assert!(message.len() <= EXTERNAL_RESPONSE_MESSAGE_CHARS + 3);
+        assert!(message.ends_with("..."));
+    }
+
+    #[tokio::test]
+    async fn short_allowed_response_body_is_preserved_through_chunk_path() {
+        let response = http_response(500, "text/plain", "renderer queue unavailable");
+
+        let message = read_external_response_error_message(500, "text/plain", response).await;
+
+        assert_eq!(message.as_deref(), Some("renderer queue unavailable"));
+    }
+
+    #[tokio::test]
+    async fn html_response_body_is_suppressed_through_chunk_path() {
+        let response = http_response(400, "text/html", "<html><body>echo</body></html>");
+
+        let message = read_external_response_error_message(400, "text/html", response).await;
+
+        assert_eq!(message, None);
+    }
+
+    fn http_response(status_code: u16, content_type: &str, body: &str) -> reqwest::Response {
+        http::Response::builder()
+            .status(status_code)
+            .header(CONTENT_TYPE, content_type)
+            .body(body.to_string())
+            .expect("valid response")
+            .into()
+    }
+
+    fn external_response_error_message_from_text(
+        status_code: u16,
+        content_type: &str,
+        response_text: &str,
+    ) -> Option<String> {
+        if matches!(status_code, 401 | 403) || !content_type_allows_external_message(content_type) {
+            return None;
+        }
+        let message = sanitize_external_response_message(response_text);
+        (!message.is_empty()).then_some(message)
     }
 }

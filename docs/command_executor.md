@@ -71,8 +71,9 @@ Steg:
 
 ### Opprett journalpost (inngående/utgående/internt)
 Steg:
+- `RenderDokument` for HTML-template hoveddokument når render-facts er klare; dette skjer før `OpprettJournalpost` fordi journalpost normalt opprettes med hoveddokument. Hvis rendered PDF-referanse allerede finnes, men dokumentet fortsatt står i `avventer_rendring` etter et avbrutt forsøk, fullfører retryen `RenderDokument` idempotent ved å sette dokumentet til `ok` uten ny rendering eller lagring.
 - `OpprettJournalpost`
-- `LeggTilDokument` (ett steg per dokument, ingen øvre grense)
+- `LeggTilDokument` (ett steg per dokument, ingen øvre grense; gjelder bytes-vedlegg; rendered HTML-template vedlegg er ikke i v1-scope for attachment-arkivering)
 - `Journalfør` (avhenger av type og flyt)
 - `Avskriv` (kun inngående)
 
@@ -276,3 +277,11 @@ Key codes and their semantics:
 | `invalid_reason=dokument_feilet_permanent` | `DomainViolation` | A required document has permanently failed; command fails terminally. |
 
 For Sikri HTTP error codes (e.g. `sikri_unknown_user`, `sikri_rate_limited`) see `.agent/guides/observability.md`.
+
+Arkivmapping contract failures (emitted by the Sikri adapter when entity facts are inconsistent at the point of Sikri API call construction) are always irrecoverable and appear as stable `last_detail` prefixes safe for dashboards:
+
+| Code | Type | Meaning |
+|---|---|---|
+| `arkivmapping_dokument_fact_mangler` | Irrecoverable | Dokument facts expected by the Sikri adapter are missing at call time; indicates an invariant violation. Command fails terminally. |
+| `arkivmapping_rendered_dokument_mangler` | Irrecoverable | HTML-template hoveddokument has no `rendered_dokument_referanse` in entity facts when `OpprettJournalpost` is attempted; indicates a planner sequencing bug. Command fails terminally. |
+| `arkivmapping_dokumentform_mismatch` | Irrecoverable | Dokument form (bytes vs. rendered) does not match what the Sikri adapter expected; indicates a contract violation. Command fails terminally. |

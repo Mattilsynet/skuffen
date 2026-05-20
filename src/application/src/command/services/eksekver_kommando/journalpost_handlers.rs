@@ -28,7 +28,7 @@ impl EksekverKommandoService {
 
         let resultat = self
             .arkiv_gateway
-            .opprett_journalpost(envelope, saksnummer, utsending)
+            .opprett_journalpost(envelope, jp, saksnummer, utsending)
             .await
             .map_err(|err| self.map_arkiv_feil(err))?;
 
@@ -65,7 +65,10 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
-        // Hoveddokument is auto-included in the Sikri call only for byte documents.
+        // Hoveddokument is auto-included in the Sikri call when the first document
+        // is archive-ready. HTML-template hoveddokumenter are rendered to PDF
+        // before OpprettJournalpost and are included from rendered facts by the
+        // archive gateway.
         if let Some(hoveddokument) = jp.dokumenter.first() {
             if hoveddokument.kilde == DokumentKildeTilstand::Bytes {
                 self.entity_tilstand_repo

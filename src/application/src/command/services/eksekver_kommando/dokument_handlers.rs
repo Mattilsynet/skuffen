@@ -1,4 +1,5 @@
 use crate::command::ports::dokument_lager_port::{DokumentFil, DokumentMetadata};
+use crate::command::ports::dokument_renderer_port::RendererKontekst;
 use domain::eksekvering::html_template::{substituer_tokens, FeltVerdier, HtmlTemplateFeil};
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId};
 use domain::eksekvering::tilstand::{
@@ -39,7 +40,19 @@ impl EksekverKommandoService {
             self.entity_tilstand_repo
                 .oppdater_dokument_tilstand(dokument_id, DokumentTilstand::Ok)
                 .await
-                .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+                .map_err(|err| render_state_update_failed("oppdater_dokument_tilstand", err))?;
+            self.entity_tilstand_repo
+                .logg_overgang(
+                    "dokument",
+                    dokument_id.0,
+                    envelope.command_id,
+                    "avventer_rendring",
+                    "ok",
+                    "render_dokument",
+                    None,
+                )
+                .await
+                .map_err(|err| render_state_update_failed("logg_overgang", err))?;
             return Ok(());
         }
 
@@ -102,7 +115,15 @@ impl EksekverKommandoService {
 
         let pdf = self
             .dokument_renderer
-            .render(&substituert)
+            .render(
+                &substituert,
+                RendererKontekst {
+                    command_id: envelope.command_id,
+                    correlation_id: envelope.correlation_id,
+                    journalpost_id,
+                    dokument_id,
+                },
+            )
             .await
             .map_err(|err| {
                 if err.is_recoverable() {

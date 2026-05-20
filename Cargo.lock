@@ -1616,6 +1616,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "gcp_auth",
+ "http",
  "lib-nats",
  "lib-schemas",
  "lib-sql",

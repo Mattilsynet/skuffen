@@ -276,12 +276,16 @@ impl EksekverKommandoService {
         let original = err.to_string();
         let message = safe_execution_detail(&original);
 
-        if original.contains("sikri_recoverability=irrecoverable") {
-            return EksekveringFeil::irrecoverable(message);
-        }
-
-        EksekveringFeil::recoverable(message)
+        map_arkiv_feil_detail(&original, message)
     }
+}
+
+fn map_arkiv_feil_detail(original: &str, message: String) -> EksekveringFeil {
+    if original.contains("sikri_recoverability=irrecoverable") {
+        return EksekveringFeil::irrecoverable(message);
+    }
+
+    EksekveringFeil::recoverable(message)
 }
 
 fn safe_execution_detail(detail: &str) -> String {
@@ -297,19 +301,19 @@ fn safe_execution_detail(detail: &str) -> String {
         return code.to_string();
     }
 
-    if detail.contains("sikri_recoverability=") {
-        return "execution_upstream_error".to_string();
-    }
-
     if let Some(diagnostic_detail) = safe_internal_execution_detail(&normalized) {
         return diagnostic_detail;
+    }
+
+    if detail.contains("sikri_recoverability=") {
+        return "execution_upstream_error".to_string();
     }
 
     "execution_error".to_string()
 }
 
 fn safe_internal_execution_detail(detail: &str) -> Option<String> {
-    const PREFIXES: [&str; 14] = [
+    const PREFIXES: [&str; 17] = [
         "html2pdf_auth_failed",
         "html2pdf_client_error",
         "html2pdf_server_error",
@@ -324,15 +328,22 @@ fn safe_internal_execution_detail(detail: &str) -> Option<String> {
         "render_token_substitution_failed",
         "rendered_dokument_save_failed",
         "render_state_update_failed",
+        "arkivmapping_dokument_fact_mangler",
+        "arkivmapping_rendered_dokument_mangler",
+        "arkivmapping_dokumentform_mismatch",
     ];
 
-    let start = PREFIXES
+    let (start, prefix) = PREFIXES
         .iter()
         .filter_map(|prefix| detail.find(prefix).map(|index| (index, *prefix)))
-        .min_by_key(|(index, _)| *index)
-        .map(|(index, _)| index)?;
+        .min_by_key(|(index, _)| *index)?;
 
     let candidate = strip_embedded_execution_payload(&detail[start..]);
+    let candidate = if prefix.starts_with("html2pdf_") {
+        strip_renderer_body_fields(&candidate)
+    } else {
+        candidate
+    };
     let redacted = redact_sensitive_execution_tokens(&candidate);
     let bounded = truncate_execution_detail(redacted.trim(), 500);
 
@@ -420,6 +431,77 @@ fn strip_embedded_execution_payload(detail: &str) -> String {
     }
 }
 
+fn strip_renderer_body_fields(detail: &str) -> String {
+    let mut stripped = String::new();
+    let mut index = 0;
+
+    while index < detail.len() {
+        if starts_renderer_body_field(detail, index, "body") {
+            index = skip_renderer_body_field(detail, index, "body");
+            continue;
+        }
+
+        if starts_renderer_body_field(detail, index, "error_body") {
+            index = skip_renderer_body_field(detail, index, "error_body");
+            continue;
+        }
+
+        let ch = detail[index..]
+            .chars()
+            .next()
+            .expect("index is within a char boundary");
+        stripped.push(ch);
+        index += ch.len_utf8();
+    }
+
+    stripped.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn starts_renderer_body_field(detail: &str, index: usize, field: &str) -> bool {
+    if index > 0 {
+        let Some(previous) = detail[..index].chars().next_back() else {
+            return false;
+        };
+        if !previous.is_whitespace() {
+            return false;
+        }
+    }
+
+    detail[index..].starts_with(field) && detail[index + field.len()..].starts_with('=')
+}
+
+fn skip_renderer_body_field(detail: &str, index: usize, field: &str) -> usize {
+    let mut index = index + field.len() + 1;
+
+    if detail[index..].starts_with('"') {
+        index += '"'.len_utf8();
+        while index < detail.len() {
+            let ch = detail[index..]
+                .chars()
+                .next()
+                .expect("index is within a char boundary");
+            index += ch.len_utf8();
+            if ch == '"' {
+                break;
+            }
+        }
+        return index;
+    }
+
+    while index < detail.len() {
+        let ch = detail[index..]
+            .chars()
+            .next()
+            .expect("index is within a char boundary");
+        if ch.is_whitespace() {
+            break;
+        }
+        index += ch.len_utf8();
+    }
+
+    index
+}
+
 fn truncate_execution_detail(detail: &str, max_chars: usize) -> String {
     let mut value: String = detail.chars().take(max_chars).collect();
     if detail.chars().count() > max_chars {
@@ -497,29 +579,41 @@ fn extract_dokument_client_references(envelope: &CommandEnvelope<Command>) -> Ve
 
 #[cfg(test)]
 mod tests {
-    use super::safe_execution_detail;
+    use super::{map_arkiv_feil_detail, safe_execution_detail};
+    use domain::eksekvering::typer::EksekveringFeiltype;
 
     #[test]
-    fn safe_execution_detail_preserves_html2pdf_auth_failed() {
+    fn safe_execution_detail_strips_html2pdf_auth_body() {
         let detail = "html2pdf_auth_failed status=403 endpoint_host=renderer.example audience=renderer.example body=forbidden";
 
-        assert_eq!(safe_execution_detail(detail), detail);
+        let safe = safe_execution_detail(detail);
+
+        assert_eq!(
+            safe,
+            "html2pdf_auth_failed status=403 endpoint_host=renderer.example audience=renderer.example"
+        );
+        assert!(!safe.contains("body="));
+        assert!(!safe.contains("forbidden"));
     }
 
     #[test]
-    fn safe_execution_detail_preserves_html2pdf_client_error_from_error_chain() {
+    fn safe_execution_detail_strips_html2pdf_client_error_body_from_error_chain() {
         let detail =
             "render failed: html2pdf_client_error status=404 endpoint_path=/render body=not_found";
 
+        let safe = safe_execution_detail(detail);
+
         assert_eq!(
-            safe_execution_detail(detail),
-            "html2pdf_client_error status=404 endpoint_path=/render body=not_found"
+            safe,
+            "html2pdf_client_error status=404 endpoint_path=/render"
         );
+        assert!(!safe.contains("body="));
+        assert!(!safe.contains("not_found"));
     }
 
     #[test]
     fn safe_execution_detail_preserves_html2pdf_server_error() {
-        let detail = "html2pdf_server_error status=503 status_class=server_error endpoint_host=renderer.example";
+        let detail = "html2pdf_server_error status=503 status_class=server_error endpoint_host=renderer.example external_error_message=\"renderer queue unavailable\"";
 
         assert_eq!(safe_execution_detail(detail), detail);
     }
@@ -541,15 +635,30 @@ mod tests {
 
     #[test]
     fn safe_execution_detail_redacts_sensitive_renderer_tokens() {
-        let detail = "html2pdf_server_error token=secret Authorization: Bearer abc123 body=failed";
+        let detail = "html2pdf_server_error token=secret Authorization: Bearer abc123 external_error_message=\"renderer failed\"";
 
         let safe = safe_execution_detail(detail);
 
         assert!(safe.contains("html2pdf_server_error"));
+        assert!(safe.contains("external_error_message=\"renderer failed\""));
         assert!(!safe.contains("secret"));
         assert!(!safe.contains("abc123"));
+        assert!(!safe.contains("body="));
         assert!(safe.contains("token=redacted"));
         assert!(safe.contains("Authorization:redacted"));
+    }
+
+    #[test]
+    fn safe_execution_detail_preserves_external_response_message_and_redacts_secrets() {
+        let detail = "html2pdf_client_error category=client_error status=400 external_error_message=\"invalid css token=secret Authorization: Bearer abc123\" endpoint_host=renderer.example";
+
+        let safe = safe_execution_detail(detail);
+
+        assert!(safe.starts_with("html2pdf_client_error"));
+        assert!(safe.contains("external_error_message=\"invalid css token=redacted"));
+        assert!(safe.contains("Authorization:redacted"));
+        assert!(!safe.contains("secret"));
+        assert!(!safe.contains("abc123"));
     }
 
     #[test]
@@ -563,13 +672,32 @@ mod tests {
 
     #[test]
     fn safe_execution_detail_bounds_renderer_detail() {
-        let detail = format!("html2pdf_server_error body={}", "a".repeat(800));
+        let detail = format!(
+            "html2pdf_server_error category=server_error {}",
+            "a".repeat(800)
+        );
 
         let safe = safe_execution_detail(&detail);
 
         assert!(safe.starts_with("html2pdf_server_error"));
         assert!(safe.len() <= 503);
         assert!(safe.ends_with("..."));
+    }
+
+    #[test]
+    fn safe_execution_detail_strips_quoted_html2pdf_body_fields() {
+        let detail = r#"html2pdf_client_error category=client_error status=400 body="<html>renderer failed</html>" error_body="free text with spaces" endpoint_host=renderer.example content_length=123"#;
+
+        let safe = safe_execution_detail(detail);
+
+        assert_eq!(
+            safe,
+            "html2pdf_client_error category=client_error status=400 endpoint_host=renderer.example content_length=123"
+        );
+        assert!(!safe.contains("body="));
+        assert!(!safe.contains("error_body="));
+        assert!(!safe.contains("renderer failed"));
+        assert!(!safe.contains("free text"));
     }
 
     #[test]
@@ -619,6 +747,35 @@ mod tests {
             safe_execution_detail(detail),
             "sikri_missing_document_content"
         );
+    }
+
+    #[test]
+    fn arkivmapping_contract_failures_are_irrecoverable() {
+        for detail in [
+            "arkivmapping_dokument_fact_mangler dokument_id=123 sikri_recoverability=irrecoverable",
+            "arkivmapping_rendered_dokument_mangler dokument_id=456 sikri_recoverability=irrecoverable",
+            "arkivmapping_dokumentform_mismatch dokument_id=789 sikri_recoverability=irrecoverable",
+        ] {
+            let feil = map_arkiv_feil_detail(detail, safe_execution_detail(detail));
+
+            assert_eq!(feil.feiltype, EksekveringFeiltype::Irrecoverable);
+            assert!(feil.melding.starts_with("arkivmapping_"));
+            assert!(!feil.melding.contains("sikri_recoverability"));
+        }
+    }
+
+    #[test]
+    fn safe_execution_detail_preserves_arkivmapping_category_after_recoverability_marker() {
+        let detail =
+            "sikri_recoverability=irrecoverable arkivmapping_dokumentform_mismatch dokument_id=789";
+
+        let feil = map_arkiv_feil_detail(detail, safe_execution_detail(detail));
+
+        assert_eq!(feil.feiltype, EksekveringFeiltype::Irrecoverable);
+        assert!(feil
+            .melding
+            .starts_with("arkivmapping_dokumentform_mismatch"));
+        assert!(!feil.melding.contains("sikri_recoverability"));
     }
 
     #[test]

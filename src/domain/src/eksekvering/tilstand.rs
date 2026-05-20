@@ -380,8 +380,23 @@ fn planlegg_journalpost_lifecycle(
     jp: &JournalpostMedDokumenter,
     sak: &SakMedBarn,
 ) -> CommandStateDecision {
-    // 1. Opprett journalpost hvis ikke realisert
+    // 1. Render template hoveddokument before journalpost creation.
+    // Journalpost creation normally requires a hoveddokument; HTML templates must
+    // therefore be materialized to a PDF fact before OpprettJournalpost.
     if jp.tilstand == JournalpostTilstand::IkkeRealisert {
+        if let Some(hoveddokument) = jp.dokumenter.first() {
+            if hoveddokument.tilstand == DokumentTilstand::AvventerRendring {
+                if dokument_kan_rendres(hoveddokument, sak.saksnummer.as_deref()) {
+                    return CommandStateDecision::Ready(ArkivOperasjon::RenderDokument {
+                        journalpost_id: jp.journalpost_id,
+                        dokument_id: hoveddokument.dokument_id,
+                    });
+                } else {
+                    return CommandStateDecision::Blocked(BlockedReason::FelterIkkeKlare);
+                }
+            }
+        }
+
         return CommandStateDecision::Ready(ArkivOperasjon::OpprettJournalpost {
             journalpost_id: jp.journalpost_id,
         });
@@ -392,8 +407,18 @@ fn planlegg_journalpost_lifecycle(
         jp.tilstand,
         JournalpostTilstand::Opprettet | JournalpostTilstand::DokumenterUnderArbeid
     ) {
-        // First check for documents needing rendering (before adding new ones)
-        for dok in &jp.dokumenter {
+        // v1 støtter rendring av HTML-template hoveddokument før OpprettJournalpost.
+        // HTML-template vedlegg er utenfor v1-scope og feiler terminalt i stedet
+        // for å rendres som vedlegg ved et uhell.
+        for dok in jp.dokumenter.iter().skip(1) {
+            if dok.tilstand == DokumentTilstand::AvventerRendring && dokument_er_html_template(dok)
+            {
+                return CommandStateDecision::Invalid(DomainViolation::DokumentFeiletPermanent);
+            }
+        }
+
+        // Sjekk deretter om hoveddokumentet trenger idempotent ferdigstilling av rendring.
+        if let Some(dok) = jp.dokumenter.first() {
             if dok.tilstand == DokumentTilstand::AvventerRendring {
                 if dokument_kan_rendres(dok, sak.saksnummer.as_deref()) {
                     return CommandStateDecision::Ready(ArkivOperasjon::RenderDokument {
@@ -580,14 +605,15 @@ fn dokument_kan_rendres(dok: &DokumentMedTilstand, saksnummer: Option<&str>) -> 
     match &dok.kilde {
         DokumentKildeTilstand::HtmlTemplate {
             felter,
-            rendered_dokument_referanse,
+            rendered_dokument_referanse: _,
             mal_referanse: _,
-        } => {
-            rendered_dokument_referanse.is_none()
-                && er_felter_klare(felter, &FeltVerdier { saksnummer })
-        }
+        } => er_felter_klare(felter, &FeltVerdier { saksnummer }),
         DokumentKildeTilstand::Bytes => false,
     }
+}
+
+fn dokument_er_html_template(dok: &DokumentMedTilstand) -> bool {
+    matches!(dok.kilde, DokumentKildeTilstand::HtmlTemplate { .. })
 }
 
 // ---------------------------------------------------------------------------
@@ -1399,6 +1425,143 @@ mod tests {
         assert!(matches!(
             decision,
             CommandStateDecision::Ready(ArkivOperasjon::RenderDokument { .. })
+        ));
+    }
+
+    #[test]
+    fn html_template_rendres_for_journalpost_opprettes() {
+        let jp_id_1 = jp_id();
+        let jp = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::IkkeRealisert,
+            JournalpostType::InterntNotat,
+            false,
+            vec![template_dok(
+                DokumentTilstand::AvventerRendring,
+                vec![Felt::Saksnummer],
+            )],
+        );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInterntNotatJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::RenderDokument { .. })
+        ));
+    }
+
+    #[test]
+    fn html_template_med_rendered_referanse_rendres_ferdig_paa_retry() {
+        let jp_id_1 = jp_id();
+        let mut dokument = template_dok(DokumentTilstand::AvventerRendring, vec![Felt::Saksnummer]);
+        if let DokumentKildeTilstand::HtmlTemplate {
+            rendered_dokument_referanse,
+            ..
+        } = &mut dokument.kilde
+        {
+            *rendered_dokument_referanse = Some(Uuid::new_v4());
+        }
+        let jp = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::IkkeRealisert,
+            JournalpostType::InterntNotat,
+            false,
+            vec![dokument],
+        );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInterntNotatJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::RenderDokument { .. })
+        ));
+    }
+
+    #[test]
+    fn html_template_etter_rendering_oppretter_journalpost() {
+        let jp_id_1 = jp_id();
+        let jp = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::IkkeRealisert,
+            JournalpostType::InterntNotat,
+            false,
+            vec![template_dok(DokumentTilstand::Ok, vec![Felt::Saksnummer])],
+        );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInterntNotatJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::OpprettJournalpost { .. })
+        ));
+    }
+
+    #[test]
+    fn ikke_hoveddokument_avventer_rendring_blockerer_ikke_opprett_journalpost() {
+        let jp_id_1 = jp_id();
+        let jp = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::IkkeRealisert,
+            JournalpostType::InterntNotat,
+            false,
+            vec![
+                dok(DokumentTilstand::Ok),
+                template_dok(DokumentTilstand::AvventerRendring, vec![Felt::Saksnummer]),
+            ],
+        );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInterntNotatJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::OpprettJournalpost { .. })
+        ));
+    }
+
+    #[test]
+    fn html_template_vedlegg_etter_journalpostopprettelse_feiler_permanent() {
+        let jp_id_1 = jp_id();
+        let jp = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::Opprettet,
+            JournalpostType::InterntNotat,
+            false,
+            vec![
+                dok(DokumentTilstand::Ok),
+                template_dok(DokumentTilstand::AvventerRendring, vec![Felt::Saksnummer]),
+            ],
+        );
+        let sak = opprettet_sak_med_saksnummer(vec![jp]);
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettInterntNotatJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Invalid(DomainViolation::DokumentFeiletPermanent)
         ));
     }
 

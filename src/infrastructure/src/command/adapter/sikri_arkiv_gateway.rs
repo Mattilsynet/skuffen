@@ -4,6 +4,9 @@ use application::command::ports::eksekvering_port::{
 };
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use domain::eksekvering::tilstand::{
+    DokumentKildeTilstand, DokumentMedTilstand, JournalpostMedDokumenter,
+};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::{
     OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost, OpprettUgåendeJournalpost,
@@ -71,16 +74,19 @@ impl ArkivGateway for SikriArkivGateway {
     async fn opprett_journalpost(
         &self,
         command: &CommandEnvelope<Command>,
+        journalpost: &JournalpostMedDokumenter,
         saksnummer: &str,
         utsending: Option<Utsendingsvalg>,
     ) -> Result<OpprettJournalpostResultat, anyhow::Error> {
         let journalpost = match &command.payload {
-            Command::OpprettInngåendeJournalpost(data) => self.opprett_inngaende(data).await?,
+            Command::OpprettInngåendeJournalpost(data) => {
+                self.opprett_inngaende(data, journalpost).await?
+            }
             Command::OpprettUtgåendeJournalpost(data) => {
-                self.opprett_utgaaende(data, utsending).await?
+                self.opprett_utgaaende(data, journalpost, utsending).await?
             }
             Command::OpprettInterntNotatJournalpost(data) => {
-                self.opprett_internt_notat(data).await?
+                self.opprett_internt_notat(data, journalpost).await?
             }
             _ => return Err(anyhow::anyhow!("Ugyldig kommando for opprett_journalpost")),
         };
@@ -141,8 +147,11 @@ impl SikriArkivGateway {
     async fn opprett_inngaende(
         &self,
         data: &OpprettInngåendeJournalpost,
+        journalpost: &JournalpostMedDokumenter,
     ) -> Result<ElementsJournalpost, anyhow::Error> {
-        let dokumenter = self.map_dokumenter(&data.felles.dokumenter).await?;
+        let dokumenter = self
+            .map_dokumenter(&data.felles.dokumenter, journalpost)
+            .await?;
         Ok(ElementsJournalpost {
             tittel: Some(data.felles.tittel.clone()),
             journalposttype: Some("I".to_string()),
@@ -183,9 +192,12 @@ impl SikriArkivGateway {
     async fn opprett_utgaaende(
         &self,
         data: &OpprettUgåendeJournalpost,
+        journalpost: &JournalpostMedDokumenter,
         utsending: Option<Utsendingsvalg>,
     ) -> Result<ElementsJournalpost, anyhow::Error> {
-        let dokumenter = self.map_dokumenter(&data.felles.dokumenter).await?;
+        let dokumenter = self
+            .map_dokumenter(&data.felles.dokumenter, journalpost)
+            .await?;
         let forsendelsesmetode = match utsending {
             Some(Utsendingsvalg::MedUtsending) => Some("GENERELL".to_string()),
             Some(Utsendingsvalg::UtenUtsending) => Some("DIG".to_string()),
@@ -232,8 +244,11 @@ impl SikriArkivGateway {
     async fn opprett_internt_notat(
         &self,
         data: &OpprettInterntNotatJournalpost,
+        journalpost: &JournalpostMedDokumenter,
     ) -> Result<ElementsJournalpost, anyhow::Error> {
-        let dokumenter = self.map_dokumenter(&data.felles.dokumenter).await?;
+        let dokumenter = self
+            .map_dokumenter(&data.felles.dokumenter, journalpost)
+            .await?;
         Ok(ElementsJournalpost {
             tittel: Some(data.felles.tittel.clone()),
             journalposttype: Some("X".to_string()),
@@ -257,12 +272,13 @@ impl SikriArkivGateway {
     async fn map_dokumenter(
         &self,
         dokumenter: &[Dokument],
+        journalpost: &JournalpostMedDokumenter,
     ) -> Result<Vec<ElementsDokument>, anyhow::Error> {
         let Some(hoveddokument) = dokumenter.first() else {
             return Ok(Vec::new());
         };
 
-        let (dokument_referanse, filtype) = bytes_form(hoveddokument)?;
+        let (dokument_referanse, filtype) = hoveddokument_referanse(hoveddokument, journalpost)?;
         let innhold = self.hent_media_base64(dokument_referanse).await?;
         Ok(vec![ElementsDokument {
             tittel: Some(hoveddokument.tittel.clone()),
@@ -322,6 +338,53 @@ impl SikriArkivGateway {
     }
 }
 
+fn hoveddokument_referanse(
+    dokument: &Dokument,
+    journalpost: &JournalpostMedDokumenter,
+) -> Result<(uuid::Uuid, String), anyhow::Error> {
+    match &dokument.form {
+        Dokumentform::Bytes {
+            dokument_referanse,
+            filtype,
+        } => Ok((*dokument_referanse, filtype.clone())),
+        Dokumentform::HtmlTemplate { .. } => {
+            let tilstand = journalpost
+                .dokumenter
+                .iter()
+                .find(|d| d.dokument_id.0 == dokument.client_reference)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "arkivmapping_dokument_fact_mangler dokument_id={} sikri_recoverability=irrecoverable",
+                        dokument.client_reference
+                    )
+                })?;
+            rendered_template_referanse(tilstand)
+        }
+    }
+}
+
+fn rendered_template_referanse(
+    dokument: &DokumentMedTilstand,
+) -> Result<(uuid::Uuid, String), anyhow::Error> {
+    match &dokument.kilde {
+        DokumentKildeTilstand::HtmlTemplate {
+            rendered_dokument_referanse: Some(rendered),
+            ..
+        } => Ok((*rendered, "PDF".to_string())),
+        DokumentKildeTilstand::HtmlTemplate {
+            rendered_dokument_referanse: None,
+            ..
+        } => Err(anyhow::anyhow!(
+            "arkivmapping_rendered_dokument_mangler dokument_id={} sikri_recoverability=irrecoverable",
+            dokument.dokument_id.0
+        )),
+        DokumentKildeTilstand::Bytes => Err(anyhow::anyhow!(
+            "arkivmapping_dokumentform_mismatch dokument_id={} sikri_recoverability=irrecoverable",
+            dokument.dokument_id.0
+        )),
+    }
+}
+
 fn bytes_form(dokument: &Dokument) -> Result<(uuid::Uuid, &str), anyhow::Error> {
     match &dokument.form {
         Dokumentform::Bytes {
@@ -329,21 +392,27 @@ fn bytes_form(dokument: &Dokument) -> Result<(uuid::Uuid, &str), anyhow::Error> 
             filtype,
         } => Ok((*dokument_referanse, filtype.as_str())),
         Dokumentform::HtmlTemplate { .. } => Err(anyhow::anyhow!(
-            "HtmlTemplate dokument må rendres før arkivmapping"
+            "arkivmapping_dokumentform_mismatch dokument_client_reference={} sikri_recoverability=irrecoverable",
+            dokument.client_reference
         )),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::SikriArkivGateway;
+    use super::{SikriArkivGateway, hoveddokument_referanse};
     use crate::command::media::{MediaFile, MediaMetadata, MediaStore};
     use async_trait::async_trait;
+    use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId};
+    use domain::eksekvering::tilstand::{
+        DokumentKildeTilstand, DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter,
+        JournalpostTilstand, JournalpostType,
+    };
     use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
     use lib_schemas::skuffen::command::journalpost::{
         JournalpostCommon, OpprettInterntNotatJournalpost,
     };
-    use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
+    use lib_schemas::skuffen::dokument::{Dokument, Dokumentform, Felt};
     use lib_schemas::skuffen::query::queries::SakKey;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -381,9 +450,10 @@ mod tests {
         let hoveddokument = sample_document("Rapport", "PDF");
         let vedlegg = sample_document("Vedlegg", "PNG");
         let gateway = sample_gateway(&[&hoveddokument, &vedlegg]);
+        let journalpost = sample_journalpost_for_documents(&[&hoveddokument, &vedlegg]);
 
         let mapped = gateway
-            .map_dokumenter(&[hoveddokument.clone(), vedlegg])
+            .map_dokumenter(&[hoveddokument.clone(), vedlegg], &journalpost)
             .await
             .expect("documents should map");
 
@@ -391,6 +461,51 @@ mod tests {
         assert_eq!(mapped[0].tittel.as_deref(), Some("Rapport"));
         assert_eq!(mapped[0].filtype.as_deref(), Some("PDF"));
         assert!(mapped[0].hoveddokument);
+    }
+
+    #[tokio::test]
+    async fn html_template_hoveddokument_bruker_rendered_pdf() {
+        let rendered_id = Uuid::new_v4();
+        let dokument = sample_html_template_document();
+        let gateway = sample_gateway_with_files(vec![MediaFile {
+            id: rendered_id,
+            data: b"rendered pdf".to_vec(),
+            filename: Some("rendered.pdf".to_string()),
+            content_type: Some("application/pdf".to_string()),
+            metadata: MediaMetadata::default(),
+        }]);
+        let journalpost = sample_journalpost(vec![sample_html_template_fact(
+            dokument.client_reference,
+            Some(rendered_id),
+        )]);
+
+        let mapped = gateway
+            .map_dokumenter(std::slice::from_ref(&dokument), &journalpost)
+            .await
+            .expect("rendered template should map");
+
+        assert_eq!(mapped.len(), 1);
+        assert_eq!(mapped[0].tittel.as_deref(), Some("HTML-template"));
+        assert_eq!(mapped[0].filtype.as_deref(), Some("PDF"));
+        assert_eq!(mapped[0].innhold.as_deref(), Some("cmVuZGVyZWQgcGRm"));
+        assert!(mapped[0].hoveddokument);
+    }
+
+    #[test]
+    fn html_template_hoveddokument_krever_rendered_reference() {
+        let dokument = sample_html_template_document();
+        let journalpost = sample_journalpost(vec![sample_html_template_fact(
+            dokument.client_reference,
+            None,
+        )]);
+
+        let err =
+            hoveddokument_referanse(&dokument, &journalpost).expect_err("missing rendered ref");
+
+        assert!(
+            err.to_string()
+                .starts_with("arkivmapping_rendered_dokument_mangler")
+        );
     }
 
     #[tokio::test]
@@ -410,6 +525,26 @@ mod tests {
         assert!(!mapped.hoveddokument);
     }
 
+    #[tokio::test]
+    async fn html_template_attachment_mapping_returns_irrecoverable_mapping_error() {
+        let dokument = sample_html_template_document();
+        let command = sample_command(vec![dokument.clone()]);
+        let gateway = sample_gateway_with_files(Vec::new());
+
+        let err = gateway
+            .map_vedlegg_dokument(&command, dokument.client_reference)
+            .await
+            .expect_err("html template attachment should fail before media lookup");
+
+        let message = err.to_string();
+        assert!(message.starts_with("arkivmapping_dokumentform_mismatch"));
+        assert!(message.contains(&format!(
+            "dokument_client_reference={}",
+            dokument.client_reference
+        )));
+        assert!(message.contains("sikri_recoverability=irrecoverable"));
+    }
+
     fn sample_gateway(dokumenter: &[&Dokument]) -> SikriArkivGateway {
         let files = dokumenter
             .iter()
@@ -422,6 +557,68 @@ mod tests {
             })
             .collect();
         SikriArkivGateway::new(Arc::new(FakeMediaStore::with_files(files)))
+    }
+
+    fn sample_gateway_with_files(files: Vec<MediaFile>) -> SikriArkivGateway {
+        SikriArkivGateway::new(Arc::new(FakeMediaStore::with_files(files)))
+    }
+
+    fn sample_journalpost_for_documents(dokumenter: &[&Dokument]) -> JournalpostMedDokumenter {
+        sample_journalpost(
+            dokumenter
+                .iter()
+                .map(|dokument| match &dokument.form {
+                    Dokumentform::Bytes { .. } => DokumentMedTilstand {
+                        dokument_id: SkuffenDokumentId::from(dokument.client_reference),
+                        tilstand: DokumentTilstand::IkkeRealisert,
+                        kilde: DokumentKildeTilstand::Bytes,
+                    },
+                    Dokumentform::HtmlTemplate {
+                        mal_referanse,
+                        felter,
+                    } => DokumentMedTilstand {
+                        dokument_id: SkuffenDokumentId::from(dokument.client_reference),
+                        tilstand: DokumentTilstand::Ok,
+                        kilde: DokumentKildeTilstand::HtmlTemplate {
+                            mal_referanse: *mal_referanse,
+                            felter: felter.iter().copied().collect(),
+                            rendered_dokument_referanse: Some(Uuid::new_v4()),
+                        },
+                    },
+                })
+                .collect(),
+        )
+    }
+
+    fn sample_journalpost(dokumenter: Vec<DokumentMedTilstand>) -> JournalpostMedDokumenter {
+        JournalpostMedDokumenter {
+            journalpost_id: SkuffenJournalpostId::from(Uuid::new_v4()),
+            journalposttype: JournalpostType::InterntNotat,
+            med_utsending: false,
+            tilstand: JournalpostTilstand::IkkeRealisert,
+            sikri_id: None,
+            journalpostnummer: None,
+            dokumenter,
+        }
+    }
+
+    fn sample_html_template_fact(
+        dokument_id: Uuid,
+        rendered_dokument_referanse: Option<Uuid>,
+    ) -> DokumentMedTilstand {
+        DokumentMedTilstand {
+            dokument_id: SkuffenDokumentId::from(dokument_id),
+            tilstand: if rendered_dokument_referanse.is_some() {
+                DokumentTilstand::Ok
+            } else {
+                DokumentTilstand::AvventerRendring
+            },
+            kilde: DokumentKildeTilstand::HtmlTemplate {
+                mal_referanse: Uuid::new_v4(),
+                felter: vec![Felt::Saksnummer],
+                rendered_dokument_referanse,
+            },
+        }
     }
 
     fn sample_command(dokumenter: Vec<Dokument>) -> CommandEnvelope<Command> {
@@ -451,6 +648,17 @@ mod tests {
             form: Dokumentform::Bytes {
                 filtype: filtype.to_string(),
                 dokument_referanse: Uuid::new_v4(),
+            },
+        }
+    }
+
+    fn sample_html_template_document() -> Dokument {
+        Dokument {
+            client_reference: Uuid::new_v4(),
+            tittel: "HTML-template".to_string(),
+            form: Dokumentform::HtmlTemplate {
+                mal_referanse: Uuid::new_v4(),
+                felter: vec![Felt::Saksnummer],
             },
         }
     }

@@ -41,7 +41,8 @@ Log level rules:
 - `warn!`: retryable failures, blocked commands awaiting redelivery
 - `error!`: irrecoverable failures, terminal command drops, infrastructure errors
 - `debug!`: detailed diagnostics (Sikri response parsing, query replies)
-- Never log full request/response payloads at `info!` or above
+- Include useful error messages from external responses in internal logs; they are needed for debugging and monitoring
+- Never log request payloads sent to external systems, because they may contain client-submitted sensitive data
 - Never log domain structs that may contain PII at any default level
 
 ## Error taxonomy
@@ -120,8 +121,12 @@ Media store operations emit structured events with `media_get_*` and `media_save
 Never logged:
 - HTML/PDF document contents or generated payloads
 - Authorization headers, tokens, or secrets
-- Raw request/response payload bodies
+- Request payloads sent to external systems
 - Secrets, credentials, or PII
+
+Acceptable and encouraged in internal logs:
+- Error messages and status details from external response bodies when useful for debugging and monitoring
+- `command_id` and `correlation_id` wherever command context is available
 
 The public outward status remains static and safe. Command execution internal details are for operators only.
 
@@ -132,6 +137,8 @@ NATS error replies to callers must not echo internal details:
 - Use case errors: reply with "Internal error"
 - Sikri HTTP errors: the `ensure_success` function logs response metadata but does
   not echo response bodies to callers
+
+This section governs what is echoed back to callers over NATS. Internal logs may include useful external response error messages as long as request payloads, HTML/PDF contents, secrets, and auth material are not logged.
 
 ## Status-event safety contract
 
@@ -148,10 +155,11 @@ Internal HTML2PDF renderer logs include:
 - Safe endpoint/audience labels
 - Content-type and content-length headers
 - Error category classification
-- Bounded sanitized error response snippets (truncated, redacted)
+- Bounded external response error messages for `text/plain` and `application/json` responses (truncated and redacted)
 
 Never logged:
 - HTML payloads or request bodies
+- HTML/PDF response bodies from the renderer, because they may echo request content or generated content
 - Authorization headers or tokens
 - PDF bytes or generated content
 - Secrets, credentials, or PII

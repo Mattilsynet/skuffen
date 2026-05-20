@@ -822,6 +822,12 @@ fn error_category_for_detail(detail: &str) -> &'static str {
         "rendered_dokument_save_failed"
     } else if detail.starts_with("render_state_update_failed") {
         "render_state_update_failed"
+    } else if detail.starts_with("arkivmapping_dokument_fact_mangler") {
+        "arkivmapping_dokument_fact_mangler"
+    } else if detail.starts_with("arkivmapping_rendered_dokument_mangler") {
+        "arkivmapping_rendered_dokument_mangler"
+    } else if detail.starts_with("arkivmapping_dokumentform_mismatch") {
+        "arkivmapping_dokumentform_mismatch"
     } else if detail.contains("Ugyldig kommando") {
         "invalid_command"
     } else {

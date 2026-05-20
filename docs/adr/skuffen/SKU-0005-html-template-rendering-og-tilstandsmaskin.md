@@ -1,7 +1,7 @@
 # SKU-0005. HTML-template rendering og tilstandsmaskin
 
 Date: 2026-05-13
-Last-reviewed: 2026-05-18
+Last-reviewed: 2026-05-20
 Tier: B
 Status: Proposed
 Crates: skuffen, domain, application, infrastructure
@@ -20,7 +20,7 @@ SKU-0007 lar rene domenefunksjoner beregne `CommandStateDecision` fra command st
 
 R1 [5]: HTML-template dokumenter skal registreres som `DokumentTilstand::AvventerRendring`, mens bytes-dokumenter fortsatt starter i tilstanden som gjør dem klare for vanlig `LeggTilDokument`.
 
-R2 [5]: Tilstandsmaskinen skal ha `ArkivOperasjon::RenderDokument` som journalpost-commandens neste handling når HTML-template facts er klare før journalføring.
+R2 [5]: Tilstandsmaskinen skal ha `ArkivOperasjon::RenderDokument` som journalpost-commandens neste handling når HTML-template hoveddokument-facts er klare før `OpprettJournalpost` og før journalføring. Skuffen oppretter normalt ikke journalpost uten hoveddokument.
 
 R3 [5]: `RenderDokument`-regelen skal ligge før journalføring. Permanente kontraktsfeil skal bli command execution-diagnostikk og terminal command-feil, ikke entity-lagret desired-state progress.
 
@@ -34,8 +34,14 @@ R7 [5]: Mismatch mellom deklarerte `felter` og faktiske HTML-tokens er en irreco
 
 R8 [5]: Nye dokumentoverganger skal skrive `tilstand_historikk` med `command_id`, på samme måte som andre entity state-machine overganger.
 
+R9 [5]: HTML-template dokumenter som ikke er hoveddokument og er i `AvventerRendring` blokkerer ikke `OpprettJournalpost`. v1 avgrenser rendering til hoveddokument og rendered PDF som Sikri hoveddokument; rendered HTML-template vedlegg støttes ikke. Hvis et slikt dokument fortsatt venter etter `OpprettJournalpost`, settes det til `FeiletPermanent` og kommandoen feiler terminalt.
+
+R10 [5]: `AvventerRendring` er render-operasjonens readiness-faktum. Hvis `rendered_dokument_referanse` allerede er lagret fra et avbrutt forsøk, skal `RenderDokument` fortsatt planlegges når feltene er klare, og application skal fullføre idempotent ved å sette dokumentet til `Ok` uten å hente mal, rendre eller lagre PDF på nytt.
+
 ## Consequences
 
 Execution engine kan avgjøre readiness uten å hente HTML, og SKU-0007 sin no-I/O boundary i domain bevares.
 
 Persistence må utvides med ny dokumenttilstand, deklarerte `felter`, og `rendered_dokument_referanse`. Token/felter mismatch feiler terminalt i stedet for å vente.
+
+Når et HTML-template-dokument er hoveddokument, bruker Sikri-adapteren den renderede PDF-referansen fra entity facts som hoveddokument i `OpprettJournalpost`. Original `mal_referanse` sendes aldri til Sikri som dokumentinnhold.

@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
+use domain::eksekvering::tilstand::JournalpostMedDokumenter;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 
 use application::command::ports::eksekvering_port::{
@@ -34,6 +35,7 @@ impl ArkivGateway for FakeArkivGateway {
     async fn opprett_journalpost(
         &self,
         _command: &CommandEnvelope<Command>,
+        _journalpost: &JournalpostMedDokumenter,
         _saksnummer: &str,
         _utsending: Option<Utsendingsvalg>,
     ) -> Result<OpprettJournalpostResultat, anyhow::Error> {

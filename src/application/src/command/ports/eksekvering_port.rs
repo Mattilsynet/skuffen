@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use domain::eksekvering::tilstand::JournalpostMedDokumenter;
 use domain::eksekvering::typer::CommandLifecycleEvent;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 
@@ -23,6 +24,7 @@ pub trait ArkivGateway: Send + Sync {
     async fn opprett_journalpost(
         &self,
         command: &CommandEnvelope<Command>,
+        journalpost: &JournalpostMedDokumenter,
         saksnummer: &str,
         utsending: Option<Utsendingsvalg>,
     ) -> Result<OpprettJournalpostResultat, anyhow::Error>;
