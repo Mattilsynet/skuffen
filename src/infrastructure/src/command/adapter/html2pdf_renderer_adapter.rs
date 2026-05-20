@@ -24,41 +24,108 @@ pub struct GcpIdTokenProvider;
 impl IdTokenProvider for GcpIdTokenProvider {
     async fn id_token(&self, audience: &str) -> Result<String, RendererFeil> {
         let audience_label = safe_audience_label(audience);
-        let provider = gcp_auth::provider().await.map_err(|err| {
+        let url = metadata_identity_url(audience);
+        let client = reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(CONNECT_TIMEOUT)
+            .build()
+            .map_err(|err| {
+                let error_message = sanitize_error_message(&err.to_string());
+                warn!(
+                    event = "html2pdf_auth_failed",
+                    category = "gcp_token_provider",
+                    error_class = "metadata_client",
+                    audience = %audience_label,
+                    error_message = %error_message,
+                    "html2pdf token client initialization failed"
+                );
+                RendererFeil::irrecoverable(format!(
+                    "html2pdf_auth_failed category=gcp_token_provider audience={} error_class=metadata_client error_message=\"{}\"",
+                    audience_label,
+                    quote_value(&error_message)
+                ))
+            })?;
+
+        let response = client
+            .get(url)
+            .header("Metadata-Flavor", "Google")
+            .send()
+            .await
+            .map_err(|err| {
+                let error_message = sanitize_error_message(&err.to_string());
+                warn!(
+                    event = "html2pdf_auth_failed",
+                    category = "gcp_token_request",
+                    error_class = "metadata_request",
+                    audience = %audience_label,
+                    error_message = %error_message,
+                    "html2pdf metadata identity token request failed"
+                );
+                RendererFeil::recoverable(format!(
+                    "html2pdf_auth_failed category=gcp_token_request audience={} error_class=metadata_request error_message=\"{}\"",
+                    audience_label,
+                    quote_value(&error_message)
+                ))
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            warn!(
+                event = "html2pdf_auth_failed",
+                category = "gcp_token_request",
+                error_class = "metadata_status",
+                audience = %audience_label,
+                status_code = status,
+                "html2pdf metadata identity token request returned non-success"
+            );
+            return Err(RendererFeil::recoverable(format!(
+                "html2pdf_auth_failed category=gcp_token_request audience={} error_class=metadata_status status={}",
+                audience_label, status
+            )));
+        }
+
+        let token = response.text().await.map_err(|err| {
             let error_message = sanitize_error_message(&err.to_string());
             warn!(
                 event = "html2pdf_auth_failed",
-                category = "gcp_token_provider",
-                error_class = "gcp_auth_provider",
+                category = "gcp_token_request",
+                error_class = "metadata_body",
                 audience = %audience_label,
                 error_message = %error_message,
-                "html2pdf token provider initialization failed"
+                "html2pdf metadata identity token response read failed"
             );
-            RendererFeil::irrecoverable(format!(
-                "html2pdf_auth_failed category=gcp_token_provider audience={} error_class=gcp_auth_provider error_message=\"{}\"",
+            RendererFeil::recoverable(format!(
+                "html2pdf_auth_failed category=gcp_token_request audience={} error_class=metadata_body error_message=\"{}\"",
                 audience_label,
                 quote_value(&error_message)
             ))
         })?;
 
-        let token = provider.token(&[audience]).await.map_err(|err| {
-            let error_message = sanitize_error_message(&err.to_string());
+        let token = token.trim().to_string();
+        if token.is_empty() {
             warn!(
                 event = "html2pdf_auth_failed",
                 category = "gcp_token_request",
-                error_class = "gcp_auth_token",
+                error_class = "metadata_empty",
                 audience = %audience_label,
-                error_message = %error_message,
-                "html2pdf token request failed"
+                "html2pdf metadata identity token response was empty"
             );
-            RendererFeil::irrecoverable(format!(
-                "html2pdf_auth_failed category=gcp_token_request audience={} error_class=gcp_auth_token error_message=\"{}\"",
-                audience_label,
-                quote_value(&error_message)
-            ))
-        })?;
-        Ok(token.as_str().to_string())
+            return Err(RendererFeil::recoverable(format!(
+                "html2pdf_auth_failed category=gcp_token_request audience={} error_class=metadata_empty",
+                audience_label
+            )));
+        }
+
+        Ok(token)
     }
+}
+
+fn metadata_identity_url(audience: &str) -> String {
+    let encoded: String = url::form_urlencoded::byte_serialize(audience.as_bytes()).collect();
+    format!(
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience={}",
+        encoded
+    )
 }
 
 pub struct Html2PdfRendererAdapter {
@@ -608,6 +675,16 @@ mod tests {
         assert_eq!(classify_error_category(599), "server_error");
         assert_eq!(classify_error_category(302), "unexpected_status");
         assert_eq!(classify_error_category(200), "unexpected_status");
+    }
+
+    #[test]
+    fn metadata_identity_url_encodes_audience() {
+        let url = metadata_identity_url("https://html2pdf.tsap-test.mattilsynet.io/");
+
+        assert_eq!(
+            url,
+            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=https%3A%2F%2Fhtml2pdf.tsap-test.mattilsynet.io%2F"
+        );
     }
 
     #[test]

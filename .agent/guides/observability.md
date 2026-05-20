@@ -157,6 +157,8 @@ Internal HTML2PDF renderer logs include:
 - Error category classification
 - Bounded external response error messages for `text/plain` and `application/json` responses (truncated and redacted)
 
+Renderer authentication uses a Cloud Run metadata-server OIDC identity token for the configured audience. Logs may include the safe audience label and token acquisition category, but never the token value.
+
 Never logged:
 - HTML payloads or request bodies
 - HTML/PDF response bodies from the renderer, because they may echo request content or generated content

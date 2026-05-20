@@ -1615,7 +1615,6 @@ dependencies = [
  "domain",
  "dotenvy",
  "futures",
- "gcp_auth",
  "http",
  "lib-nats",
  "lib-schemas",
