@@ -231,6 +231,18 @@ fn validate_renderer_endpoint(endpoint: &str) -> anyhow::Result<()> {
         parsed.scheme() == "https" || (parsed.scheme() == "http" && is_local_env()),
         "SKUFFEN_HTML2PDF_RENDERER_ENDPOINT must use https outside APP_ENV=local"
     );
+    ensure!(
+        parsed.username().is_empty() && parsed.password().is_none(),
+        "SKUFFEN_HTML2PDF_RENDERER_ENDPOINT must not contain credentials"
+    );
+    ensure!(
+        parsed.path().is_empty() || parsed.path() == "/",
+        "SKUFFEN_HTML2PDF_RENDERER_ENDPOINT must be the renderer base URL without /render"
+    );
+    ensure!(
+        parsed.query().is_none() && parsed.fragment().is_none(),
+        "SKUFFEN_HTML2PDF_RENDERER_ENDPOINT must not contain query or fragment"
+    );
     Ok(())
 }
 

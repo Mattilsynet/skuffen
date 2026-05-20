@@ -128,9 +128,13 @@ fn metadata_identity_url(audience: &str) -> String {
     )
 }
 
+fn render_endpoint(endpoint: &str) -> String {
+    format!("{}/render", endpoint.trim_end_matches('/'))
+}
+
 pub struct Html2PdfRendererAdapter {
     client: reqwest::Client,
-    endpoint: String,
+    render_endpoint: String,
     audience: String,
     token_provider: Box<dyn IdTokenProvider>,
 }
@@ -149,7 +153,7 @@ impl Html2PdfRendererAdapter {
 
         Self {
             client,
-            endpoint,
+            render_endpoint: render_endpoint(&endpoint),
             audience,
             token_provider,
         }
@@ -157,9 +161,9 @@ impl Html2PdfRendererAdapter {
 
     fn diagnostics_context(&self) -> RendererDiagnosticsContext {
         RendererDiagnosticsContext {
-            endpoint_host: safe_url_host(&self.endpoint),
-            endpoint_path: safe_url_path(&self.endpoint),
-            endpoint_label: safe_url_label(&self.endpoint),
+            endpoint_host: safe_url_host(&self.render_endpoint),
+            endpoint_path: safe_url_path(&self.render_endpoint),
+            endpoint_label: safe_url_label(&self.render_endpoint),
             audience: safe_audience_label(&self.audience),
         }
     }
@@ -222,7 +226,7 @@ impl DokumentRenderer for Html2PdfRendererAdapter {
 
         let response = match self
             .client
-            .post(&self.endpoint)
+            .post(&self.render_endpoint)
             .header(CONTENT_TYPE, "text/html; charset=utf-8")
             .header(AUTHORIZATION, format!("Bearer {token}"))
             .body(html.to_vec())
@@ -684,6 +688,18 @@ mod tests {
         assert_eq!(
             url,
             "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=https%3A%2F%2Fhtml2pdf.tsap-test.mattilsynet.io%2F"
+        );
+    }
+
+    #[test]
+    fn render_endpoint_appends_render_to_base_url() {
+        assert_eq!(
+            render_endpoint("https://html2pdf.tsap-test.mattilsynet.io"),
+            "https://html2pdf.tsap-test.mattilsynet.io/render"
+        );
+        assert_eq!(
+            render_endpoint("https://html2pdf.tsap-test.mattilsynet.io/"),
+            "https://html2pdf.tsap-test.mattilsynet.io/render"
         );
     }
 
