@@ -36,9 +36,9 @@ Denne guiden beskriver trygge, vanlige bygg-, test- og kvalitetssjekker for `sku
   the external `html-to-pdf` service. When unset, Skuffen keeps a recoverable
   "renderer not configured" failure so local services can still start. Set this
   in any environment that must process `Dokumentform::HtmlTemplate` commands.
-  The endpoint must use `https://` unless `APP_ENV=local`.
-- `SKUFFEN_HTML2PDF_RENDERER_AUDIENCE=<audience>` overrides the Cloud Run ID-token
-  audience. If unset, the renderer endpoint is used as audience.
+  The endpoint must include the renderer route, such as `/render`, and must use
+  `https://` unless `APP_ENV=local`. The same URL is used as Cloud Run ID-token
+  audience.
 - `SIKRI_SAKSBEHANDLER_ID` and `SIKRI_SAKSBEHANDLER_ENHET` are required for deployed
   test/dev environments to identify the case handler and unit.
 

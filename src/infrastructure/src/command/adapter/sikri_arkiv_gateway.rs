@@ -348,16 +348,16 @@ fn hoveddokument_referanse(
             filtype,
         } => Ok((*dokument_referanse, filtype.clone())),
         Dokumentform::HtmlTemplate { .. } => {
-            let tilstand = journalpost
-                .dokumenter
-                .iter()
-                .find(|d| d.dokument_id.0 == dokument.client_reference)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "arkivmapping_dokument_fact_mangler dokument_id={} sikri_recoverability=irrecoverable",
-                        dokument.client_reference
-                    )
-                })?;
+            // v1 maps only the command's first document as Sikri hoveddokument.
+            // The persisted document fact uses Skuffen's internal ID, not the
+            // command client_reference, so the hoveddokument fact is selected by
+            // the same positional invariant.
+            let tilstand = journalpost.dokumenter.first().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "arkivmapping_dokument_fact_mangler dokument_client_reference={} sikri_recoverability=irrecoverable",
+                    dokument.client_reference
+                )
+            })?;
             rendered_template_referanse(tilstand)
         }
     }
@@ -486,6 +486,33 @@ mod tests {
 
         assert_eq!(mapped.len(), 1);
         assert_eq!(mapped[0].tittel.as_deref(), Some("HTML-template"));
+        assert_eq!(mapped[0].filtype.as_deref(), Some("PDF"));
+        assert_eq!(mapped[0].innhold.as_deref(), Some("cmVuZGVyZWQgcGRm"));
+        assert!(mapped[0].hoveddokument);
+    }
+
+    #[tokio::test]
+    async fn html_template_hoveddokument_bruker_forste_dokumentfact_selv_om_id_er_intern() {
+        let rendered_id = Uuid::new_v4();
+        let dokument = sample_html_template_document();
+        let gateway = sample_gateway_with_files(vec![MediaFile {
+            id: rendered_id,
+            data: b"rendered pdf".to_vec(),
+            filename: Some("rendered.pdf".to_string()),
+            content_type: Some("application/pdf".to_string()),
+            metadata: MediaMetadata::default(),
+        }]);
+        let journalpost = sample_journalpost(vec![sample_html_template_fact(
+            Uuid::new_v4(),
+            Some(rendered_id),
+        )]);
+
+        let mapped = gateway
+            .map_dokumenter(std::slice::from_ref(&dokument), &journalpost)
+            .await
+            .expect("rendered template should map by hoveddokument position");
+
+        assert_eq!(mapped.len(), 1);
         assert_eq!(mapped[0].filtype.as_deref(), Some("PDF"));
         assert_eq!(mapped[0].innhold.as_deref(), Some("cmVuZGVyZWQgcGRm"));
         assert!(mapped[0].hoveddokument);

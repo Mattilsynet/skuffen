@@ -212,18 +212,14 @@ fn dokument_renderer() -> anyhow::Result<Box<dyn DokumentRenderer>> {
     };
     validate_renderer_endpoint(&endpoint)?;
 
-    let custom_audience = optional_env("SKUFFEN_HTML2PDF_RENDERER_AUDIENCE");
-    let audience = custom_audience.clone().unwrap_or_else(|| endpoint.clone());
-
     info!(
         renderer_mode = "enabled",
-        custom_audience = custom_audience.is_some(),
         "HTML-to-PDF renderer is configured"
     );
 
     Ok(Box::new(Html2PdfRendererAdapter::new(
+        endpoint.clone(),
         endpoint,
-        audience,
         Box::new(GcpIdTokenProvider),
     )))
 }
