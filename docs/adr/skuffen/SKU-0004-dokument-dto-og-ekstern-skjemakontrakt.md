@@ -1,9 +1,9 @@
 # SKU-0004. Dokument DTO og ekstern skjemakontrakt
 
 Date: 2026-05-13
-Last-reviewed: 2026-05-18
+Last-reviewed: 2026-05-21
 Tier: B
-Status: Proposed
+Status: Accepted
 Crates: skuffen, domain, application
 
 ## Related
@@ -34,6 +34,6 @@ R7 [5]: Variantenes navn og felt skal bruke norsk domain-vokabular, mens Rust- o
 
 ## Consequences
 
-Dette er et breaking schema-skifte fra dagens flate felter og må koordineres via `lib-schemas` før Skuffen pinner ny commit.
+Dette var et breaking schema-skifte fra tidligere flate felter og er koordinert via `lib-schemas` før Skuffen pinner ny commit. Videre schema-endringer må fortsatt koordineres samme vei.
 
 Felt-deklarasjonen dobler delvis HTML-tokeninformasjon, men gjør state-machine-readiness pure og billig. Token/felter-mismatch oppdages som permanent kontraktsfeil under render.

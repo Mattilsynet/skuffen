@@ -1,9 +1,9 @@
 # SKU-0005. HTML-template rendering og tilstandsmaskin
 
 Date: 2026-05-13
-Last-reviewed: 2026-05-20
+Last-reviewed: 2026-05-21
 Tier: B
-Status: Proposed
+Status: Accepted
 Crates: skuffen, domain, application, infrastructure
 
 ## Related
@@ -34,14 +34,10 @@ R7 [5]: Mismatch mellom deklarerte `felter` og faktiske HTML-tokens er en irreco
 
 R8 [5]: Nye dokumentoverganger skal skrive `tilstand_historikk` med `command_id`, på samme måte som andre entity state-machine overganger.
 
-R9 [5]: HTML-template dokumenter som ikke er hoveddokument og er i `AvventerRendring` blokkerer ikke `OpprettJournalpost`. v1 avgrenser rendering til hoveddokument og rendered PDF som Sikri hoveddokument; rendered HTML-template vedlegg støttes ikke. Hvis et slikt dokument fortsatt venter etter `OpprettJournalpost`, settes det til `FeiletPermanent` og kommandoen feiler terminalt.
+R9 [5]: HTML-template dokumenter som ikke er hoveddokument støttes ikke i v1. Rendering er avgrenset til hoveddokument; rendered PDF brukes som Sikri hoveddokument. Et ikke-hoveddokument-HtmlTemplate i `AvventerRendring` etter `OpprettJournalpost` settes til `FeiletPermanent` og kommandoen feiler terminalt. `OpprettJournalpost` blokkeres ikke av dette dokumentet.
 
 R10 [5]: `AvventerRendring` er render-operasjonens readiness-faktum. Hvis `rendered_dokument_referanse` allerede er lagret fra et avbrutt forsøk, skal `RenderDokument` fortsatt planlegges når feltene er klare, og application skal fullføre idempotent ved å sette dokumentet til `Ok` uten å hente mal, rendre eller lagre PDF på nytt.
 
 ## Consequences
 
-Execution engine kan avgjøre readiness uten å hente HTML, og SKU-0007 sin no-I/O boundary i domain bevares.
-
-Persistence må utvides med ny dokumenttilstand, deklarerte `felter`, og `rendered_dokument_referanse`. Token/felter mismatch feiler terminalt i stedet for å vente.
-
-Når et HTML-template-dokument er hoveddokument, bruker Sikri-adapteren den renderede PDF-referansen fra entity facts som hoveddokument i `OpprettJournalpost`. Original `mal_referanse` sendes aldri til Sikri som dokumentinnhold.
+Execution engine avgjør readiness uten HTML-hent, og SKU-0007 sin no-I/O boundary i domain bevares. Persistence lagrer `felter`, ny dokumenttilstand og `rendered_dokument_referanse`. Sikri-adapteren bruker rendered PDF som hoveddokument; original `mal_referanse` sendes ikke. Deployed smoke 2026-05-21 bekreftet full sekvens til `Ok` i testmiljøet.

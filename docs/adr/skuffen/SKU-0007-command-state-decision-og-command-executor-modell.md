@@ -1,7 +1,7 @@
 # SKU-0007. CommandStateDecision og command executor-modell
 
 Date: 2026-05-18
-Last-reviewed: 2026-05-18
+Last-reviewed: 2026-05-21
 Tier: A
 Status: Accepted
 Crates: skuffen, domain, application, infrastructure, skuffen-integration-tests

@@ -1,9 +1,9 @@
 # SKU-0006. Renderer port, adapter og lagring
 
 Date: 2026-05-13
-Last-reviewed: 2026-05-13
+Last-reviewed: 2026-05-21
 Tier: C
-Status: Proposed
+Status: Accepted
 Crates: application, infrastructure
 
 ## Related
