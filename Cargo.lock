@@ -885,7 +885,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1760,7 +1760,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 [[package]]
 name = "lib-nats"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git?rev=91e69423239d3e6b496506e9e48699a26896124e#91e69423239d3e6b496506e9e48699a26896124e"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#d161f5569156b96d0e13759c8353664f2624c78b"
 dependencies = [
  "async-nats",
  "bytes",
@@ -1773,7 +1773,7 @@ dependencies = [
 [[package]]
 name = "lib-schemas"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git?rev=91e69423239d3e6b496506e9e48699a26896124e#91e69423239d3e6b496506e9e48699a26896124e"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#d161f5569156b96d0e13759c8353664f2624c78b"
 dependencies = [
  "chrono",
  "serde",
@@ -2780,7 +2780,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2839,7 +2839,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3583,7 +3583,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

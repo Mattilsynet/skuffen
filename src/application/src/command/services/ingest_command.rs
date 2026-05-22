@@ -32,12 +32,19 @@ impl IngestCommandService {
     }
 
     /// Handles a batch of commands.
-    /// Returns Ok if all processed (or idempotently skipped).
-    pub async fn handle(&self, commands: CommandSequence) -> Result<()> {
+    /// Returns all submitted command IDs on success, preserving order.
+    /// Includes IDs for commands that are idempotently accepted/skipped.
+    /// Returns Err if any command fails (no partial list).
+    pub async fn handle(&self, commands: CommandSequence) -> Result<Vec<Uuid>> {
+        let mut command_ids = Vec::new();
+
         for envelope in commands {
+            let command_id = envelope.command_id;
             self.process_command(envelope).await?;
+            command_ids.push(command_id);
         }
-        Ok(())
+
+        Ok(command_ids)
     }
 
     async fn process_command(&self, envelope: CommandEnvelope<Command>) -> Result<()> {

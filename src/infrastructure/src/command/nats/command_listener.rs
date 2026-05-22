@@ -1,11 +1,12 @@
 use crate::command::media::MediaStore;
 use crate::nats::client::NatsClient;
-use crate::nats::nats_response::NatsResponse;
 use crate::nats::supervisor::TaskSupervisor;
 use application::command::services::ingest_command::IngestCommandService;
 use async_nats::Message;
 use futures::StreamExt;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
+use lib_schemas::skuffen::command::commands::{
+    ArkiveringKvittering, Command, CommandEnvelope, CommandSequence,
+};
 use lib_schemas::skuffen::dokument::{Dokument, Dokumentform, Felt};
 use std::collections::HashSet;
 use tracing::{Span, error, info};
@@ -84,8 +85,8 @@ impl CommandListener {
                     payload_size = msg.payload.len(),
                     "Failed to deserialize commands: {e}"
                 );
-                let response = NatsResponse::<()>::Error {
-                    message: "Invalid payload format".to_string(),
+                let response = ArkiveringKvittering::Error {
+                    message: "invalid payload format".to_string(),
                 };
                 let payload = serde_json::to_vec(&response).unwrap_or_default();
                 let _ = self
@@ -99,8 +100,8 @@ impl CommandListener {
 
         if let Err(err) = self.validate_media(&commands).await {
             error!("Media validation failed: {err}");
-            let response = NatsResponse::<()>::Error {
-                message: "Media validation failed".to_string(),
+            let response = ArkiveringKvittering::Error {
+                message: "media validation failed".to_string(),
             };
             let payload = serde_json::to_vec(&response).unwrap_or_default();
             let _ = self
@@ -116,8 +117,8 @@ impl CommandListener {
             Ok(seq) => seq,
             Err(e) => {
                 error!("Invalid command sequence: {e}");
-                let response = NatsResponse::<()>::Error {
-                    message: "Invalid command sequence".to_string(),
+                let response = ArkiveringKvittering::Error {
+                    message: "invalid command sequence".to_string(),
                 };
                 let payload = serde_json::to_vec(&response).unwrap_or_default();
                 let _ = self
@@ -132,8 +133,8 @@ impl CommandListener {
         Span::current().record("command_count", tracing::field::display(command_count));
 
         match self.ingest_sequence(sequence).await {
-            Ok(()) => {
-                let response = NatsResponse::Ok(());
+            Ok(command_ids) => {
+                let response = ArkiveringKvittering::Ok { command_ids };
                 let payload = serde_json::to_vec(&response).unwrap_or_default();
                 let _ = self
                     .client
@@ -143,8 +144,8 @@ impl CommandListener {
             }
             Err(e) => {
                 error!("Failed to process commands: {e}");
-                let response = NatsResponse::<()>::Error {
-                    message: "Internal error".to_string(),
+                let response = ArkiveringKvittering::Error {
+                    message: "internal error".to_string(),
                 };
                 let payload = serde_json::to_vec(&response).unwrap_or_default();
                 let _ = self
@@ -157,7 +158,7 @@ impl CommandListener {
     }
 
     #[tracing::instrument(skip_all, name = "command.ingest")]
-    async fn ingest_sequence(&self, sequence: CommandSequence) -> anyhow::Result<()> {
+    async fn ingest_sequence(&self, sequence: CommandSequence) -> anyhow::Result<Vec<uuid::Uuid>> {
         self.service.handle(sequence).await
     }
 

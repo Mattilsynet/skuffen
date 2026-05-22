@@ -3,7 +3,10 @@
 ## Pipeline overview
 
 Subjects and flows:
-- `arkiv.arkiver` (NATS core): receives command batch, reply required
+- `arkiv.arkiver` (NATS core): receives command batch, reply required as `ArkiveringKvittering` (`Ok.command_ids` or `Error.message`)
+- `arkiv.request.sak.hent` (NATS core): read/query request-reply for sak
+- `arkiv.request.journalpost.hent` (NATS core): read/query request-reply for journalpost
+- `arkiv.request.bruker.mt_enheter` (NATS core): live read/query stub returning `Not implemented`
 - `arkiv.command.inbox.<entity>.<command_id>` (JetStream): ingested commands
 - `arkiv.command.ready.<entity>.<command_id>` (JetStream): validated commands ready for execution
 - `arkiv.command.done.<entity>.<command_id>` (JetStream): terminal execution result

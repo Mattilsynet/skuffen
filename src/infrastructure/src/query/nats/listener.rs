@@ -16,9 +16,50 @@ use crate::query::mapping::fra_dto_til_domene::{
     journalpost::from_dto_journalpost_key_to_domain, sak::from_dto_sak_key_to_domain,
 };
 
+pub const HENT_SAK_SUBJECT: &str = "arkiv.request.sak.hent";
+pub const HENT_JOURNALPOST_SUBJECT: &str = "arkiv.request.journalpost.hent";
+pub const BRUKER_MT_ENHETER_SUBJECT: &str = "arkiv.request.bruker.mt_enheter";
+
 #[async_trait]
 pub trait UseCase<Request, Response> {
     async fn handle(&self, req: Request) -> Result<Response, anyhow::Error>;
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct BrukerMtEnheterRequest {}
+
+#[derive(Debug, serde::Serialize)]
+/// Tom payload-type for bruker/enhet-queryen; stubben returnerer foreløpig bare `NatsResponse::Error`.
+pub struct BrukerMtEnheterResponse {}
+
+#[derive(Debug, thiserror::Error)]
+enum QueryHandlerError {
+    #[error("Not implemented")]
+    NotImplemented,
+}
+
+impl QueryHandlerError {
+    fn nats_error_message(error: &anyhow::Error) -> &'static str {
+        match error.downcast_ref::<Self>() {
+            Some(Self::NotImplemented) => "Not implemented",
+            None => "Internal error",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct BrukerMtEnheterNotImplementedUseCase;
+
+#[async_trait]
+impl UseCase<BrukerMtEnheterRequest, BrukerMtEnheterResponse>
+    for BrukerMtEnheterNotImplementedUseCase
+{
+    async fn handle(
+        &self,
+        _req: BrukerMtEnheterRequest,
+    ) -> Result<BrukerMtEnheterResponse, anyhow::Error> {
+        Err(QueryHandlerError::NotImplemented.into())
+    }
 }
 
 #[async_trait]
@@ -144,7 +185,7 @@ where
             Err(e) => {
                 error!(error = %e, "Use case returned error");
                 NatsResponse::Error {
-                    message: "Internal error".to_string(),
+                    message: QueryHandlerError::nats_error_message(&e).to_string(),
                 }
             }
         };

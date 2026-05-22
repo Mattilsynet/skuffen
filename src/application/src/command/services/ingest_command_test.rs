@@ -240,10 +240,10 @@ async fn test_ingest_command_opprett_sak_success() {
     let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
-    let result: anyhow::Result<()> = service.handle(sequence).await;
+    let returned_ids = service.handle(sequence).await.unwrap();
 
     // Assert
-    assert!(result.is_ok());
+    assert_eq!(returned_ids, vec![command_id]);
 
     // Verify Mapping - Should be present for OpprettSak now
     let mappings = fake_mapping.mappings.lock().unwrap();
@@ -296,10 +296,10 @@ async fn test_ingest_command_journalpost_success() {
     let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
-    let result: anyhow::Result<()> = service.handle(sequence).await;
+    let returned_ids = service.handle(sequence).await.unwrap();
 
     // Assert
-    assert!(result.is_ok());
+    assert_eq!(returned_ids, vec![command_id]);
 
     // Verify Mapping
     let mappings = fake_mapping.mappings.lock().unwrap();
@@ -367,7 +367,7 @@ async fn test_ingest_command_registers_document_mappings() {
     let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
-    let result: anyhow::Result<()> = service.handle(sequence).await;
+    let result = service.handle(sequence).await;
 
     // Assert
     assert!(result.is_ok());
@@ -506,7 +506,7 @@ async fn test_ingest_command_allows_multiple_mappings_per_command_id() {
     let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
-    let result: anyhow::Result<()> = service.handle(sequence).await;
+    let result = service.handle(sequence).await;
 
     // Assert
     assert!(result.is_ok());
@@ -558,7 +558,7 @@ async fn test_ingest_command_mapping_failure() {
     let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
-    let result: anyhow::Result<()> = service.handle(sequence).await;
+    let result = service.handle(sequence).await;
 
     // Assert
     assert!(result.is_err());
@@ -610,7 +610,7 @@ async fn test_ingest_command_dispatch_failure() {
     let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
-    let result: anyhow::Result<()> = service.handle(sequence).await;
+    let result = service.handle(sequence).await;
 
     // Assert
     assert!(result.is_err());
@@ -652,7 +652,7 @@ async fn test_ingest_command_idempotent_duplicate_command_id() {
     let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act - first should succeed
-    let result1: anyhow::Result<()> = service.handle(sequence).await;
+    let result1 = service.handle(sequence).await;
     assert!(result1.is_ok());
 
     let command2 = Command::OpprettSak(OpprettSak {
@@ -673,7 +673,7 @@ async fn test_ingest_command_idempotent_duplicate_command_id() {
     let sequence2 = CommandSequence::try_from(vec![envelope2]).unwrap();
 
     // Act - should now be idempotent based on command_id
-    let result2: anyhow::Result<()> = service.handle(sequence2).await;
+    let result2 = service.handle(sequence2).await;
 
     // Assert
     assert!(result2.is_ok());
@@ -721,7 +721,7 @@ async fn test_ingest_command_utgående_journalpost_success() {
     let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
-    let result: anyhow::Result<()> = service.handle(sequence).await;
+    let result = service.handle(sequence).await;
 
     // Assert
     assert!(result.is_ok());
@@ -772,7 +772,7 @@ async fn test_ingest_command_internt_notat_journalpost_success() {
     let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
 
     // Act
-    let result: anyhow::Result<()> = service.handle(sequence).await;
+    let result = service.handle(sequence).await;
 
     // Assert
     assert!(result.is_ok());
@@ -788,4 +788,100 @@ async fn test_ingest_command_internt_notat_journalpost_success() {
     let dispatched = fake_dispatcher.dispatched.lock().unwrap();
     assert_eq!(dispatched.len(), 1);
     assert_eq!(dispatched[0].command_id, command_id);
+}
+
+#[tokio::test]
+async fn test_ingest_command_returns_ids_preserving_order_with_idempotent_skip() {
+    // This test verifies that:
+    // 1. Returned command IDs preserve the submitted order
+    // 2. Idempotently accepted/skipped commands are included in the returned list
+
+    // Arrange
+    let fake_mapping = FakeIdMappingRepository::default();
+    let fake_dispatcher = FakeCommandDispatcher::default();
+
+    let command_id_1 = Uuid::new_v4();
+    let command_id_2 = Uuid::new_v4();
+    let command_id_3 = Uuid::new_v4();
+
+    // Pre-register command_id_2 as already processed (simulating idempotent scenario)
+    {
+        let mut store = fake_mapping.mappings.lock().unwrap();
+        store.push((
+            command_id_2,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "sak".to_string(),
+            None,
+        ));
+    }
+
+    let command1 = Command::OpprettSak(OpprettSak {
+        client_reference: Uuid::new_v4(),
+        sakstittel: Sakstittel("Test Sak 1".to_string()),
+        ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
+        arkivdel: Arkivdel::Tilsynsdivisjonene,
+        saksbehandler_id: "Z99999".to_string(),
+        saksbehandler_enhet: "42".to_string(),
+        tilgang: None,
+    });
+
+    let command2 = Command::OpprettSak(OpprettSak {
+        client_reference: Uuid::new_v4(),
+        sakstittel: Sakstittel("Test Sak 2".to_string()),
+        ordningsverdi: Ordningsverdi::new("456".to_string()).unwrap(),
+        arkivdel: Arkivdel::Tilsynsdivisjonene,
+        saksbehandler_id: "Z99999".to_string(),
+        saksbehandler_enhet: "42".to_string(),
+        tilgang: None,
+    });
+
+    let command3 = Command::OpprettSak(OpprettSak {
+        client_reference: Uuid::new_v4(),
+        sakstittel: Sakstittel("Test Sak 3".to_string()),
+        ordningsverdi: Ordningsverdi::new("789".to_string()).unwrap(),
+        arkivdel: Arkivdel::Tilsynsdivisjonene,
+        saksbehandler_id: "Z99999".to_string(),
+        saksbehandler_enhet: "42".to_string(),
+        tilgang: None,
+    });
+
+    let envelope1 = CommandEnvelope {
+        command_id: command_id_1,
+        correlation_id: None,
+        payload: command1,
+    };
+
+    let envelope2 = CommandEnvelope {
+        command_id: command_id_2,
+        correlation_id: None,
+        payload: command2,
+    };
+
+    let envelope3 = CommandEnvelope {
+        command_id: command_id_3,
+        correlation_id: None,
+        payload: command3,
+    };
+
+    let sequence = CommandSequence::try_from(vec![envelope1, envelope2, envelope3]).unwrap();
+
+    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
+
+    // Act
+    let returned_ids = service.handle(sequence).await.unwrap();
+
+    // Assert
+    // Verify all three IDs are returned (including the idempotently skipped one)
+    assert_eq!(returned_ids.len(), 3);
+
+    // Verify order is preserved: [command_id_1, command_id_2, command_id_3]
+    assert_eq!(returned_ids[0], command_id_1);
+    assert_eq!(returned_ids[1], command_id_2); // Idempotently skipped but still returned
+    assert_eq!(returned_ids[2], command_id_3);
+
+    // Verify only 2 commands were dispatched (command_id_2 was skipped)
+    let dispatched = fake_dispatcher.dispatched.lock().unwrap();
+    assert_eq!(dispatched.len(), 2);
+    assert!(dispatched.iter().all(|e| e.command_id != command_id_2));
 }

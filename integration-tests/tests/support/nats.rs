@@ -129,8 +129,9 @@ pub async fn wait_for_status_events(
 pub async fn send_command_batch(
     nats_url: &str,
     commands: &[CommandEnvelope<Command>],
-) -> Result<()> {
+) -> Result<Vec<uuid::Uuid>> {
     let payload = serde_json::to_vec(commands)?;
+    let command_ids: Vec<uuid::Uuid> = commands.iter().map(|c| c.command_id).collect();
     let client = async_nats::connect(nats_url).await?;
     let inbox = client.new_inbox();
     let mut sub = client.subscribe(inbox.clone()).await?;
@@ -140,11 +141,21 @@ pub async fn send_command_batch(
     let response = tokio::time::timeout(Duration::from_secs(5), sub.next()).await?;
     let response = response.ok_or_else(|| anyhow::anyhow!("Missing command batch response"))?;
     let response_json: serde_json::Value = serde_json::from_slice(&response.payload)?;
+
+    // Command replies bruker `ArkiveringKvittering`, ikke `NatsResponse<T>`.
+    let ok_variant = response_json.get("Ok").ok_or_else(|| {
+        anyhow::anyhow!("Expected Ok variant in response, got: {:?}", response_json)
+    })?;
+    let command_ids_response: Vec<uuid::Uuid> =
+        serde_json::from_value(ok_variant["command_ids"].clone())?;
+
+    // Assert returned command_ids match submitted command ids in order
     assert_eq!(
-        response_json.get("status").and_then(|s| s.as_str()),
-        Some("Ok")
+        command_ids_response, command_ids,
+        "Returned command_ids do not match submitted command ids"
     );
-    Ok(())
+
+    Ok(command_ids_response)
 }
 
 pub async fn wait_for_ready(nats_url: &str) -> Result<()> {
@@ -223,7 +234,7 @@ pub async fn hent_sak_via_nats(
     let query = HentSakQuery {
         key: DtoSakKey::ClientReference(skuffen_id),
     };
-    request_via_nats(nats_url, "sak.hent", &query).await
+    request_via_nats(nats_url, "arkiv.request.sak.hent", &query).await
 }
 
 pub async fn hent_journalpost_via_nats(
@@ -233,7 +244,17 @@ pub async fn hent_journalpost_via_nats(
     let query = HentJournalpostQuery {
         key: DtoJournalpostKey::ClientReference(journalpost_id),
     };
-    request_via_nats(nats_url, "journalpost.hent", &query).await
+    request_via_nats(nats_url, "arkiv.request.journalpost.hent", &query).await
+}
+
+pub async fn hent_bruker_mt_enheter_via_nats(nats_url: &str) -> Result<serde_json::Value> {
+    // Query replies forblir pakket som `NatsResponse<T>`.
+    request_via_nats(
+        nats_url,
+        "arkiv.request.bruker.mt_enheter",
+        &serde_json::json!({}),
+    )
+    .await
 }
 
 async fn request_via_nats<T: serde::Serialize>(
@@ -279,5 +300,5 @@ pub async fn hent_sak_via_nats_by_arkiv_id(
     let query = HentSakQuery {
         key: DtoSakKey::ArkivId(lib_schemas::skuffen::sak::Saksnummer::new(saksnummer)?),
     };
-    request_via_nats(nats_url, "sak.hent", &query).await
+    request_via_nats(nats_url, "arkiv.request.sak.hent", &query).await
 }

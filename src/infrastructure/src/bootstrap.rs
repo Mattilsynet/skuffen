@@ -39,7 +39,10 @@ use crate::query::adapter::fake_journalpost_repository::FakeJournalpostRepositor
 use crate::query::adapter::fake_sak_repository::FakeSakRepository;
 use crate::query::adapter::hent_sak::SikriRepository;
 use crate::query::mapping::lookup::key_mapping_queries;
-use crate::query::nats::listener::{NatsReplier, UseCase};
+use crate::query::nats::listener::{
+    BRUKER_MT_ENHETER_SUBJECT, BrukerMtEnheterNotImplementedUseCase, HENT_JOURNALPOST_SUBJECT,
+    HENT_SAK_SUBJECT, NatsReplier, UseCase,
+};
 use crate::query::nats::query_listener::QueryListener;
 
 pub struct RuntimeDeps {
@@ -87,11 +90,23 @@ pub fn build_query_listener(nats: NatsClient, use_fake_sikri: bool) -> QueryList
     //TODO: Ikke implementert endepunkt enda.
     let hent_journalpost_uc =
         HentJournalpostService::new(Box::new(FakeJournalpostRepository::new()));
-    let hent_sak_replier = NatsReplier::new(nats.clone(), "sak.hent", Box::new(hent_sak_uc));
-    let hent_journalpost_replier =
-        NatsReplier::new(nats, "journalpost.hent", Box::new(hent_journalpost_uc));
+    let hent_sak_replier = NatsReplier::new(nats.clone(), HENT_SAK_SUBJECT, Box::new(hent_sak_uc));
+    let hent_journalpost_replier = NatsReplier::new(
+        nats.clone(),
+        HENT_JOURNALPOST_SUBJECT,
+        Box::new(hent_journalpost_uc),
+    );
+    let bruker_mt_enheter_replier = NatsReplier::new(
+        nats,
+        BRUKER_MT_ENHETER_SUBJECT,
+        Box::new(BrukerMtEnheterNotImplementedUseCase),
+    );
 
-    QueryListener::new(hent_sak_replier, hent_journalpost_replier)
+    QueryListener::new(
+        hent_sak_replier,
+        hent_journalpost_replier,
+        bruker_mt_enheter_replier,
+    )
 }
 
 pub fn build_ready_replier(nats: NatsClient) -> NatsReplier<String, String> {

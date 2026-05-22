@@ -225,9 +225,36 @@ All integrasjon skjer over **NATS**.
 
 ### NATS subjects og streams
 
-Request-reply:
-- `arkiv.arkiver` (kommandoer). Request: `Vec<CommandEnvelope<Command>>`. Reply: JSON-status (forelopig `NatsResponse<()>`).
+Request-reply (skriv / kommandoer):
+- `arkiv.arkiver` (kommandoer). Request: `Vec<CommandEnvelope<Command>>`. Reply: `ArkiveringKvittering`.
+  - OK: `{ "Ok": { "command_ids": ["<uuid>"] } }` betyr at hele batchen er mottatt og akseptert for prosessering.
+  - Error: `{ "Error": { "message": "..." } }` betyr at hele batchen er avvist. Execution-resultat kommer via status-events, ikke request-reply.
 - `arkiv.admin` (administrative funksjoner).
+
+Request-reply (les / queries):
+- `arkiv.request.sak.hent` — hent sak. Request: `HentSakQuery` med `SakKey::ClientReference(uuid)` eller `SakKey::ArkivId(Saksnummer)`. Reply: `NatsResponse<SakResponse>`.
+- `arkiv.request.journalpost.hent` — hent journalpost. Request: `HentJournalpostQuery` med `JournalpostKey::ClientReference(uuid)` eller `JournalpostKey::JournalpostId(journalpost_id)`. Reply: `NatsResponse<JournalpostResponse>`. NB: subjectet er koblet opp, men backing repository er foreløpig fake/testdata.
+- `arkiv.request.bruker.mt_enheter` — bruker/MT-enheter. Request: `{}`. Reply: `NatsResponse::Error { message: "Not implemented" }` inntil kontrakt og backing implementation er avklart.
+
+Query replies bruker `NatsResponse<T>`:
+
+```json
+{"status":"Ok","payload":{}}
+```
+
+```json
+{"status":"Error","payload":{"message":"Not implemented"}}
+```
+
+Wire-shape for query keys er tagged JSON fra `lib-schemas`, for eksempel:
+
+```json
+{"key":{"type":"clientReference","value":"00000000-0000-0000-0000-000000000000"}}
+```
+
+```json
+{"key":{"type":"journalpostId","value":"12345"}}
+```
 
 JetStream (til klienter):
 - Stream: `arkiv_status` (subject: `arkiv.status.<commandId>`). Payload: `CommandStatusEvent`. Retention: 180 dager.
@@ -262,7 +289,7 @@ Se design og domenelogikk i `docs/command_executor.md`.
 ## Runtime-prioritering
 
 - `command_listener`, `media_listener` og `health_check` regnes som kritiske for opptak. De restartes internt, men hvis de stopper eller feiler mer enn 3 ganger på rad, avsluttes prosessen slik at Cloud Run kan restarte instansen.
-- `validation_listener`, `eksekvering_listener`, `eksekvering_worker`, query listeners og `ready_replier` regnes som degradérbare. De restartes med backoff, men stopper ikke hele prosessen alene.
+- `validation_listener`, `execution_listener`, `execution_worker`, `query_listener` og `ready_replier` regnes som degradérbare: hvis de stopper eller feiler, logger Skuffen feilen og holder prosessen i live. `query_listener` dekker `arkiv.request.sak.hent`, `arkiv.request.journalpost.hent` og `arkiv.request.bruker.mt_enheter`.
 
 ---
 
@@ -275,14 +302,14 @@ En **sekvens** er en liste av kommandoer som hører logisk sammen.
 ```json
 [
   {
-    "kommando": "OpprettSak",
-    "kommandoId": "uuid-1",
-    "kommandoData": { }
+    "command_id": "00000000-0000-0000-0000-000000000001",
+    "correlation_id": "00000000-0000-0000-0000-000000000010",
+    "payload": { "OpprettSak": { } }
   },
   {
-    "kommando": "OpprettInngåendeJournalpost",
-    "kommandoId": "uuid-2",
-    "kommandoData": { }
+    "command_id": "00000000-0000-0000-0000-000000000002",
+    "correlation_id": "00000000-0000-0000-0000-000000000010",
+    "payload": { "OpprettInngåendeJournalpost": { } }
   }
 ]
 ```
@@ -329,8 +356,9 @@ En query er et rent lesekall.
 	•	Laster aldri domene-entiteter
 
 Eksempler:
-	•	Hent sak
-	•	Hent journalpost
+	•	`arkiv.request.sak.hent` — hent sak
+	•	`arkiv.request.journalpost.hent` — hent journalpost
+	•	`arkiv.request.bruker.mt_enheter` — bruker/MT-enheter, foreløpig `Not implemented`
 	•	Hent status for kommando eller sekvens
 
 ### Mapping
@@ -388,8 +416,10 @@ Feil klassifiseres som:
 
 ## Kontraktsdeling
 
-DTO typene ligger her:
-https://github.com/Mattilsynet/landdyrtilsyn-libs/tree/master/lib-schemas/src/Skuffen
+DTO-typene ligger i `landdyrtilsyn-libs/lib-schemas`; latest source kan sees her:
+https://github.com/Mattilsynet/landdyrtilsyn-libs/tree/master/lib-schemas/src/skuffen
+
+Skuffen følger latest git HEAD for `lib-schemas`/`lib-nats` i `Cargo.toml`, mens `Cargo.lock` er resolved build boundary for konkret bygg.
 
 Disse utgjør den stabile kontrakten.
 

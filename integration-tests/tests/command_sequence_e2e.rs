@@ -9,8 +9,9 @@ use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
 use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1, SkuffenStatusPhase};
 
 use support::{
-    extract_saksnummer, hent_journalpost_via_nats, hent_sak_via_nats_by_arkiv_id, publish_media,
-    send_command_batch, wait_for_status_events, CommandScenario,
+    extract_saksnummer, hent_bruker_mt_enheter_via_nats, hent_journalpost_via_nats,
+    hent_sak_via_nats_by_arkiv_id, publish_media, send_command_batch, wait_for_status_events,
+    CommandScenario,
 };
 
 mod support;
@@ -201,6 +202,26 @@ async fn query_hent_journalpost_via_nats() -> Result<()> {
         hent_journalpost_via_nats(&env.nats_url, scenario.journalpost_internt_client_reference)
             .await?;
     assert_eq!(response.get("status").and_then(|s| s.as_str()), Some("Ok"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_hent_bruker_mt_enheter_returns_not_implemented() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let response = hent_bruker_mt_enheter_via_nats(&env.nats_url).await?;
+
+    assert_eq!(
+        response.get("status").and_then(|s| s.as_str()),
+        Some("Error")
+    );
+    assert_eq!(
+        response
+            .get("payload")
+            .and_then(|payload| payload.get("message"))
+            .and_then(|message| message.as_str()),
+        Some("Not implemented")
+    );
     Ok(())
 }
 

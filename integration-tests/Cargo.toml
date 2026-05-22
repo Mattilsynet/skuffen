@@ -9,8 +9,8 @@ skuffen = { path = ".." }
 application = { path = "../src/application" }
 infrastructure = { path = "../src/infrastructure" }
 domain = { path = "../src/domain" }
-lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", rev = "91e69423239d3e6b496506e9e48699a26896124e", features = ["skuffen"] }
-lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", rev = "91e69423239d3e6b496506e9e48699a26896124e", package = "lib-nats" }
+lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", features = ["skuffen"] }
+lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats" }
 
 anyhow = "1.0.102"
 async-nats = "0.48.0"

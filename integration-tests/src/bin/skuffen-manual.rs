@@ -366,9 +366,17 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
         },
     ];
 
+    let expected_command_ids: Vec<Uuid> = command_sequence
+        .iter()
+        .map(|command| command.command_id)
+        .collect();
     let response = request_json(config, "arkiv.arkiver", &command_sequence).await?;
-    if response.get("status").and_then(|value| value.as_str()) != Some("Ok") {
-        anyhow::bail!("Unexpected send response: {response}");
+    let ok_response = response
+        .get("Ok")
+        .ok_or_else(|| anyhow::anyhow!("Unexpected send response: {response}"))?;
+    let command_ids: Vec<Uuid> = serde_json::from_value(ok_response["command_ids"].clone())?;
+    if command_ids != expected_command_ids {
+        anyhow::bail!("Unexpected command ids in send response: {response}");
     }
 
     println!("Sent sequence to {}", redact_url_userinfo(&config.url));
