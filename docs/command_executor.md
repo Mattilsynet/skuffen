@@ -177,7 +177,7 @@ Krav:
 - Sak finnes og er ikke avsluttet.
 - Ved `SakKey::ClientReference` registreres journalpostkommandoen lokalt, men blir `blokkert_venter` til saken er opprettet i entity tilstand.
 - Journalpostkommando venter også på `saksnummer` hvis saken finnes, men fortsatt mangler dette.
-- Ved `SakKey::ArkivId` seedes saken som opprettet med kjent `saksnummer`.
+- Ved `SakKey::ArkivId` verifiserer Sikri-/arkivvalidering at saken finnes og er åpen før lokal seeding; etter validert kommando seeder registrering `sak_tilstand` som `Opprettet` med `saksnummer` før FK-avhengige rader (journalpost/dokument) settes inn. Seeding er idempotent og må ikke overskrive eksisterende `tilstand`, `saksnummer` eller `opprettet_av_command_id`.
 
 ### Legg til dokument
 Krav:

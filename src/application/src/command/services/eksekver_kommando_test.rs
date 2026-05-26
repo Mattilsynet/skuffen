@@ -78,6 +78,15 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         Ok(())
     }
 
+    async fn ensure_sak_tilstand_for_arkiv_id(
+        &self,
+        _sak_id: SkuffenSakId,
+        _saksnummer: &str,
+        _command_id: Uuid,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
     async fn oppdater_naavaerende_saksansvarlig(
         &self,
         _sak_id: SkuffenSakId,

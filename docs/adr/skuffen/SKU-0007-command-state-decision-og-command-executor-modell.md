@@ -1,7 +1,7 @@
 # SKU-0007. CommandStateDecision og command executor-modell
 
 Date: 2026-05-18
-Last-reviewed: 2026-05-21
+Last-reviewed: 2026-05-26
 Tier: A
 Status: Accepted
 Crates: skuffen, domain, application, infrastructure, skuffen-integration-tests
@@ -61,6 +61,7 @@ R12 [5]: Wake-up reevaluerer berørte `blokkert_venter` commands fra ferske enti
 - Application må materialisere `CommandStateDecision` i registrering, execution og wake-up.
 - Wake-up må dekke journalpost- og dokumentendringer; en no-op path kan strande blocked commands.
 - Existing tests rundt global `neste_handling` må omskrives til command-aware decisions.
+- For `SakKey::ArkivId` kreves archive validation og intake/registration seeding (se SKU-0009).
 
 ### Tradeoffs
 

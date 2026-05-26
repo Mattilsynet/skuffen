@@ -15,3 +15,5 @@ Kilde: `.agent/guides/architecture/flows/Skuffen - Arkiv sak finnes Ikke Error.s
 
 ## Notat
 - Diagrammet viser en tidsmerking (T = 4) ved feilgrenen.
+- Feilen oppstar nar ArkivId Sak **ikke** eksisterer i Sikri eller er stengt.
+- Hvis saken eksisterer og er apen, passerer validering og registrering seedes lokal tilstand.

@@ -4,7 +4,7 @@ use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSa
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
     DokumentKildeTilstand, DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter,
-    JournalpostTilstand, SakMedBarn, SakTilstand,
+    JournalpostTilstand, SakMedBarn, SakTilstand, Saksansvarlig,
 };
 use domain::eksekvering::typer::{
     CommandLifecycleContext, CommandLifecycleEvent, CommandStage, CommandStageStatus,
@@ -13,7 +13,7 @@ use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
 };
-use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
+use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettSaksansvarlig};
 use lib_schemas::skuffen::dokument::{Dokument, Dokumentform, Felt};
 use lib_schemas::skuffen::query::queries::SakKey;
 use lib_schemas::skuffen::sak::{Ordningsverdi, Saksnummer, Sakstittel};
@@ -36,14 +36,43 @@ use crate::command::services::registrer_i_eksekveringssystem::RegistrerIEksekver
 // FakeEntityTilstandRepository
 // ---------------------------------------------------------------------------
 
+type OpprettetSakRecord = (Uuid, Uuid);
+type OppdatertSakRecord = (Uuid, SakTilstand, Option<i64>, Option<String>);
 type OpprettetDokumentRecord = (Uuid, Uuid, DokumentTilstand, Option<Uuid>, Vec<Felt>, Uuid);
+type OppdatertSaksansvarligRecord = (Uuid, String, String);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FakeEntityEvent {
+    OpprettSakTilstand {
+        sak_id: Uuid,
+    },
+    OppdaterSakTilstand {
+        sak_id: Uuid,
+        tilstand: SakTilstand,
+        saksnummer: Option<String>,
+    },
+    OpprettJournalpostTilstand {
+        journalpost_id: Uuid,
+        sak_id: Uuid,
+    },
+    OppdaterOensketSaksansvarlig {
+        sak_id: Uuid,
+    },
+    EnsureArkivIdSakSeeded {
+        sak_id: Uuid,
+        saksnummer: String,
+    },
+}
 
 #[derive(Default)]
 struct FakeEntityTilstandData {
-    opprettede_saker: Vec<(Uuid, Uuid)>,
+    opprettede_saker: Vec<OpprettetSakRecord>,
+    oppdaterte_saker: Vec<OppdatertSakRecord>,
+    oppdaterte_oenskede_saksansvarlige: Vec<OppdatertSaksansvarligRecord>,
     opprettede_journalposter: Vec<(Uuid, Uuid, JournalpostType, bool, Uuid)>,
     opprettede_dokumenter: Vec<OpprettetDokumentRecord>,
     sak_med_barn: HashMap<Uuid, SakMedBarn>,
+    entity_events: Vec<FakeEntityEvent>,
 }
 
 #[derive(Clone, Default)]
@@ -58,30 +87,121 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         sak_id: SkuffenSakId,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
-        self.data
-            .lock()
-            .unwrap()
-            .opprettede_saker
-            .push((Uuid::from(sak_id), command_id));
+        let mut data = self.data.lock().unwrap();
+        let sak_id = Uuid::from(sak_id);
+        data.opprettede_saker.push((sak_id, command_id));
+        data.entity_events
+            .push(FakeEntityEvent::OpprettSakTilstand { sak_id });
         Ok(())
     }
 
     async fn oppdater_sak_tilstand(
         &self,
-        _sak_id: SkuffenSakId,
-        _tilstand: SakTilstand,
-        _sikri_id: Option<i64>,
-        _saksnummer: Option<&str>,
+        sak_id: SkuffenSakId,
+        tilstand: SakTilstand,
+        sikri_id: Option<i64>,
+        saksnummer: Option<&str>,
     ) -> Result<(), anyhow::Error> {
+        let mut data = self.data.lock().unwrap();
+        let sak_id_uuid = Uuid::from(sak_id);
+        let saksnummer = saksnummer.map(str::to_string);
+        data.oppdaterte_saker
+            .push((sak_id_uuid, tilstand, sikri_id, saksnummer.clone()));
+        data.entity_events
+            .push(FakeEntityEvent::OppdaterSakTilstand {
+                sak_id: sak_id_uuid,
+                tilstand,
+                saksnummer: saksnummer.clone(),
+            });
+
+        match data.sak_med_barn.get_mut(&sak_id_uuid) {
+            Some(sak) => {
+                sak.tilstand = tilstand;
+                sak.sikri_id = sikri_id;
+                sak.saksnummer = saksnummer;
+            }
+            None => {
+                data.sak_med_barn.insert(
+                    sak_id_uuid,
+                    SakMedBarn {
+                        sak_id,
+                        tilstand,
+                        sikri_id,
+                        saksnummer,
+                        oensket_saksansvarlig: None,
+                        naavaerende_saksansvarlig: None,
+                        journalposter: Vec::new(),
+                    },
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn ensure_sak_tilstand_for_arkiv_id(
+        &self,
+        sak_id: SkuffenSakId,
+        saksnummer: &str,
+        _command_id: Uuid,
+    ) -> Result<(), anyhow::Error> {
+        let mut data = self.data.lock().unwrap();
+        let sak_id_uuid = Uuid::from(sak_id);
+
+        if data.sak_med_barn.contains_key(&sak_id_uuid) {
+            return Ok(());
+        }
+
+        let saksnummer = saksnummer.to_string();
+        data.oppdaterte_saker.push((
+            sak_id_uuid,
+            SakTilstand::Opprettet,
+            None,
+            Some(saksnummer.clone()),
+        ));
+        data.entity_events
+            .push(FakeEntityEvent::EnsureArkivIdSakSeeded {
+                sak_id: sak_id_uuid,
+                saksnummer: saksnummer.clone(),
+            });
+        data.sak_med_barn.insert(
+            sak_id_uuid,
+            SakMedBarn {
+                sak_id,
+                tilstand: SakTilstand::Opprettet,
+                sikri_id: None,
+                saksnummer: Some(saksnummer),
+                oensket_saksansvarlig: None,
+                naavaerende_saksansvarlig: None,
+                journalposter: Vec::new(),
+            },
+        );
+
         Ok(())
     }
 
     async fn oppdater_oensket_saksansvarlig(
         &self,
-        _sak_id: SkuffenSakId,
-        _saksbehandler_id: &str,
-        _saksbehandler_enhet: &str,
+        sak_id: SkuffenSakId,
+        saksbehandler_id: &str,
+        saksbehandler_enhet: &str,
     ) -> Result<(), anyhow::Error> {
+        let mut data = self.data.lock().unwrap();
+        let sak_id_uuid = Uuid::from(sak_id);
+        data.oppdaterte_oenskede_saksansvarlige.push((
+            sak_id_uuid,
+            saksbehandler_id.to_string(),
+            saksbehandler_enhet.to_string(),
+        ));
+        data.entity_events
+            .push(FakeEntityEvent::OppdaterOensketSaksansvarlig {
+                sak_id: sak_id_uuid,
+            });
+        if let Some(sak) = data.sak_med_barn.get_mut(&sak_id_uuid) {
+            sak.oensket_saksansvarlig = Some(Saksansvarlig {
+                saksbehandler_id: saksbehandler_id.to_string(),
+                enhet: saksbehandler_enhet.to_string(),
+            });
+        }
         Ok(())
     }
 
@@ -102,13 +222,38 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         med_utsending: bool,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
-        self.data.lock().unwrap().opprettede_journalposter.push((
-            Uuid::from(journalpost_id),
-            Uuid::from(sak_id),
+        let mut data = self.data.lock().unwrap();
+        let journalpost_id_uuid = Uuid::from(journalpost_id);
+        let sak_id_uuid = Uuid::from(sak_id);
+        data.opprettede_journalposter.push((
+            journalpost_id_uuid,
+            sak_id_uuid,
             journalposttype,
             med_utsending,
             command_id,
         ));
+        data.entity_events
+            .push(FakeEntityEvent::OpprettJournalpostTilstand {
+                journalpost_id: journalpost_id_uuid,
+                sak_id: sak_id_uuid,
+            });
+        if let Some(sak) = data.sak_med_barn.get_mut(&sak_id_uuid) {
+            if !sak
+                .journalposter
+                .iter()
+                .any(|journalpost| journalpost.journalpost_id == journalpost_id)
+            {
+                sak.journalposter.push(JournalpostMedDokumenter {
+                    journalpost_id,
+                    tilstand: JournalpostTilstand::IkkeRealisert,
+                    sikri_id: None,
+                    journalpostnummer: None,
+                    journalposttype,
+                    med_utsending,
+                    dokumenter: Vec::new(),
+                });
+            }
+        }
         Ok(())
     }
 
@@ -170,14 +315,37 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         felter: Vec<Felt>,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
-        self.data.lock().unwrap().opprettede_dokumenter.push((
-            Uuid::from(dokument_id),
+        let mut data = self.data.lock().unwrap();
+        let dokument_id_uuid = Uuid::from(dokument_id);
+        data.opprettede_dokumenter.push((
+            dokument_id_uuid,
             Uuid::from(journalpost_id),
             tilstand,
             mal_referanse,
-            felter,
+            felter.clone(),
             command_id,
         ));
+        for sak in data.sak_med_barn.values_mut() {
+            if let Some(journalpost) = sak
+                .journalposter
+                .iter_mut()
+                .find(|journalpost| journalpost.journalpost_id == journalpost_id)
+            {
+                journalpost.dokumenter.push(DokumentMedTilstand {
+                    dokument_id,
+                    tilstand,
+                    kilde: match mal_referanse {
+                        Some(mal_referanse) => DokumentKildeTilstand::HtmlTemplate {
+                            mal_referanse,
+                            felter,
+                            rendered_dokument_referanse: None,
+                        },
+                        None => DokumentKildeTilstand::Bytes,
+                    },
+                });
+                break;
+            }
+        }
         Ok(())
     }
 
@@ -1073,4 +1241,297 @@ fn make_avslutt_sak_command(sak_key: SakKey) -> CommandEnvelope<Command> {
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::AvsluttSak(AvsluttSak { sak_key }),
     }
+}
+
+fn make_sett_saksansvarlig_command(
+    sak_key: SakKey,
+    saksbehandler_id: &str,
+    saksbehandler_enhet: &str,
+) -> CommandEnvelope<Command> {
+    CommandEnvelope {
+        command_id: Uuid::new_v4(),
+        correlation_id: Some(Uuid::new_v4()),
+        payload: Command::SettSaksansvarlig(SettSaksansvarlig {
+            sak_key,
+            saksbehandler_id: saksbehandler_id.to_string(),
+            saksbehandler_enhet: saksbehandler_enhet.to_string(),
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ArkivId first-seen Sak seeding behavior
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn journalpost_med_arkiv_id_ukjent_lokal_sak_saeder_opprettet_med_saksnummer_og_blir_klar() {
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+
+    let journalpost_client_reference = Uuid::new_v4();
+    let journalpost_skuffen_id = Uuid::new_v4();
+    let ensured_sak_id = Uuid::new_v4();
+    let saksnummer = Saksnummer::new("2025/789").unwrap();
+
+    id_mapping_repo.data.lock().unwrap().ensured_sak_id = Some(ensured_sak_id);
+    id_mapping_repo
+        .data
+        .lock()
+        .unwrap()
+        .skuffen_id_for_client_reference =
+        vec![(journalpost_client_reference, journalpost_skuffen_id)];
+
+    let service = build_service(
+        execution_repo.clone(),
+        entity_repo.clone(),
+        id_mapping_repo,
+        status_publisher,
+    );
+
+    let envelope = make_journalpost_command(
+        journalpost_client_reference,
+        SakKey::ArkivId(saksnummer.clone()),
+    );
+    service.handle(&envelope).await.unwrap();
+
+    let entity_data = entity_repo.data.lock().unwrap();
+    assert_eq!(
+        entity_data.oppdaterte_saker,
+        vec![(
+            ensured_sak_id,
+            SakTilstand::Opprettet,
+            None,
+            Some(saksnummer.as_str().to_string())
+        )]
+    );
+    let seeded_sak = entity_data.sak_med_barn.get(&ensured_sak_id).unwrap();
+    assert_eq!(seeded_sak.tilstand, SakTilstand::Opprettet);
+    assert_eq!(seeded_sak.saksnummer.as_deref(), Some(saksnummer.as_str()));
+    assert!(matches!(
+        entity_data.entity_events.as_slice(),
+        [
+            FakeEntityEvent::EnsureArkivIdSakSeeded { .. },
+            FakeEntityEvent::OpprettJournalpostTilstand { .. },
+            ..
+        ]
+    ));
+    drop(entity_data);
+
+    let exec_data = execution_repo.data.lock().unwrap();
+    assert_eq!(
+        exec_data.opprettede_eksekveringer,
+        vec![(envelope.command_id, EksekveringStatus::Klar, None)]
+    );
+}
+
+#[tokio::test]
+async fn avslutt_sak_med_arkiv_id_ukjent_lokal_sak_saeder_foer_klarhet_og_blir_klar() {
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+
+    let ensured_sak_id = Uuid::new_v4();
+    let saksnummer = Saksnummer::new("2025/999").unwrap();
+
+    id_mapping_repo.data.lock().unwrap().ensured_sak_id = Some(ensured_sak_id);
+
+    let service = build_service(
+        execution_repo.clone(),
+        entity_repo.clone(),
+        id_mapping_repo,
+        status_publisher,
+    );
+
+    let envelope = make_avslutt_sak_command(SakKey::ArkivId(saksnummer.clone()));
+    service.handle(&envelope).await.unwrap();
+
+    let entity_data = entity_repo.data.lock().unwrap();
+    assert_eq!(
+        entity_data.oppdaterte_saker,
+        vec![(
+            ensured_sak_id,
+            SakTilstand::Opprettet,
+            None,
+            Some(saksnummer.as_str().to_string())
+        )]
+    );
+    let seeded_sak = entity_data.sak_med_barn.get(&ensured_sak_id).unwrap();
+    assert_eq!(seeded_sak.tilstand, SakTilstand::Opprettet);
+    assert_eq!(seeded_sak.saksnummer.as_deref(), Some(saksnummer.as_str()));
+    assert!(seeded_sak.journalposter.is_empty());
+    drop(entity_data);
+
+    let exec_data = execution_repo.data.lock().unwrap();
+    assert_eq!(
+        exec_data.opprettede_eksekveringer,
+        vec![(envelope.command_id, EksekveringStatus::Klar, None)]
+    );
+}
+
+#[tokio::test]
+async fn sett_saksansvarlig_med_arkiv_id_ukjent_lokal_sak_saeder_foer_oensket_update_og_blir_klar()
+{
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+
+    let ensured_sak_id = Uuid::new_v4();
+    let saksnummer = Saksnummer::new("2025/555").unwrap();
+
+    id_mapping_repo.data.lock().unwrap().ensured_sak_id = Some(ensured_sak_id);
+
+    let service = build_service(
+        execution_repo.clone(),
+        entity_repo.clone(),
+        id_mapping_repo,
+        status_publisher,
+    );
+
+    let envelope =
+        make_sett_saksansvarlig_command(SakKey::ArkivId(saksnummer.clone()), "Z99999", "99");
+    service.handle(&envelope).await.unwrap();
+
+    let entity_data = entity_repo.data.lock().unwrap();
+    assert_eq!(
+        entity_data.oppdaterte_saker,
+        vec![(
+            ensured_sak_id,
+            SakTilstand::Opprettet,
+            None,
+            Some(saksnummer.as_str().to_string())
+        )]
+    );
+    assert_eq!(
+        entity_data.oppdaterte_oenskede_saksansvarlige,
+        vec![(ensured_sak_id, "Z99999".to_string(), "99".to_string())]
+    );
+    assert!(matches!(
+        entity_data.entity_events.as_slice(),
+        [
+            FakeEntityEvent::EnsureArkivIdSakSeeded { .. },
+            FakeEntityEvent::OppdaterOensketSaksansvarlig { .. },
+            ..
+        ]
+    ));
+    let seeded_sak = entity_data.sak_med_barn.get(&ensured_sak_id).unwrap();
+    assert_eq!(seeded_sak.saksnummer.as_deref(), Some(saksnummer.as_str()));
+    assert_eq!(
+        seeded_sak.oensket_saksansvarlig.as_ref(),
+        Some(&Saksansvarlig {
+            saksbehandler_id: "Z99999".to_string(),
+            enhet: "99".to_string(),
+        })
+    );
+    drop(entity_data);
+
+    let exec_data = execution_repo.data.lock().unwrap();
+    assert_eq!(
+        exec_data.opprettede_eksekveringer,
+        vec![(envelope.command_id, EksekveringStatus::Klar, None)]
+    );
+}
+
+#[tokio::test]
+async fn arkiv_id_saeding_overskriver_ikke_eksisterende_sak_tilstand() {
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+
+    let ensured_sak_id = Uuid::new_v4();
+    id_mapping_repo.data.lock().unwrap().ensured_sak_id = Some(ensured_sak_id);
+    entity_repo.data.lock().unwrap().sak_med_barn.insert(
+        ensured_sak_id,
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(ensured_sak_id),
+            tilstand: SakTilstand::Avsluttet,
+            sikri_id: Some(100),
+            saksnummer: Some("2020/111".to_string()),
+            oensket_saksansvarlig: Some(Saksansvarlig {
+                saksbehandler_id: "ZOLD".to_string(),
+                enhet: "01".to_string(),
+            }),
+            naavaerende_saksansvarlig: Some(Saksansvarlig {
+                saksbehandler_id: "ZOLD".to_string(),
+                enhet: "01".to_string(),
+            }),
+            journalposter: Vec::new(),
+        },
+    );
+
+    let service = build_service(
+        execution_repo,
+        entity_repo.clone(),
+        id_mapping_repo,
+        status_publisher,
+    );
+
+    let envelope = make_avslutt_sak_command(SakKey::ArkivId(Saksnummer::new("2025/111").unwrap()));
+    service.handle(&envelope).await.unwrap();
+
+    let entity_data = entity_repo.data.lock().unwrap();
+    assert!(entity_data.oppdaterte_saker.is_empty());
+    let existing_sak = entity_data.sak_med_barn.get(&ensured_sak_id).unwrap();
+    assert_eq!(existing_sak.tilstand, SakTilstand::Avsluttet);
+    assert_eq!(existing_sak.saksnummer.as_deref(), Some("2020/111"));
+    assert_eq!(
+        existing_sak.oensket_saksansvarlig.as_ref(),
+        Some(&Saksansvarlig {
+            saksbehandler_id: "ZOLD".to_string(),
+            enhet: "01".to_string(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn journalpost_med_client_reference_uten_lokal_sak_saeder_ikke_arkiv_id_og_forblir_blokkert()
+{
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+
+    let sak_client_reference = Uuid::new_v4();
+    let sak_skuffen_id = Uuid::new_v4();
+    let journalpost_client_reference = Uuid::new_v4();
+    let journalpost_skuffen_id = Uuid::new_v4();
+    id_mapping_repo
+        .data
+        .lock()
+        .unwrap()
+        .skuffen_id_for_client_reference = vec![
+        (sak_client_reference, sak_skuffen_id),
+        (journalpost_client_reference, journalpost_skuffen_id),
+    ];
+
+    let service = build_service(
+        execution_repo.clone(),
+        entity_repo.clone(),
+        id_mapping_repo,
+        status_publisher,
+    );
+
+    let envelope = make_journalpost_command(
+        journalpost_client_reference,
+        SakKey::ClientReference(sak_client_reference),
+    );
+    service.handle(&envelope).await.unwrap();
+
+    let entity_data = entity_repo.data.lock().unwrap();
+    assert!(entity_data.oppdaterte_saker.is_empty());
+    drop(entity_data);
+
+    let exec_data = execution_repo.data.lock().unwrap();
+    assert_eq!(
+        exec_data.opprettede_eksekveringer,
+        vec![(
+            envelope.command_id,
+            EksekveringStatus::BlokkertVenter,
+            Some("blocked_reason=entity_missing trigger_category=entity_fakta_endret".to_string())
+        )]
+    );
 }

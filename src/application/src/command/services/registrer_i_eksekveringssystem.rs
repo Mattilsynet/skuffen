@@ -1,5 +1,5 @@
 use crate::command::services::execution_registration::{
-    command_target_for_type, resolve_registration,
+    command_target_for_type, resolve_registration, SakResolutionOrigin,
 };
 
 use anyhow::Result;
@@ -61,6 +61,11 @@ impl RegistrerIEksekveringssystemService {
         let registration = resolve_registration(self.id_mapping_repo.as_ref(), envelope).await?;
         let command_type = command_metadata(&envelope.payload).0;
 
+        // Seed sak_tilstand for validated ArkivId before any command-specific writes.
+        // This ensures archive-validated cases have local Opprettet state with saksnummer.
+        self.seed_arkiv_id_provenance(envelope.command_id, &registration)
+            .await?;
+
         self.opprett_entity_tilstander(envelope, &registration)
             .await?;
 
@@ -83,6 +88,24 @@ impl RegistrerIEksekveringssystemService {
 
         let resultat = self.execution_repo.opprett(ny).await?;
         Ok((resultat, status))
+    }
+
+    /// Seeding orchestration: ensure sak_tilstand exists for ArkivId-validated cases.
+    /// Idempotent: no overwrite if row already exists.
+    /// Only seeds for SakResolutionOrigin::ArkivId; skips ClientReference and OpprettSak.
+    async fn seed_arkiv_id_provenance(
+        &self,
+        command_id: uuid::Uuid,
+        registration: &super::execution_registration::ResolvedRegistration,
+    ) -> Result<()> {
+        if let Some(sak_reg) = registration.sak.as_ref() {
+            if let SakResolutionOrigin::ArkivId { saksnummer } = &sak_reg.origin {
+                self.entity_tilstand_repo
+                    .ensure_sak_tilstand_for_arkiv_id(sak_reg.sak_id, saksnummer, command_id)
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     async fn opprett_entity_tilstander(

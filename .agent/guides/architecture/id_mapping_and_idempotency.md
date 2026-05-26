@@ -45,6 +45,21 @@ The mapping is maintained in the `id_mapping` table in the Infrastructure layer.
 5.  **Lookup**: Skuffen resolves "uuid-A" to the internal `skuffen_id` to link the journalpost effectively, even if the case isn't in Sikri yet.
 6.  **Async Completion**: When the `OpprettSak` command succeeds against Sikri, Skuffen updates the mapping with the returned `arkiv_id` (e.g., "2026/1").
 
+## ArkivId-First Workflow
+
+When Skuffen receives commands for `Saker` it has not seen locally before, using `ArkivId` as the `SakKey`:
+
+1.  **Validation**: Before any local state is created, Skuffen validates that the `Sak` exists in Sikri/archive and is open. This step only verifies external state; it does not write anything locally.
+
+2.  **Stable Skuffen ID**: After validation passes, Skuffen resolves or creates a stable `skuffen_id` for the `ArkivId`. This ID remains constant for the lifetime of the sak.
+
+3.  **Idempotent Local State Seeding**: Registration materializes local state by seeding `sak_tilstand` as `Opprettet` with the `saksnummer`. This seed operation is idempotent:
+    *   Must not overwrite existing `tilstand`.
+    *   Must not overwrite existing `saksnummer`.
+    *   Must not overwrite existing `opprettet_av_command_id`.
+
+4.  **Provenance**: The `opprettet_av_command_id` field records the local command that first materialized the local fact, not the original command that created the sak in the archive. This distinction preserves the provenance of local materialization separately from archive creation.
+
 ## Idempotency
 
 ### Command Idempotency

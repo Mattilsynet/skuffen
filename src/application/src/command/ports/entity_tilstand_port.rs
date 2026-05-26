@@ -25,6 +25,15 @@ pub trait EntityTilstandRepository: Send + Sync {
         saksnummer: Option<&str>,
     ) -> Result<(), anyhow::Error>;
 
+    /// Ensure sak_tilstand exists as Opprettet + saksnummer for validated ArkivId.
+    /// Idempotent: does not overwrite if row already exists.
+    async fn ensure_sak_tilstand_for_arkiv_id(
+        &self,
+        sak_id: SkuffenSakId,
+        saksnummer: &str,
+        command_id: Uuid,
+    ) -> Result<(), anyhow::Error>;
+
     async fn oppdater_oensket_saksansvarlig(
         &self,
         sak_id: SkuffenSakId,

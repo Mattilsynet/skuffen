@@ -11,9 +11,19 @@ use uuid::Uuid;
 
 use crate::command::ports::id_mapping_port::{IdMappingRepository, MappingEntityType};
 
+/// Provenance origin for a resolved sak registration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SakResolutionOrigin {
+    /// Sak resolved from client reference (caller-created).
+    ClientReference,
+    /// Sak resolved from ArkivId (archive-validated); saksnummer is the archive case number.
+    ArkivId { saksnummer: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedSakRegistration {
     pub sak_id: SkuffenSakId,
+    pub origin: SakResolutionOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +127,7 @@ async fn resolve_opprett_sak_registration(
             command.client_reference,
         )
         .await?,
+        origin: SakResolutionOrigin::ClientReference,
     })
 }
 
@@ -194,6 +205,7 @@ async fn resolve_sak_registration(
         SakKey::ClientReference(client_reference) => Ok(ResolvedSakRegistration {
             sak_id: resolve_skuffen_sak_id_for_client_reference(id_mapping_repo, *client_reference)
                 .await?,
+            origin: SakResolutionOrigin::ClientReference,
         }),
         SakKey::ArkivId(saksnummer) => Ok(ResolvedSakRegistration {
             sak_id: id_mapping_repo
@@ -202,6 +214,9 @@ async fn resolve_sak_registration(
                     saksnummer.as_str(),
                 )
                 .await?,
+            origin: SakResolutionOrigin::ArkivId {
+                saksnummer: saksnummer.to_string(),
+            },
         }),
     }
 }

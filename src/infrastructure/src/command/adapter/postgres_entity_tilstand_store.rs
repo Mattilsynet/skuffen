@@ -163,6 +163,30 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         Ok(())
     }
 
+    async fn ensure_sak_tilstand_for_arkiv_id(
+        &self,
+        sak_id: SkuffenSakId,
+        saksnummer: &str,
+        command_id: Uuid,
+    ) -> Result<(), anyhow::Error> {
+        // command_id er lokal persistence-/audit-proveniens for første materialisering.
+        sqlx::query(
+            r#"
+            INSERT INTO sak_tilstand (sak_id, tilstand, saksnummer, opprettet_av_command_id)
+            VALUES ($1, 'opprettet', $2, $3)
+            ON CONFLICT (sak_id) DO NOTHING
+            "#,
+        )
+        .bind(Uuid::from(sak_id))
+        .bind(saksnummer)
+        .bind(command_id)
+        .execute(&self.pool)
+        .await
+        .context("ensure_sak_tilstand_for_arkiv_id")?;
+
+        Ok(())
+    }
+
     async fn oppdater_oensket_saksansvarlig(
         &self,
         sak_id: SkuffenSakId,
