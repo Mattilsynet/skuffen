@@ -7,6 +7,7 @@ use domain::eksekvering::tilstand::{
 };
 use domain::eksekvering::typer::{EksekveringFeil, EksekveringFeiltype};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+use lib_schemas::skuffen::dokument::Felt;
 use uuid::Uuid;
 
 use super::{extract_dokument_client_references, EksekverKommandoService};
@@ -56,10 +57,10 @@ impl EksekverKommandoService {
             return Ok(());
         }
 
-        let saksnummer = sak
-            .saksnummer
-            .as_deref()
-            .ok_or_else(|| EksekveringFeil::blocked("render_saksnummer_mangler"))?;
+        let saksnummer = sak.saksnummer.as_deref();
+        if felter.contains(&Felt::Saksnummer) && saksnummer.is_none() {
+            return Err(EksekveringFeil::blocked("render_saksnummer_mangler"));
+        }
 
         let html = match self.dokument_lager.get(*mal_referanse).await {
             Ok(Some(media)) => media.data,
@@ -77,13 +78,7 @@ impl EksekverKommandoService {
             }
         };
 
-        let substituert = match substituer_tokens(
-            &html,
-            felter,
-            &FeltVerdier {
-                saksnummer: Some(saksnummer),
-            },
-        ) {
+        let substituert = match substituer_tokens(&html, felter, &FeltVerdier { saksnummer }) {
             Ok(html) => html,
             Err(err) => {
                 let melding = template_feil_melding(&err);
@@ -337,7 +332,6 @@ fn template_feil_melding(err: &HtmlTemplateFeil) -> &'static str {
         HtmlTemplateFeil::ManglerToken => "HTML-mal mangler deklarert token",
         HtmlTemplateFeil::DuplikatToken => "HTML-mal inneholder duplikat token",
         HtmlTemplateFeil::DuplikatFelt => "Deklarerte felter inneholder duplikat",
-        HtmlTemplateFeil::TommeFelter => "Deklarerte felter kan ikke være tomme",
         HtmlTemplateFeil::ManglerSaksnummer => "Saksnummer mangler",
     }
 }
@@ -350,7 +344,6 @@ fn template_feil_kode(err: &HtmlTemplateFeil) -> &'static str {
         HtmlTemplateFeil::ManglerToken => "mangler_token",
         HtmlTemplateFeil::DuplikatToken => "duplikat_token",
         HtmlTemplateFeil::DuplikatFelt => "duplikat_felt",
-        HtmlTemplateFeil::TommeFelter => "tomme_felter",
         HtmlTemplateFeil::ManglerSaksnummer => "mangler_saksnummer",
     }
 }

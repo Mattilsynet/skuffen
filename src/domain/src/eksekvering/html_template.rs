@@ -19,8 +19,6 @@ pub enum HtmlTemplateFeil {
     DuplikatToken,
     #[error("Deklarerte felter inneholder duplikat")]
     DuplikatFelt,
-    #[error("Deklarerte felter kan ikke være tomme")]
-    TommeFelter,
     #[error("Saksnummer mangler")]
     ManglerSaksnummer,
 }
@@ -37,17 +35,12 @@ pub fn er_felter_klare(felter: &[Felt], verdier: &FeltVerdier<'_>) -> bool {
 }
 
 pub fn valider_felter(felter: &[Felt]) -> Result<(), HtmlTemplateFeil> {
-    if felter.is_empty() {
-        return Err(HtmlTemplateFeil::TommeFelter);
-    }
-
     let mut sett = HashSet::with_capacity(felter.len());
     for felt in felter {
         if !sett.insert(*felt) {
             return Err(HtmlTemplateFeil::DuplikatFelt);
         }
     }
-
     Ok(())
 }
 
@@ -56,8 +49,11 @@ pub fn valider_tokens(html: &[u8], felter: &[Felt]) -> Result<(), HtmlTemplateFe
     valider_felter(felter)?;
 
     let deklarerte: HashSet<Felt> = felter.iter().copied().collect();
-    if tokens.len() > deklarerte.len() {
-        return Err(HtmlTemplateFeil::DuplikatToken);
+
+    for token in &tokens {
+        if !deklarerte.contains(token) {
+            return Err(HtmlTemplateFeil::UkjentToken);
+        }
     }
 
     for felt in &deklarerte {
@@ -75,6 +71,11 @@ pub fn substituer_tokens(
     verdier: &FeltVerdier<'_>,
 ) -> Result<Vec<u8>, HtmlTemplateFeil> {
     valider_tokens(html, felter)?;
+
+    if felter.is_empty() {
+        return Ok(html.to_vec());
+    }
+
     if !er_felter_klare(felter, verdier) {
         return Err(HtmlTemplateFeil::ManglerSaksnummer);
     }
@@ -179,5 +180,66 @@ mod tests {
                 saksnummer: Some("2026/1")
             }
         ));
+    }
+
+    #[test]
+    fn static_template_ingen_tokens_ingen_felter_ok() {
+        let html = b"<p>Dette er en statisk mal uten variabler.</p>";
+        let result = substituer_tokens(html, &[], &FeltVerdier { saksnummer: None })
+            .expect("static template should succeed");
+
+        assert_eq!(result, html.as_slice());
+    }
+
+    #[test]
+    fn static_template_validering_ingen_tokens_ingen_felter_ok() {
+        let html = b"<p>Statisk innhold</p>";
+        let result = valider_tokens(html, &[]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn static_template_med_saksnummer_token_og_tomme_felter_feiler() {
+        let html = b"<p>{{saksnummer}}</p>";
+        let err = valider_tokens(html, &[]).unwrap_err();
+        assert_eq!(err, HtmlTemplateFeil::UkjentToken);
+    }
+
+    #[test]
+    fn substituer_tokens_statisk_henter_uforandret() {
+        let html = b"<p>Ingen variabler her</p>";
+        let result = substituer_tokens(html, &[], &FeltVerdier { saksnummer: None })
+            .expect("static substitution should succeed");
+
+        assert_eq!(result, html.as_slice());
+    }
+
+    #[test]
+    fn er_felter_klare_tomme_felter_er_alltid_klare() {
+        assert!(er_felter_klare(&[], &FeltVerdier { saksnummer: None }));
+        assert!(er_felter_klare(
+            &[],
+            &FeltVerdier {
+                saksnummer: Some("2026/1")
+            }
+        ));
+    }
+
+    #[test]
+    fn valider_felter_tomme_felter_ok() {
+        let result = valider_felter(&[]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn valider_felter_duplikat_felt_feiler() {
+        let err = valider_felter(&[Felt::Saksnummer, Felt::Saksnummer]).unwrap_err();
+        assert_eq!(err, HtmlTemplateFeil::DuplikatFelt);
+    }
+
+    #[test]
+    fn duplikate_felter_feiler() {
+        let err = valider_tokens(b"<p>noe</p>", &[Felt::Saksnummer, Felt::Saksnummer]).unwrap_err();
+        assert_eq!(err, HtmlTemplateFeil::DuplikatFelt);
     }
 }

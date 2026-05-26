@@ -887,6 +887,104 @@ async fn html_template_mangler_mal_retryer_uten_opprett_journalpost() {
 }
 
 #[tokio::test]
+async fn html_template_med_saksnummer_felt_blokkerer_uten_saksnummer() {
+    let command_id = Uuid::new_v4();
+    let sak_client_reference = Uuid::new_v4();
+    let sak_id = Uuid::new_v4();
+    let journalpost_client_reference = Uuid::new_v4();
+    let journalpost_id = Uuid::new_v4();
+    let dokument_id = Uuid::new_v4();
+    let mal_referanse = Uuid::new_v4();
+    let envelope = make_internt_notat_command(
+        command_id,
+        journalpost_client_reference,
+        sak_client_reference,
+    );
+
+    let entity_repo = FakeEntityTilstandRepository::default();
+    entity_repo.sak_med_barn.lock().unwrap().insert(
+        sak_id,
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(sak_id),
+            tilstand: SakTilstand::Opprettet,
+            sikri_id: Some(100),
+            saksnummer: None,
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
+            journalposter: vec![JournalpostMedDokumenter {
+                journalpost_id: SkuffenJournalpostId::from(journalpost_id),
+                tilstand: JournalpostTilstand::IkkeRealisert,
+                sikri_id: None,
+                journalpostnummer: None,
+                journalposttype: JournalpostType::InterntNotat,
+                med_utsending: false,
+                dokumenter: vec![DokumentMedTilstand {
+                    dokument_id: SkuffenDokumentId::from(dokument_id),
+                    tilstand: DokumentTilstand::AvventerRendring,
+                    kilde: DokumentKildeTilstand::HtmlTemplate {
+                        mal_referanse,
+                        felter: vec![Felt::Saksnummer],
+                        rendered_dokument_referanse: None,
+                    },
+                }],
+            }],
+        },
+    );
+
+    let arkiv_gateway = FakeArkivGateway::default();
+    let id_mapping = FakeIdMappingRepository::default();
+    id_mapping
+        .sak_mapping
+        .lock()
+        .unwrap()
+        .insert(sak_client_reference, sak_id);
+    id_mapping
+        .journalpost_mapping
+        .lock()
+        .unwrap()
+        .insert(journalpost_client_reference, journalpost_id);
+    let status_publisher = FakeStatusPublisher::default();
+
+    let service = EksekverKommandoService::new(
+        Box::new(entity_repo.clone()),
+        Box::new(arkiv_gateway.clone()),
+        Box::new(PanickingDokumentRenderer),
+        Box::new(FakeDokumentLager::with_file(DokumentFil {
+            id: mal_referanse,
+            data: b"<html>{{saksnummer}}</html>".to_vec(),
+            filename: Some("template.html".to_string()),
+            content_type: Some("text/html".to_string()),
+            metadata: Default::default(),
+        })),
+        Box::new(status_publisher.clone()),
+        Box::new(FakeDonePublisher),
+        Box::new(id_mapping),
+        Box::new(FakeStatusProjector),
+        Box::new(FakeWakeup::default()),
+    );
+
+    let outcome = service.handle(envelope, 1).await.unwrap();
+
+    assert!(matches!(
+        outcome,
+        ExecutionOutcome::BlokkertVenter { last_error: Some(ref detail) }
+            if detail.starts_with("blocked_reason=saksnummer_mangler")
+    ));
+    assert!(arkiv_gateway
+        .opprett_journalpost_calls
+        .lock()
+        .unwrap()
+        .is_empty());
+    assert!(entity_repo.oppdaterte_dokumenter.lock().unwrap().is_empty());
+    let events = status_publisher.events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(events[0]
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.starts_with("blocked_reason=saksnummer_mangler")));
+}
+
+#[tokio::test]
 async fn html_template_rendres_for_opprett_journalpost() {
     let command_id = Uuid::new_v4();
     let sak_client_reference = Uuid::new_v4();
@@ -1376,4 +1474,133 @@ fn make_internt_notat_command(
             },
         }),
     }
+}
+
+#[tokio::test]
+async fn statisk_html_template_rendres_uten_saksnummer_og_utsetter_journalpost() {
+    let command_id = Uuid::new_v4();
+    let sak_client_reference = Uuid::new_v4();
+    let sak_id = Uuid::new_v4();
+    let journalpost_client_reference = Uuid::new_v4();
+    let journalpost_id = Uuid::new_v4();
+    let dokument_id = Uuid::new_v4();
+    let mal_referanse = Uuid::new_v4();
+    let envelope = make_internt_notat_command(
+        command_id,
+        journalpost_client_reference,
+        sak_client_reference,
+    );
+
+    let entity_repo = FakeEntityTilstandRepository::default();
+    entity_repo.sak_med_barn.lock().unwrap().insert(
+        sak_id,
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(sak_id),
+            tilstand: SakTilstand::Opprettet,
+            sikri_id: Some(100),
+            saksnummer: None,
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
+            journalposter: vec![JournalpostMedDokumenter {
+                journalpost_id: SkuffenJournalpostId::from(journalpost_id),
+                tilstand: JournalpostTilstand::IkkeRealisert,
+                sikri_id: None,
+                journalpostnummer: None,
+                journalposttype: JournalpostType::InterntNotat,
+                med_utsending: false,
+                dokumenter: vec![DokumentMedTilstand {
+                    dokument_id: SkuffenDokumentId::from(dokument_id),
+                    tilstand: DokumentTilstand::AvventerRendring,
+                    kilde: DokumentKildeTilstand::HtmlTemplate {
+                        mal_referanse,
+                        felter: vec![],
+                        rendered_dokument_referanse: None,
+                    },
+                }],
+            }],
+        },
+    );
+
+    let arkiv_gateway = FakeArkivGateway::default();
+    let id_mapping = FakeIdMappingRepository::default();
+    id_mapping
+        .sak_mapping
+        .lock()
+        .unwrap()
+        .insert(sak_client_reference, sak_id);
+    id_mapping
+        .journalpost_mapping
+        .lock()
+        .unwrap()
+        .insert(journalpost_client_reference, journalpost_id);
+
+    let dokument_lager = FakeDokumentLager::with_file(DokumentFil {
+        id: mal_referanse,
+        data: b"<html><body>Statisk HTML</body></html>".to_vec(),
+        filename: Some("static_template.html".to_string()),
+        content_type: Some("text/html".to_string()),
+        metadata: Default::default(),
+    });
+
+    let service = EksekverKommandoService::new(
+        Box::new(entity_repo.clone()),
+        Box::new(arkiv_gateway.clone()),
+        Box::new(FakeDokumentRenderer),
+        Box::new(dokument_lager.clone()),
+        Box::new(FakeStatusPublisher::default()),
+        Box::new(FakeDonePublisher),
+        Box::new(id_mapping),
+        Box::new(FakeStatusProjector),
+        Box::new(FakeWakeup::default()),
+    );
+
+    let outcome = service.handle(envelope, 1).await.unwrap();
+
+    assert_eq!(outcome, ExecutionOutcome::Klar);
+    assert!(
+        arkiv_gateway
+            .opprett_journalpost_calls
+            .lock()
+            .unwrap()
+            .is_empty(),
+        "journalpost must not be created in render-only attempt"
+    );
+    let sak = entity_repo
+        .sak_med_barn
+        .lock()
+        .unwrap()
+        .get(&sak_id)
+        .cloned()
+        .unwrap();
+    let dokument = &sak.journalposter[0].dokumenter[0];
+    assert_eq!(dokument.tilstand, DokumentTilstand::Ok);
+    let rendered_id = match &dokument.kilde {
+        DokumentKildeTilstand::HtmlTemplate {
+            rendered_dokument_referanse: Some(rendered_id),
+            ..
+        } => *rendered_id,
+        _ => panic!("rendered dokument reference must be stored"),
+    };
+    let files = dokument_lager.files.lock().unwrap();
+    let rendered_file = files
+        .get(&rendered_id)
+        .expect("rendered document must be saved in lager");
+    assert_eq!(
+        rendered_file.content_type.as_deref(),
+        Some("application/pdf")
+    );
+    assert_eq!(
+        rendered_file.filename.as_deref(),
+        Some(&*format!("{rendered_id}.pdf"))
+    );
+    assert_eq!(
+        rendered_file.metadata.origin.as_deref(),
+        Some("skuffen_html_template_renderer")
+    );
+    assert_eq!(
+        rendered_file.metadata.source_template_reference,
+        Some(mal_referanse)
+    );
+    assert_eq!(rendered_file.metadata.source_document_id, Some(dokument_id));
+    assert_eq!(rendered_file.metadata.source_command_id, Some(command_id));
 }

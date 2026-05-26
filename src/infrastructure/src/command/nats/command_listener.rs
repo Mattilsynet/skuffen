@@ -225,10 +225,6 @@ impl CommandListener {
 }
 
 fn validate_html_template_felter(felter: &[Felt]) -> Result<(), String> {
-    if felter.is_empty() {
-        return Err("HtmlTemplate må deklarere minst ett felt".to_string());
-    }
-
     let mut sett = HashSet::with_capacity(felter.len());
     for felt in felter {
         if !sett.insert(*felt) {
@@ -237,4 +233,27 @@ fn validate_html_template_felter(felter: &[Felt]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_html_template_felter_tillater_tomme_felter() {
+        assert!(validate_html_template_felter(&[]).is_ok());
+    }
+
+    #[test]
+    fn validate_html_template_felter_tillater_unike_felter() {
+        assert!(validate_html_template_felter(&[Felt::Saksnummer]).is_ok());
+    }
+
+    #[test]
+    fn validate_html_template_felter_avviser_duplikate_felter() {
+        let err = validate_html_template_felter(&[Felt::Saksnummer, Felt::Saksnummer])
+            .expect_err("duplicate felter should be rejected");
+
+        assert_eq!(err, "HtmlTemplate har duplikate felter");
+    }
 }

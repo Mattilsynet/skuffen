@@ -353,8 +353,9 @@ fn planlegg_journalpost_command(
         return CommandStateDecision::Invalid(DomainViolation::JournalpostTypeMismatch);
     }
 
-    // Guard: missing saksnummer -> Blocked (only after target exists and type matches)
-    if sak.saksnummer.is_none() {
+    // Missing saksnummer normally blocks journalpost operations, but static HTML
+    // hoveddokument rendering has no substitution prerequisites and can run first.
+    if sak.saksnummer.is_none() && !kan_planlegge_rendring_uten_saksnummer(jp) {
         return CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler);
     }
 
@@ -395,6 +396,10 @@ fn planlegg_journalpost_lifecycle(
                     return CommandStateDecision::Blocked(BlockedReason::FelterIkkeKlare);
                 }
             }
+        }
+
+        if sak.saksnummer.is_none() {
+            return CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler);
         }
 
         return CommandStateDecision::Ready(ArkivOperasjon::OpprettJournalpost {
@@ -599,6 +604,21 @@ fn er_terminal_journalpost(jp: &JournalpostMedDokumenter) -> bool {
         }
         JournalpostType::InterntNotat => jp.tilstand == JournalpostTilstand::Journalfoert,
     }
+}
+
+fn kan_planlegge_rendring_uten_saksnummer(jp: &JournalpostMedDokumenter) -> bool {
+    if !matches!(
+        jp.tilstand,
+        JournalpostTilstand::IkkeRealisert
+            | JournalpostTilstand::Opprettet
+            | JournalpostTilstand::DokumenterUnderArbeid
+    ) {
+        return false;
+    }
+
+    jp.dokumenter.first().is_some_and(|dok| {
+        dok.tilstand == DokumentTilstand::AvventerRendring && dokument_kan_rendres(dok, None)
+    })
 }
 
 fn dokument_kan_rendres(dok: &DokumentMedTilstand, saksnummer: Option<&str>) -> bool {
@@ -1395,6 +1415,84 @@ mod tests {
             CommandTarget::Journalpost(jp_id_1),
             &sak,
         );
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler)
+        ));
+    }
+
+    #[test]
+    fn statisk_html_template_uten_felter_rendres_uten_saksnummer() {
+        let jp_id_1 = jp_id();
+        let jp = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::IkkeRealisert,
+            JournalpostType::Utgaaende,
+            false,
+            vec![template_dok(DokumentTilstand::AvventerRendring, vec![])],
+        );
+        let mut sak = opprettet_sak_med_saksnummer(vec![jp]);
+        sak.saksnummer = None;
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettUtgaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Ready(ArkivOperasjon::RenderDokument { .. })
+        ));
+    }
+
+    #[test]
+    fn html_template_med_saksnummer_felt_blockerer_uten_saksnummer() {
+        let jp_id_1 = jp_id();
+        let jp = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::IkkeRealisert,
+            JournalpostType::Utgaaende,
+            false,
+            vec![template_dok(
+                DokumentTilstand::AvventerRendring,
+                vec![Felt::Saksnummer],
+            )],
+        );
+        let mut sak = opprettet_sak_med_saksnummer(vec![jp]);
+        sak.saksnummer = None;
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettUtgaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+
+        assert!(matches!(
+            decision,
+            CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler)
+        ));
+    }
+
+    #[test]
+    fn statisk_html_template_ok_blockerer_opprett_journalpost_uten_saksnummer() {
+        let jp_id_1 = jp_id();
+        let jp = lag_journalpost(
+            jp_id_1,
+            JournalpostTilstand::IkkeRealisert,
+            JournalpostType::Utgaaende,
+            false,
+            vec![template_dok(DokumentTilstand::Ok, vec![])],
+        );
+        let mut sak = opprettet_sak_med_saksnummer(vec![jp]);
+        sak.saksnummer = None;
+
+        let decision = planlegg_neste_handling(
+            CommandTypeCode::OpprettUtgaaendeJournalpost,
+            CommandTarget::Journalpost(jp_id_1),
+            &sak,
+        );
+
         assert!(matches!(
             decision,
             CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler)

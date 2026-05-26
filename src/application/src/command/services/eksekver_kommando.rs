@@ -95,8 +95,14 @@ impl EksekverKommandoService {
                         let oppdatert_sak_med_barn = self.hent_sak_med_barn(sak_id).await?;
                         let neste_beslutning =
                             planlegg_neste_handling(command_type, target, &oppdatert_sak_med_barn);
-                        self.materialiser_beslutning(&envelope, attempt, neste_beslutning)
-                            .await
+                        match neste_beslutning {
+                            CommandStateDecision::Done => {
+                                self.publish_success(&envelope, attempt).await
+                            }
+                            CommandStateDecision::Ready(_)
+                            | CommandStateDecision::Blocked(_)
+                            | CommandStateDecision::Invalid(_) => Ok(ExecutionOutcome::Klar),
+                        }
                     }
                     Err(feil) => {
                         let _ = self.wakeup_after_operation(sak_id, operasjon).await;
@@ -313,7 +319,8 @@ fn safe_execution_detail(detail: &str) -> String {
 }
 
 fn safe_internal_execution_detail(detail: &str) -> Option<String> {
-    const PREFIXES: [&str; 17] = [
+    const PREFIXES: [&str; 18] = [
+        "blocked_reason=",
         "html2pdf_auth_failed",
         "html2pdf_client_error",
         "html2pdf_server_error",
