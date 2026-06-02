@@ -10,7 +10,7 @@ Execution skal kunne forklares slik:
 
 1. En validert kommando registreres i execution-systemet.
 2. `RegistrerIEksekveringssystemService` oppretter entity tilstand-rader for sak, journalpost og dokument og materialiserer `CommandStateDecision` via `planlegg_neste_handling()`.
-3. Ved registrering og wake-up materialiseres domenebeslutningen til `command_execution.status`: `Ready -> klar`, `Blocked -> blokkert_venter`, `Done -> ok`, `Invalid -> feil`.
+3. Ved registrering materialiseres `Ready`, `Done` og `Invalid` som `klar`, mens `Blocked` blir `blokkert_venter`; executor eier terminal `ok`/`feil`.
 4. Én executor plukker neste kjørbare kommando og utfører maksimalt én `ArkivOperasjon` per attempt.
 5. Etter operasjonsutfallet oppdateres entity facts, kommandoen re-evalueres, og neste status materialiseres.
 6. Recoverable tekniske feil ender i `retry_venter`; kommandoen ender ellers i `ok`, `blokkert_venter` eller `feil`.
@@ -21,14 +21,14 @@ Det er ingen skjult workflow engine. Entity tilstand beskriver fakta per domenee
 
 1. Lytt på `arkiv.command.ready.<entity>.<commandId>` (JetStream, retention 180 dager).
 2. Registrer kommandoen i `command_execution` og seed entity tilstand-rader i samme use case via `RegistrerIEksekveringssystemService`.
-3. Bruk `planlegg_neste_handling(command_type, target, facts)` for å materialisere kommandoen som:
+3. Bruk `planlegg_neste_handling(&domain_command, facts)` for å materialisere initial køstatus:
    - `klar` for `Ready(_)`
    - `blokkert_venter` for `Blocked(_)`
-   - `ok` for `Done`
-   - `feil` for `Invalid(_)`
+   - `klar` for `Done`
+   - `klar` for `Invalid(_)`
 4. Executor starter, tar singleton-lock og resetter eventuelle hengende `kjorer`-rader tilbake til `klar`.
 5. Executor plukker neste kjørbare kommando fra DB.
-6. Executor kaller `planlegg_neste_handling(command_type, target, facts) -> CommandStateDecision` fra ferske facts:
+6. Executor kaller `planlegg_neste_handling(&domain_command, facts) -> CommandStateDecision` fra ferske facts:
    - `Ready(ArkivOperasjon)` → executor utfører **én** operasjon mot Sikri, oppdaterer entity facts, re-evaluerer og materialiserer ny beslutning
    - `Blocked(reason)` → status settes til `blokkert_venter` med safe reason-kategori
    - `Done` → status settes til `ok`
@@ -63,7 +63,7 @@ Kjernekrav:
 
 ## Eksekveringsplan (planlegg_neste_handling decision function)
 
-Kommandoer drives av den rene domenefunksjonen `planlegg_neste_handling(command_type, target, facts) -> CommandStateDecision`. Den inspiserer entity tilstand (facts) og returnerer `Ready(ArkivOperasjon)`, `Done`, `Blocked` eller `Invalid`. Ved registrering og wake-up materialiserer application beslutningen til `command_execution.status`. Executor utfører maksimalt én `ArkivOperasjon` per attempt, deretter re-evalueres kommandoen.
+Kommandoer drives av den rene domenefunksjonen `planlegg_neste_handling(&domain_command, facts) -> CommandStateDecision`. Den inspiserer entity tilstand (facts) og returnerer `Ready(ArkivOperasjon)`, `Done`, `Blocked` eller `Invalid`. Registrering bruker beslutningen bare til initial køstatus; executor eier terminal `ok`/`feil`. Executor utfører maksimalt én `ArkivOperasjon` per attempt, deretter re-evalueres kommandoen.
 
 ### Opprett sak
 Steg:
@@ -163,11 +163,11 @@ Entity tilstand er persisterte tilstandsmaskiner per domeneentitet, keyed av sta
 
 Audit trail for alle tilstandsoverganger på tvers av entitetstyper.
 
-## Entity state og target
+## Entity state og command target
 
 - Entity state (sak_tilstand, journalpost_tilstand, dokument_tilstand) lagrer kun fakta om domeneentiteter.
 - Det finnes ingen `oensket_tilstand` i entity tilstand. `oensket_saksansvarlig` er et eksplisitt requested fact-unntak for saksansvarlig, ikke en scheduler-kolonne.
-- For journalpost-kommandoer er `command_execution.journalpost_id` targeten som brukes i `planlegg_neste_handling`.
+- For journalpost-kommandoer uttrykkes target av `domain::command::Command`-varianten og dens `SkuffenJournalpostId`.
 - Phase 2 kjøres som greenfield/clean migration state: det finnes ingen reelle klienter eller live produksjonsdata, så lokale databaser kan droppes/reopprettes og base-migrasjonen kan endres direkte. Det kreves derfor ingen forward-only kompatibilitetsmigrasjon for fjerning av gamle `oensket_tilstand`-kolonner.
 
 ## Rekkefølge og blokkering
@@ -223,7 +223,7 @@ Hvis krav ikke er oppfylt, blir kommandoen enten:
 ## Feilsemantikk
 
 - Hvis ett steg i en kommando feiler irrecoverably, feiler **hele kommandoen**.
-- En kommando kan også bli terminal `feil` allerede ved registrering hvis `planlegg_neste_handling()` returnerer `Invalid`.
+- En nyregistrert kommando blir ikke terminal `feil` i registration; `Invalid` settes `klar` slik at executor publiserer terminal feil med attempt-kontekst.
 - `blokkert_venter` brukes bare når kommandoen faktisk kan komme videre av senere tilstandsendringer i Skuffen.
 - `retry_venter` brukes bare for tekniske feil som kan forsøkes igjen senere.
 - Et dokument med `feilet_permanent` tilstand gir `EksekveringFeil::irrecoverable(...)` — kommandoen avsluttes med terminal `feil`, ikke `blokkert_venter`. Et permanent-feilet dokument kan aldri hentes og skal ikke blokkere for alltid.
@@ -232,7 +232,7 @@ Hvis krav ikke er oppfylt, blir kommandoen enten:
 
 `blokkert_venter` er ikke timer-basert. Når relevant entity tilstand endres, reevaluerer `ReevaluerVentendeKommandoerService` ventende kommandoer for samme sak eller journalpost.
 
-Samme `planlegg_neste_handling()` og mapping brukes ved registrering og wake-up.
+Samme `planlegg_neste_handling()` brukes ved registrering, execution og wake-up, men lifecycle-eierskap er ulikt: registration terminaliserer ikke, executor eier terminal success/error, og wake-up kan terminalisere tidligere `blokkert_venter` som blir `Invalid`.
 
 Wake-up kan flytte en kommando fra `blokkert_venter` til `klar` eller terminal `feil`. I dagens repository-seam flyttes også `Done` til `klar`: executor eier terminal success-status og `arkiv.command.done`-publisering, så wake-up stille-finaliserer ikke en tidligere blokkert kommando.
 Ved `blokkert_venter -> feil` publiseres outward error-status, og `done` publiseres bare hvis `utfores::venter` tidligere faktisk ble publisert for kommandoen.
@@ -265,7 +265,7 @@ Eksempel:
 
 ## Stabile domenefeilkoder
 
-`planlegg_neste_handling` emits stable codes via `as_code()` and `as_detail()` on `BlockedReason` and `DomainViolation`. These appear in `last_detail` and structured logs and are safe for dashboards.
+`planlegg_neste_handling` emits stable codes via `as_code()` and `safe_detail()` on `BlockedReason` and `DomainViolation`. These appear in `last_detail` and structured logs and are safe for dashboards.
 
 Key codes and their semantics:
 

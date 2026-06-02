@@ -1,8 +1,8 @@
 use anyhow::Result;
+use domain::command::Command as DomainCommand;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
-use domain::eksekvering::tilstand::CommandTarget;
 use domain::eksekvering::typer::CommandTypeCode;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+use lib_schemas::skuffen::command::commands::{Command as WireCommand, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::JournalpostCommon;
 use lib_schemas::skuffen::command::sak::{AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::dokument::Dokument;
@@ -69,49 +69,69 @@ impl ResolvedRegistration {
     }
 }
 
-pub(crate) fn command_target_for_type(
+pub(crate) fn domain_command_for_type(
     command_type: CommandTypeCode,
+    sak_id: SkuffenSakId,
     journalpost_id: Option<SkuffenJournalpostId>,
-) -> Result<CommandTarget> {
+) -> Result<DomainCommand> {
     match command_type {
-        CommandTypeCode::OpprettSak
-        | CommandTypeCode::AvsluttSak
-        | CommandTypeCode::SettSaksansvarlig => Ok(CommandTarget::Sak),
-        CommandTypeCode::OpprettInngaaendeJournalpost
-        | CommandTypeCode::OpprettUtgaaendeJournalpost
-        | CommandTypeCode::OpprettInterntNotatJournalpost => journalpost_id
-            .map(CommandTarget::Journalpost)
-            .ok_or_else(|| anyhow::anyhow!("Mangler journalpost_id for journalpost-kommando")),
+        CommandTypeCode::OpprettSak => Ok(DomainCommand::OpprettSak { sak_id }),
+        CommandTypeCode::AvsluttSak => Ok(DomainCommand::AvsluttSak { sak_id }),
+        CommandTypeCode::SettSaksansvarlig => Ok(DomainCommand::SettSaksansvarlig { sak_id }),
+        CommandTypeCode::OpprettInngaaendeJournalpost => {
+            Ok(DomainCommand::OpprettInngaaendeJournalpost {
+                sak_id,
+                journalpost_id: journalpost_id.ok_or_else(|| {
+                    anyhow::anyhow!("Mangler journalpost_id for journalpost-kommando")
+                })?,
+            })
+        }
+        CommandTypeCode::OpprettUtgaaendeJournalpost => {
+            Ok(DomainCommand::OpprettUtgaaendeJournalpost {
+                sak_id,
+                journalpost_id: journalpost_id.ok_or_else(|| {
+                    anyhow::anyhow!("Mangler journalpost_id for journalpost-kommando")
+                })?,
+            })
+        }
+        CommandTypeCode::OpprettInterntNotatJournalpost => {
+            Ok(DomainCommand::OpprettInterntNotatJournalpost {
+                sak_id,
+                journalpost_id: journalpost_id.ok_or_else(|| {
+                    anyhow::anyhow!("Mangler journalpost_id for journalpost-kommando")
+                })?,
+            })
+        }
     }
 }
 
 pub(crate) async fn resolve_registration(
     id_mapping_repo: &dyn IdMappingRepository,
-    envelope: &CommandEnvelope<Command>,
+    envelope: &CommandEnvelope<WireCommand>,
 ) -> Result<ResolvedRegistration> {
     match &envelope.payload {
-        Command::OpprettSak(cmd) => Ok(ResolvedRegistration::new(
+        WireCommand::OpprettSak(cmd) => Ok(ResolvedRegistration::new(
             Some(resolve_opprett_sak_registration(id_mapping_repo, cmd).await?),
             None,
             Vec::new(),
         )),
-        Command::AvsluttSak(cmd) => Ok(ResolvedRegistration::new(
+        WireCommand::AvsluttSak(cmd) => Ok(ResolvedRegistration::new(
             Some(resolve_avslutt_sak_registration(id_mapping_repo, cmd).await?),
             None,
             Vec::new(),
         )),
-        Command::SettSaksansvarlig(cmd) => Ok(ResolvedRegistration::new(
+        WireCommand::SettSaksansvarlig(cmd) => Ok(ResolvedRegistration::new(
             Some(resolve_sett_saksansvarlig_registration(id_mapping_repo, cmd).await?),
             None,
             Vec::new(),
         )),
-        Command::OpprettInngåendeJournalpost(cmd) => {
+        WireCommand::OpprettInngåendeJournalpost(cmd) => {
             resolve_journalpost_registration(id_mapping_repo, &cmd.felles).await
         }
-        Command::OpprettUtgåendeJournalpost(cmd) => {
+        WireCommand::OpprettUtgåendeJournalpost(cmd) => {
             resolve_journalpost_registration(id_mapping_repo, &cmd.felles).await
         }
-        Command::OpprettInterntNotatJournalpost(cmd) => {
+        WireCommand::OpprettInterntNotatJournalpost(cmd) => {
             resolve_journalpost_registration(id_mapping_repo, &cmd.felles).await
         }
     }

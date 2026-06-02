@@ -776,10 +776,10 @@ fn error_category_for_detail(detail: &str) -> &'static str {
         "journalpost_mangler"
     } else if detail.starts_with("invalid_reason=dokument_feilet_permanent") {
         "dokument_feilet_permanent"
-    } else if detail.starts_with("invalid_reason=target_mismatch") {
-        "target_mismatch"
     } else if detail.starts_with("invalid_reason=journalpost_feilet_permanent") {
         "journalpost_feilet_permanent"
+    } else if detail.starts_with("invalid_reason=sak_feilet_permanent") {
+        "sak_feilet_permanent"
     } else if detail.starts_with("invalid_reason=journalpost_type_mismatch") {
         "journalpost_type_mismatch"
     } else if detail.starts_with("blocked_reason=entity_missing") {
@@ -792,6 +792,8 @@ fn error_category_for_detail(detail: &str) -> &'static str {
         "journalposter_ikke_ferdige"
     } else if detail.starts_with("blocked_reason=felter_ikke_klare") {
         "felter_ikke_klare"
+    } else if detail.starts_with("blocked_reason=journalpost_tilstand_uavklart") {
+        "journalpost_tilstand_uavklart"
     } else if detail.starts_with("blocked_reason=permanent_feil") {
         "permanent_feil"
     } else if detail.starts_with("html2pdf_auth_failed") {
@@ -832,6 +834,30 @@ fn error_category_for_detail(detail: &str) -> &'static str {
         "invalid_command"
     } else {
         "execution_error"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_category_for_detail;
+    use domain::eksekvering::tilstand::{DomainViolation, DomainViolation::*};
+
+    #[test]
+    fn klassifiserer_alle_domain_violation_details() {
+        let cases: &[(DomainViolation, &str)] = &[
+            (JournalpostMangler, "journalpost_mangler"),
+            (DokumentFeiletPermanent, "dokument_feilet_permanent"),
+            (JournalpostFeiletPermanent, "journalpost_feilet_permanent"),
+            (SakFeiletPermanent, "sak_feilet_permanent"),
+            (JournalpostTypeMismatch, "journalpost_type_mismatch"),
+        ];
+
+        for (violation, expected) in cases {
+            assert_eq!(
+                error_category_for_detail(violation.safe_detail()),
+                *expected
+            );
+        }
     }
 }
 

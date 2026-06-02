@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
-use domain::eksekvering::tilstand::{
-    planlegg_neste_handling, BlockedReason, CommandStateDecision, DomainViolation,
-};
+use domain::eksekvering::tilstand::{planlegg_neste_handling, CommandStateDecision};
 use domain::eksekvering::typer::{command_metadata, done_subject};
 use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
 
@@ -16,8 +14,9 @@ use crate::command::ports::entity_tilstand_port::EntityTilstandRepository;
 use crate::command::ports::id_mapping_port::IdMappingRepository;
 use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
 use crate::command::ports::ventende_kommando_wakeup_port::VentendeKommandoWakeup;
+use crate::command::services::command_state_decision::{blocked_detail, invalid_detail};
 use crate::command::services::execution_registration::{
-    command_target_for_type, resolve_registration,
+    domain_command_for_type, resolve_registration,
 };
 use crate::command::status::utfores_error_event;
 
@@ -125,19 +124,20 @@ impl ReevaluerVentendeKommandoerService {
             return Ok(());
         };
 
-        let target = match command_target_for_type(command_type, registration.journalpost_id()) {
-            Ok(target) => target,
-            Err(feil) => {
-                let detalj = feil.to_string();
-                self.execution_repo
-                    .oppdater_til_feil(kommando.command_id, &detalj)
-                    .await?;
-                self.publiser_terminal_feil(&kommando, &detalj).await?;
-                return Ok(());
-            }
-        };
+        let domain_command =
+            match domain_command_for_type(command_type, sak_id, registration.journalpost_id()) {
+                Ok(command) => command,
+                Err(feil) => {
+                    let detalj = feil.to_string();
+                    self.execution_repo
+                        .oppdater_til_feil(kommando.command_id, &detalj)
+                        .await?;
+                    self.publiser_terminal_feil(&kommando, &detalj).await?;
+                    return Ok(());
+                }
+            };
 
-        match planlegg_neste_handling(command_type, target, &sak_med_barn) {
+        match planlegg_neste_handling(&domain_command, &sak_med_barn) {
             CommandStateDecision::Ready(_) | CommandStateDecision::Done => {
                 // INVARIANT: Done flyttes også til Klar. Executor eier terminal
                 // success/done-publisering, så wake-up skal ikke stille-finalisere
@@ -153,6 +153,8 @@ impl ReevaluerVentendeKommandoerService {
                     .await?;
             }
             CommandStateDecision::Invalid(violation) => {
+                // Registration queues Invalid for executor-owned terminalization, but wake-up
+                // already operates on a blocked command that became impossible from fresh facts.
                 let detalj = invalid_detail(violation);
                 self.execution_repo
                     .oppdater_til_feil(kommando.command_id, &detalj)
@@ -189,18 +191,6 @@ impl ReevaluerVentendeKommandoerService {
         }
         Ok(())
     }
-}
-
-fn blocked_detail(reason: BlockedReason) -> String {
-    format!(
-        "{} trigger_category={}",
-        reason.safe_detail(),
-        reason.trigger_category().as_code()
-    )
-}
-
-fn invalid_detail(violation: DomainViolation) -> String {
-    violation.safe_detail().to_string()
 }
 
 #[async_trait::async_trait]

@@ -14,7 +14,7 @@ Dette dokumentet beskriver den implementerte modellen for execution v2.
 
 1. `command_execution` eier workflow/progresjon for en kommando.
 2. `sak_tilstand`, `journalpost_tilstand` og `dokument_tilstand` eier entity tilstand som persisterte tilstandsmaskiner.
-3. `RegistrerIEksekveringssystemService` oppretter entity tilstand-rader og evaluerer klarhet via `evaluer_klarhet()` — eneste sted som vurderer om en kommando er `klar`, `blokkert_venter` eller terminal `feil` før execution.
+3. `RegistrerIEksekveringssystemService` oppretter entity tilstand-rader og bruker `CommandStateDecision` til initial køstatus; executor eier terminal `ok`/`feil`.
 4. Step handlers eier idempotency/skip og step-lokal sikkerhet, men ikke separat prerequisite-policy.
 5. `retry_venter` er kun for recoverable tekniske feil.
 6. `blokkert_venter` er kun for prerequisites som kan bli oppfylt av videre fremdrift i Skuffen.
@@ -55,12 +55,12 @@ Blokkering i `blokkert_venter` er implisitt — `planlegg_neste_handling` return
 
 ## Guard vs readiness evaluator
 
-### `evaluer_klarhet()` i `RegistrerIEksekveringssystemService`
-Eier prerequisite-vurdering for om kommandoen er:
+### `planlegg_neste_handling()` og lifecycle-eierskap
+Domain eier prerequisite-vurdering for om kommandoen er:
 
 - `klar`
 - `blokkert_venter`
-- `feil`
+- `Invalid`
 
 Brukes ved:
 
@@ -76,7 +76,7 @@ Eier kun:
 
 Step handlers skal ikke innføre en konkurrerende generell prerequisite-policy ved siden av vurdereren.
 
-`evaluer_klarhet()` avgjør også om en observerbar prerequisite-mangel er `blokkert_venter` eller terminal `feil` ut fra lokale facts og domeneregler. Step handlers kan fortsatt produsere irrecoverable feil når et faktisk step-kall eller en step-lokal invariant bryter sammen under execution.
+Registration materialiserer bare initial køstatus: `Ready`, `Done` og `Invalid` blir `klar`, mens `Blocked` blir `blokkert_venter`. Executor materialiserer terminal `ok`/`feil`. Step handlers kan fortsatt produsere irrecoverable feil når et faktisk step-kall eller en step-lokal invariant bryter sammen under execution.
 
 ## Entity tilstand og partial progress
 
@@ -92,7 +92,7 @@ Dette er bevisst: facts og workflow-resultat er to forskjellige ting.
 
 - Registrering er idempotent per `command_id`.
 - Hvis `command_execution` allerede finnes, men `utfores_venter_publisert_at` mangler, kan registrering publisere `utfores::venter` på nytt uten å materialisere ny entity tilstand.
-- Registrering kan også ende direkte i terminal `feil` hvis `evaluer_klarhet()` ser at prerequisites ikke kan bli oppfylt.
+- Registrering skriver ikke terminal `ok` eller `feil`; `Invalid` ved registrering settes `klar` slik at executor eier terminalpublisering.
 
 ## Wake-up contract
 
@@ -111,7 +111,7 @@ Triggere i application flow:
 - etter `anvend_journalpost_avskrevet` når dette kan påvirke `AvsluttSak`
 - etter dokumentoverganger som påvirker journalpost-kompletthet
 
-Wake-up skal bruke samme `evaluer_klarhet()` som registrering.
+Wake-up skal bruke samme `planlegg_neste_handling()` som registration og executor.
 
 Hvis wake-up reevaluerer en ventende kommando til terminal `feil`, skal Skuffen også publisere terminal outward status. `done` publiseres bare hvis kommandoen allerede har observert outward `utfores::venter`.
 

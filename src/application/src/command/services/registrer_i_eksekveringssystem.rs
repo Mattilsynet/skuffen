@@ -1,5 +1,6 @@
+use crate::command::services::command_state_decision::registration_initial_status;
 use crate::command::services::execution_registration::{
-    command_target_for_type, resolve_registration, SakResolutionOrigin,
+    domain_command_for_type, resolve_registration, SakResolutionOrigin,
 };
 
 use anyhow::Result;
@@ -8,7 +9,7 @@ use domain::eksekvering::execution::EksekveringStatus;
 use domain::eksekvering::id::SkuffenSakId;
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
-    planlegg_neste_handling, BlockedReason, CommandStateDecision, DokumentTilstand, DomainViolation,
+    planlegg_neste_handling, BlockedReason, CommandStateDecision, DokumentTilstand,
 };
 use domain::eksekvering::typer::{command_metadata, CommandLifecycleEvent, CommandTypeCode};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
@@ -22,11 +23,11 @@ use crate::command::ports::entity_tilstand_port::EntityTilstandRepository;
 use crate::command::ports::id_mapping_port::IdMappingRepository;
 use crate::command::ports::registrer_i_eksekveringssystem_port::RegistrerIEksekveringssystemUseCase;
 use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
-use crate::command::status::{utfores_error_event, utfores_venter_event};
+use crate::command::status::utfores_venter_event;
 
 /// Tynn registrering inn i eksekveringssystemet for kommandoer som allerede er validert.
 ///
-/// Oppretter entity-tilstandsrader, evaluerer klarhet via `planlegg_neste_handling` / `CommandStateDecision`,
+/// Oppretter entity-tilstandsrader, setter initial køstatus via `planlegg_neste_handling` / `CommandStateDecision`,
 /// registrerer kommandoen i `command_execution`, og publiserer `utfores::venter`
 /// når registreringen faktisk ble opprettet.
 pub struct RegistrerIEksekveringssystemService {
@@ -70,7 +71,7 @@ impl RegistrerIEksekveringssystemService {
             .await?;
 
         let (status, last_detail) = self
-            .evaluer_klarhet(
+            .sett_initiell_eksekveringstatus(
                 registration.sak_id(),
                 registration.journalpost_id(),
                 command_type,
@@ -217,7 +218,7 @@ impl RegistrerIEksekveringssystemService {
         Ok(())
     }
 
-    async fn evaluer_klarhet(
+    async fn sett_initiell_eksekveringstatus(
         &self,
         sak_id: Option<SkuffenSakId>,
         journalpost_id: Option<domain::eksekvering::id::SkuffenJournalpostId>,
@@ -233,44 +234,22 @@ impl RegistrerIEksekveringssystemService {
         }
 
         let Some(sak_med_barn) = self.entity_tilstand_repo.hent_sak_med_barn(sak_id).await? else {
-            return Ok((
-                EksekveringStatus::BlokkertVenter,
-                Some(blocked_detail(BlockedReason::EntityMissing)),
-            ));
+            return Ok(registration_initial_status(CommandStateDecision::Blocked(
+                BlockedReason::EntityMissing,
+            )));
         };
 
-        let target = command_target_for_type(command_type, journalpost_id)?;
+        let domain_command = domain_command_for_type(command_type, sak_id, journalpost_id)?;
 
-        Ok(
-            match planlegg_neste_handling(command_type, target, &sak_med_barn) {
-                CommandStateDecision::Ready(_) => (EksekveringStatus::Klar, None),
-                CommandStateDecision::Blocked(reason) => (
-                    EksekveringStatus::BlokkertVenter,
-                    Some(blocked_detail(reason)),
-                ),
-                CommandStateDecision::Done => (EksekveringStatus::Ok, None),
-                CommandStateDecision::Invalid(violation) => {
-                    (EksekveringStatus::Feil, Some(invalid_detail(violation)))
-                }
-            },
-        )
+        Ok(registration_initial_status(planlegg_neste_handling(
+            &domain_command,
+            &sak_med_barn,
+        )))
     }
 
     async fn emit_status(&self, event: CommandLifecycleEvent) -> Result<()> {
         self.status_publisher.publiser_status(event).await
     }
-}
-
-fn blocked_detail(reason: BlockedReason) -> String {
-    format!(
-        "{} trigger_category={}",
-        reason.safe_detail(),
-        reason.trigger_category().as_code()
-    )
-}
-
-fn invalid_detail(violation: DomainViolation) -> String {
-    violation.safe_detail().to_string()
 }
 
 fn dokumenter_for_envelope(
@@ -297,19 +276,7 @@ impl RegistrerIEksekveringssystemUseCase for RegistrerIEksekveringssystemService
             .await?;
 
         match status {
-            EksekveringStatus::Feil => {
-                if matches!(registrering, EksekveringsregistreringResultat::Nyregistrert) {
-                    self.emit_status(utfores_error_event(
-                        envelope,
-                        "Tilstandsfeil ved registrering",
-                        None,
-                        context,
-                        Some(1),
-                    ))
-                    .await?;
-                }
-            }
-            EksekveringStatus::Klar | EksekveringStatus::BlokkertVenter | EksekveringStatus::Ok
+            EksekveringStatus::Klar | EksekveringStatus::BlokkertVenter
                 if registrering.skal_publisere_utfores_venter() =>
             {
                 self.emit_status(utfores_venter_event(envelope, context, Some(1)))

@@ -1110,7 +1110,7 @@ async fn markerer_ikke_utfores_venter_naar_publisering_feiler() {
 }
 
 #[tokio::test]
-async fn registrerer_feil_ved_tilstandsfeil() {
+async fn registrerer_invalid_som_klar_og_publiserer_venter() {
     let execution_repo = FakeExecutionRepository::default();
     let entity_repo = FakeEntityTilstandRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
@@ -1130,7 +1130,7 @@ async fn registrerer_feil_ved_tilstandsfeil() {
     ];
 
     // Sak Opprettet, men journalpost har et permanent-feilet dokument.
-    // planlegg_neste_handling returnerer CommandStateDecision::Invalid, som evaluer_klarhet mapper til Feil.
+    // Registration mapper Invalid til Klar slik at executor eier terminal Feil.
     entity_repo.data.lock().unwrap().sak_med_barn.insert(
         sak_skuffen_id,
         SakMedBarn {
@@ -1170,22 +1170,18 @@ async fn registrerer_feil_ved_tilstandsfeil() {
     service.handle(&envelope).await.unwrap();
 
     // FeiletPermanent dokument → planlegg_neste_handling returnerer CommandStateDecision::Invalid
-    // → evaluer_klarhet mapper til Feil → terminal error event publiseres
+    // → registration mapper til Klar → utfores::venter publiseres for executor.
     let exec_data = execution_repo.data.lock().unwrap();
     assert_eq!(
         exec_data.opprettede_eksekveringer,
-        vec![(
-            envelope.command_id,
-            EksekveringStatus::Feil,
-            Some("invalid_reason=dokument_feilet_permanent".to_string())
-        )]
+        vec![(envelope.command_id, EksekveringStatus::Klar, None)]
     );
     drop(exec_data);
 
     let events = status_publisher.events.lock().unwrap();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].stage_status, CommandStageStatus::Error);
-    assert!(events[0].terminal);
+    assert_eq!(events[0].stage_status, CommandStageStatus::Venter);
+    assert!(!events[0].terminal);
 }
 
 // ---------------------------------------------------------------------------
@@ -1369,6 +1365,54 @@ async fn avslutt_sak_med_arkiv_id_ukjent_lokal_sak_saeder_foer_klarhet_og_blir_k
         exec_data.opprettede_eksekveringer,
         vec![(envelope.command_id, EksekveringStatus::Klar, None)]
     );
+}
+
+#[tokio::test]
+async fn registrerer_done_som_klar_og_publiserer_venter() {
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+
+    let ensured_sak_id = Uuid::new_v4();
+    let saksnummer = Saksnummer::new("2025/1000").unwrap();
+
+    id_mapping_repo.data.lock().unwrap().ensured_sak_id = Some(ensured_sak_id);
+    entity_repo.data.lock().unwrap().sak_med_barn.insert(
+        ensured_sak_id,
+        SakMedBarn {
+            sak_id: SkuffenSakId::from(ensured_sak_id),
+            tilstand: SakTilstand::Avsluttet,
+            sikri_id: Some(100),
+            saksnummer: Some(saksnummer.as_str().to_string()),
+            oensket_saksansvarlig: None,
+            naavaerende_saksansvarlig: None,
+            journalposter: Vec::new(),
+        },
+    );
+
+    let service = build_service(
+        execution_repo.clone(),
+        entity_repo,
+        id_mapping_repo,
+        status_publisher.clone(),
+    );
+
+    let envelope = make_avslutt_sak_command(SakKey::ArkivId(saksnummer));
+    service.handle(&envelope).await.unwrap();
+
+    let exec_data = execution_repo.data.lock().unwrap();
+    assert_eq!(
+        exec_data.opprettede_eksekveringer,
+        vec![(envelope.command_id, EksekveringStatus::Klar, None)]
+    );
+    assert_eq!(exec_data.markerte_utfores_venter, vec![envelope.command_id]);
+    drop(exec_data);
+
+    let events = status_publisher.events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].stage_status, CommandStageStatus::Venter);
+    assert!(!events[0].terminal);
 }
 
 #[tokio::test]

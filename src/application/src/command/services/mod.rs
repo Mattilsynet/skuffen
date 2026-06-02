@@ -7,6 +7,8 @@ pub mod reevaluer_ventende_kommandoer;
 pub mod registrer_i_eksekveringssystem;
 pub mod validate_command;
 
+mod command_state_decision;
+
 #[cfg(test)]
 mod ingest_command_test;
 

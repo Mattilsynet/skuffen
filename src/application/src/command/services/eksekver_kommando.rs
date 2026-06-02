@@ -5,9 +5,7 @@ mod sak_handlers;
 
 use anyhow::Context;
 use domain::eksekvering::id::{SkuffenJournalpostId, SkuffenSakId};
-use domain::eksekvering::tilstand::{
-    planlegg_neste_handling, BlockedReason, CommandStateDecision, DomainViolation, SakMedBarn,
-};
+use domain::eksekvering::tilstand::{planlegg_neste_handling, CommandStateDecision, SakMedBarn};
 use domain::eksekvering::typer::{command_metadata, CommandTypeCode, EksekveringFeil};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::query::queries::SakKey;
@@ -22,7 +20,8 @@ use crate::command::ports::entity_tilstand_port::EntityTilstandRepository;
 use crate::command::ports::id_mapping_port::IdMappingRepository;
 use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
 use crate::command::ports::ventende_kommando_wakeup_port::VentendeKommandoWakeup;
-use crate::command::services::execution_registration::command_target_for_type;
+use crate::command::services::command_state_decision::{blocked_detail, invalid_detail};
+use crate::command::services::execution_registration::domain_command_for_type;
 
 pub struct EksekverKommandoService {
     entity_tilstand_repo: Box<dyn EntityTilstandRepository>,
@@ -81,10 +80,10 @@ impl EksekverKommandoService {
         let journalpost_id = self
             .resolve_journalpost_id_for_envelope(&envelope, command_type)
             .await?;
-        let target = command_target_for_type(command_type, journalpost_id)?;
+        let domain_command = domain_command_for_type(command_type, sak_id, journalpost_id)?;
 
         let sak_med_barn = self.hent_sak_med_barn(sak_id).await?;
-        match planlegg_neste_handling(command_type, target, &sak_med_barn) {
+        match planlegg_neste_handling(&domain_command, &sak_med_barn) {
             CommandStateDecision::Ready(operasjon) => {
                 match self
                     .utfoer_operasjon(&envelope, &sak_med_barn, operasjon)
@@ -94,7 +93,7 @@ impl EksekverKommandoService {
                         let _ = self.wakeup_after_operation(sak_id, operasjon).await;
                         let oppdatert_sak_med_barn = self.hent_sak_med_barn(sak_id).await?;
                         let neste_beslutning =
-                            planlegg_neste_handling(command_type, target, &oppdatert_sak_med_barn);
+                            planlegg_neste_handling(&domain_command, &oppdatert_sak_med_barn);
                         match neste_beslutning {
                             CommandStateDecision::Done => {
                                 self.publish_success(&envelope, attempt).await
@@ -515,18 +514,6 @@ fn truncate_execution_detail(detail: &str, max_chars: usize) -> String {
         value.push_str("...");
     }
     value
-}
-
-fn blocked_detail(reason: BlockedReason) -> String {
-    format!(
-        "{} trigger_category={}",
-        reason.safe_detail(),
-        reason.trigger_category().as_code()
-    )
-}
-
-fn invalid_detail(violation: DomainViolation) -> String {
-    violation.safe_detail().to_string()
 }
 
 // ---------------------------------------------------------------------------
