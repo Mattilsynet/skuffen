@@ -27,18 +27,7 @@ impl EksekveringWorker {
     }
 
     pub async fn run(&self) -> anyhow::Result<()> {
-        loop {
-            let acquired = self
-                .execution_repo
-                .try_acquire_executor_lock(&self.worker_id)
-                .await?;
-            if acquired {
-                break;
-            }
-            sleep(self.poll_interval).await;
-        }
-
-        let _ = self.execution_repo.reset_kjorer_til_klar().await?;
+        self.prepare_executor_loop().await?;
 
         loop {
             let Some(command) = self.execution_repo.hent_neste_kjorbare().await? else {
@@ -115,5 +104,21 @@ impl EksekveringWorker {
     fn neste_retry_at(&self, attempt: i32) -> DateTime<Utc> {
         let attempt = if attempt < 0 { 0 } else { attempt as u32 };
         crate::command::services::eksekvering_backoff::neste_backoff(attempt)
+    }
+
+    async fn prepare_executor_loop(&self) -> anyhow::Result<()> {
+        loop {
+            let acquired = self
+                .execution_repo
+                .try_acquire_executor_lock(&self.worker_id)
+                .await?;
+            if acquired {
+                break;
+            }
+            sleep(self.poll_interval).await;
+        }
+
+        self.execution_repo.reset_kjorer_til_klar().await?;
+        Ok(())
     }
 }
