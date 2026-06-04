@@ -3,6 +3,7 @@ use crate::command::services::execution_registration::{
     domain_command_for_type, resolve_registration, SakResolutionOrigin,
 };
 
+use crate::command::{Command, CommandEnvelope, Dokument, Dokumentform};
 use anyhow::Result;
 use async_trait::async_trait;
 use domain::eksekvering::execution::EksekveringStatus;
@@ -11,9 +12,7 @@ use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
     planlegg_neste_handling, BlockedReason, CommandStateDecision, DokumentTilstand,
 };
-use domain::eksekvering::typer::{command_metadata, CommandLifecycleEvent, CommandTypeCode};
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use lib_schemas::skuffen::dokument::Dokumentform;
+use domain::eksekvering::typer::{CommandLifecycleEvent, CommandTypeCode};
 
 use crate::command::ports::command_execution_port::{
     CommandExecutionRepository, EksekveringsregistreringResultat, NyKommandoEksekvering,
@@ -24,6 +23,16 @@ use crate::command::ports::id_mapping_port::IdMappingRepository;
 use crate::command::ports::registrer_i_eksekveringssystem_port::RegistrerIEksekveringssystemUseCase;
 use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
 use crate::command::status::utfores_venter_event;
+
+pub trait IntoRegistrationEnvelope {
+    fn into_registration_envelope(self) -> CommandEnvelope<Command>;
+}
+
+impl IntoRegistrationEnvelope for &CommandEnvelope<Command> {
+    fn into_registration_envelope(self) -> CommandEnvelope<Command> {
+        self.clone()
+    }
+}
 
 /// Tynn registrering inn i eksekveringssystemet for kommandoer som allerede er validert.
 ///
@@ -60,7 +69,7 @@ impl RegistrerIEksekveringssystemService {
         envelope: &CommandEnvelope<Command>,
     ) -> Result<(EksekveringsregistreringResultat, EksekveringStatus)> {
         let registration = resolve_registration(self.id_mapping_repo.as_ref(), envelope).await?;
-        let command_type = command_metadata(&envelope.payload).0;
+        let command_type = crate::command::status::command_metadata(&envelope.payload);
 
         // Seed sak_tilstand for validated ArkivId before any command-specific writes.
         // This ensures archive-validated cases have local Opprettet state with saksnummer.
@@ -123,7 +132,7 @@ impl RegistrerIEksekveringssystemService {
                     .opprett_sak_tilstand(sak_id, envelope.command_id)
                     .await?;
             }
-            Command::OpprettInngåendeJournalpost(_) => {
+            Command::OpprettInngaaendeJournalpost(_) => {
                 self.opprett_journalpost_tilstander(
                     envelope,
                     registration,
@@ -131,7 +140,7 @@ impl RegistrerIEksekveringssystemService {
                 )
                 .await?;
             }
-            Command::OpprettUtgåendeJournalpost(_) => {
+            Command::OpprettUtgaaendeJournalpost(_) => {
                 self.opprett_journalpost_tilstander(
                     envelope,
                     registration,
@@ -250,22 +259,13 @@ impl RegistrerIEksekveringssystemService {
     async fn emit_status(&self, event: CommandLifecycleEvent) -> Result<()> {
         self.status_publisher.publiser_status(event).await
     }
-}
 
-fn dokumenter_for_envelope(
-    envelope: &CommandEnvelope<Command>,
-) -> &[lib_schemas::skuffen::dokument::Dokument] {
-    match &envelope.payload {
-        Command::OpprettInngåendeJournalpost(cmd) => &cmd.felles.dokumenter,
-        Command::OpprettUtgåendeJournalpost(cmd) => &cmd.felles.dokumenter,
-        Command::OpprettInterntNotatJournalpost(cmd) => &cmd.felles.dokumenter,
-        _ => &[],
+    pub async fn handle(&self, envelope: impl IntoRegistrationEnvelope) -> Result<()> {
+        let envelope = envelope.into_registration_envelope();
+        self.handle_internal(&envelope).await
     }
-}
 
-#[async_trait]
-impl RegistrerIEksekveringssystemUseCase for RegistrerIEksekveringssystemService {
-    async fn handle(&self, envelope: &CommandEnvelope<Command>) -> Result<()> {
+    async fn handle_internal(&self, envelope: &CommandEnvelope<Command>) -> Result<()> {
         let (registrering, status) = self
             .ensure_registrert_i_eksekveringssystem(envelope)
             .await?;
@@ -289,5 +289,21 @@ impl RegistrerIEksekveringssystemUseCase for RegistrerIEksekveringssystemService
         }
 
         Ok(())
+    }
+}
+
+fn dokumenter_for_envelope(envelope: &CommandEnvelope<Command>) -> &[Dokument] {
+    match &envelope.payload {
+        Command::OpprettInngaaendeJournalpost(cmd) => &cmd.felles.dokumenter,
+        Command::OpprettUtgaaendeJournalpost(cmd) => &cmd.felles.dokumenter,
+        Command::OpprettInterntNotatJournalpost(cmd) => &cmd.felles.dokumenter,
+        _ => &[],
+    }
+}
+
+#[async_trait]
+impl RegistrerIEksekveringssystemUseCase for RegistrerIEksekveringssystemService {
+    async fn handle(&self, envelope: &CommandEnvelope<Command>) -> Result<()> {
+        self.handle_internal(envelope).await
     }
 }

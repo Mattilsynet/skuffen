@@ -1,7 +1,5 @@
 use anyhow::{Context, Result};
 use domain::eksekvering::typer::CommandLifecycleContext;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
-use lib_schemas::skuffen::dokument::Dokument;
 use uuid::Uuid;
 
 use crate::command::ports::{
@@ -10,7 +8,18 @@ use crate::command::ports::{
     status_publisher_port::CommandStatusPublisher,
 };
 use crate::command::status::mottatt_event;
+use crate::command::{Command, CommandEnvelope, Dokument, JournalpostCommon, SakKey};
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenSakId};
+
+pub trait IntoCommandBatch {
+    fn into_command_batch(self) -> Vec<CommandEnvelope<Command>>;
+}
+
+impl IntoCommandBatch for Vec<CommandEnvelope<Command>> {
+    fn into_command_batch(self) -> Vec<CommandEnvelope<Command>> {
+        self
+    }
+}
 
 pub struct IngestCommandService {
     id_mapping: Box<dyn IdMappingRepository>,
@@ -35,10 +44,10 @@ impl IngestCommandService {
     /// Returns all submitted command IDs on success, preserving order.
     /// Includes IDs for commands that are idempotently accepted/skipped.
     /// Returns Err if any command fails (no partial list).
-    pub async fn handle(&self, commands: CommandSequence) -> Result<Vec<Uuid>> {
+    pub async fn handle(&self, commands: impl IntoCommandBatch) -> Result<Vec<Uuid>> {
         let mut command_ids = Vec::new();
 
-        for envelope in commands {
+        for envelope in commands.into_command_batch() {
             let command_id = envelope.command_id;
             self.process_command(envelope).await?;
             command_ids.push(command_id);
@@ -70,7 +79,7 @@ impl IngestCommandService {
                     command_id,
                     client_ref,
                     SkuffenSakId::from(skuffen_id),
-                    &envelope.payload,
+                    self.mapping_entity_type(&envelope.payload),
                     None, // arkiv_id unknown yet
                 )
                 .await
@@ -122,6 +131,17 @@ impl IngestCommandService {
         Ok(())
     }
 
+    fn mapping_entity_type(&self, command: &Command) -> MappingEntityType {
+        match command {
+            Command::OpprettSak(_) | Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => {
+                MappingEntityType::Sak
+            }
+            Command::OpprettInngaaendeJournalpost(_)
+            | Command::OpprettUtgaaendeJournalpost(_)
+            | Command::OpprettInterntNotatJournalpost(_) => MappingEntityType::Journalpost,
+        }
+    }
+
     fn build_initial_context(
         &self,
         envelope: &CommandEnvelope<Command>,
@@ -132,28 +152,28 @@ impl IngestCommandService {
             Command::OpprettSak(command) => {
                 context.sak_client_reference = Some(command.client_reference.to_string());
             }
-            Command::OpprettInngåendeJournalpost(command) => {
+            Command::OpprettInngaaendeJournalpost(command) => {
                 self.populate_journalpost_context(&mut context, &command.felles)
             }
-            Command::OpprettUtgåendeJournalpost(command) => {
+            Command::OpprettUtgaaendeJournalpost(command) => {
                 self.populate_journalpost_context(&mut context, &command.felles)
             }
             Command::OpprettInterntNotatJournalpost(command) => {
                 self.populate_journalpost_context(&mut context, &command.felles)
             }
             Command::AvsluttSak(command) => match &command.sak_key {
-                lib_schemas::skuffen::query::queries::SakKey::ArkivId(saksnummer) => {
-                    context.saksnummer = Some(saksnummer.as_str().to_string());
+                SakKey::ArkivId(saksnummer) => {
+                    context.saksnummer = Some(saksnummer.clone());
                 }
-                lib_schemas::skuffen::query::queries::SakKey::ClientReference(client_reference) => {
+                SakKey::ClientReference(client_reference) => {
                     context.sak_client_reference = Some(client_reference.to_string());
                 }
             },
             Command::SettSaksansvarlig(command) => match &command.sak_key {
-                lib_schemas::skuffen::query::queries::SakKey::ArkivId(saksnummer) => {
-                    context.saksnummer = Some(saksnummer.as_str().to_string());
+                SakKey::ArkivId(saksnummer) => {
+                    context.saksnummer = Some(saksnummer.clone());
                 }
-                lib_schemas::skuffen::query::queries::SakKey::ClientReference(client_reference) => {
+                SakKey::ClientReference(client_reference) => {
                     context.sak_client_reference = Some(client_reference.to_string());
                 }
             },
@@ -165,15 +185,15 @@ impl IngestCommandService {
     fn populate_journalpost_context(
         &self,
         context: &mut CommandLifecycleContext,
-        felles: &lib_schemas::skuffen::command::journalpost::JournalpostCommon,
+        felles: &JournalpostCommon,
     ) {
         context.journalpost_client_reference = Some(felles.client_reference.to_string());
 
         match &felles.sak_key {
-            lib_schemas::skuffen::query::queries::SakKey::ArkivId(saksnummer) => {
-                context.saksnummer = Some(saksnummer.as_str().to_string());
+            SakKey::ArkivId(saksnummer) => {
+                context.saksnummer = Some(saksnummer.clone());
             }
-            lib_schemas::skuffen::query::queries::SakKey::ClientReference(client_reference) => {
+            SakKey::ClientReference(client_reference) => {
                 context.sak_client_reference = Some(client_reference.to_string());
             }
         }
@@ -193,8 +213,8 @@ impl IngestCommandService {
     fn extract_client_reference(&self, command: &Command) -> Option<Uuid> {
         match command {
             Command::OpprettSak(c) => Some(c.client_reference),
-            Command::OpprettInngåendeJournalpost(c) => Some(c.felles.client_reference),
-            Command::OpprettUtgåendeJournalpost(c) => Some(c.felles.client_reference),
+            Command::OpprettInngaaendeJournalpost(c) => Some(c.felles.client_reference),
+            Command::OpprettUtgaaendeJournalpost(c) => Some(c.felles.client_reference),
             Command::OpprettInterntNotatJournalpost(c) => Some(c.felles.client_reference),
             Command::AvsluttSak(_) => None, // No new client reference
             Command::SettSaksansvarlig(_) => None, // No new client reference
@@ -203,17 +223,17 @@ impl IngestCommandService {
 
     fn extract_documents<'a>(&self, command: &'a Command) -> Option<&'a Vec<Dokument>> {
         match command {
-            Command::OpprettInngåendeJournalpost(c) => Some(&c.felles.dokumenter),
-            Command::OpprettUtgåendeJournalpost(c) => Some(&c.felles.dokumenter),
+            Command::OpprettInngaaendeJournalpost(c) => Some(&c.felles.dokumenter),
+            Command::OpprettUtgaaendeJournalpost(c) => Some(&c.felles.dokumenter),
             Command::OpprettInterntNotatJournalpost(c) => Some(&c.felles.dokumenter),
-            _ => None,
+            Command::OpprettSak(_) | Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => None,
         }
     }
 
     fn extract_arkiv_id(&self, command: &Command) -> Option<String> {
         let sak_key = match command {
-            Command::OpprettInngåendeJournalpost(c) => Some(&c.felles.sak_key),
-            Command::OpprettUtgåendeJournalpost(c) => Some(&c.felles.sak_key),
+            Command::OpprettInngaaendeJournalpost(c) => Some(&c.felles.sak_key),
+            Command::OpprettUtgaaendeJournalpost(c) => Some(&c.felles.sak_key),
             Command::OpprettInterntNotatJournalpost(c) => Some(&c.felles.sak_key),
             Command::AvsluttSak(c) => Some(&c.sak_key),
             Command::SettSaksansvarlig(c) => Some(&c.sak_key),
@@ -221,10 +241,8 @@ impl IngestCommandService {
         }?;
 
         match sak_key {
-            lib_schemas::skuffen::query::queries::SakKey::ArkivId(saksnummer) => {
-                Some(saksnummer.as_str().to_string())
-            }
-            _ => None,
+            SakKey::ArkivId(saksnummer) => Some(saksnummer.clone()),
+            SakKey::ClientReference(_) => None,
         }
     }
 }

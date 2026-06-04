@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use domain::eksekvering::tilstand::JournalpostMedDokumenter;
 use domain::eksekvering::typer::CommandLifecycleEvent;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+
+use crate::command::{Command, CommandEnvelope};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Utsendingsvalg {
@@ -60,11 +61,7 @@ pub trait ArkivGateway: Send + Sync {
 
 #[async_trait]
 pub trait EksekveringKvitteringPublisher: Send + Sync {
-    async fn publiser_done(
-        &self,
-        subject: &str,
-        command: &CommandEnvelope<Command>,
-    ) -> Result<(), anyhow::Error>;
+    async fn publiser_done(&self, command: &CommandEnvelope<Command>) -> Result<(), anyhow::Error>;
 }
 
 #[async_trait]

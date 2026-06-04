@@ -1,8 +1,8 @@
+use crate::command::{Command, CommandEnvelope};
 use domain::eksekvering::typer::{
     CommandLifecycleContext, CommandLifecycleEvent, EksekveringFeil, EksekveringFeiltype,
+    StatusErrorCode,
 };
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
 
 use crate::command::status::{
     utfores_blocked_event, utfores_error_event, utfores_ok_event, utfores_retrying_event,
@@ -33,7 +33,7 @@ impl EksekverKommandoService {
         let event = utfores_blocked_event(
             envelope,
             &safe_detail,
-            Some(SkuffenStatusErrorCode::PrerequisitePending),
+            Some(StatusErrorCode::PrerequisitePending),
             context,
             Some(attempt),
         );
@@ -58,7 +58,7 @@ impl EksekverKommandoService {
                 let event = utfores_retrying_event(
                     envelope,
                     &safe_detail,
-                    Some(SkuffenStatusErrorCode::TemporaryUnavailable),
+                    Some(StatusErrorCode::TemporaryUnavailable),
                     context,
                     Some(attempt),
                 );
@@ -71,7 +71,7 @@ impl EksekverKommandoService {
                 let event = utfores_error_event(
                     envelope,
                     &safe_detail,
-                    Some(SkuffenStatusErrorCode::ProcessingFailed),
+                    Some(StatusErrorCode::ProcessingFailed),
                     context,
                     Some(attempt),
                 );
@@ -84,7 +84,7 @@ impl EksekverKommandoService {
                 let event = utfores_blocked_event(
                     envelope,
                     &safe_detail,
-                    Some(SkuffenStatusErrorCode::PrerequisitePending),
+                    Some(StatusErrorCode::PrerequisitePending),
                     context,
                     Some(attempt),
                 );
@@ -114,10 +114,7 @@ impl EksekverKommandoService {
         self.status_publisher.publiser_status(event).await?;
 
         if terminal {
-            let (subject, _) = domain::eksekvering::typer::done_subject(envelope);
-            self.done_publisher
-                .publiser_done(&subject, envelope)
-                .await?;
+            self.done_publisher.publiser_done(envelope).await?;
         }
 
         Ok(())

@@ -1,3 +1,4 @@
+use crate::command::{Command, CommandEnvelope};
 use domain::eksekvering::id::SkuffenJournalpostId;
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
@@ -5,7 +6,6 @@ use domain::eksekvering::tilstand::{
     SakMedBarn,
 };
 use domain::eksekvering::typer::EksekveringFeil;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 
 use crate::command::ports::eksekvering_port::Utsendingsvalg;
 

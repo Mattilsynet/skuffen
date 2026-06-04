@@ -1,10 +1,10 @@
 use async_trait::async_trait;
+use domain::eksekvering::html_template::TemplateFelt;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
     DokumentTilstand, JournalpostTilstand, SakMedBarn, SakTilstand,
 };
-use lib_schemas::skuffen::dokument::Felt;
 use uuid::Uuid;
 
 #[allow(clippy::too_many_arguments)]
@@ -78,7 +78,7 @@ pub trait EntityTilstandRepository: Send + Sync {
         journalpost_id: SkuffenJournalpostId,
         tilstand: DokumentTilstand,
         mal_referanse: Option<Uuid>,
-        felter: Vec<Felt>,
+        felter: Vec<TemplateFelt>,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error>;
 

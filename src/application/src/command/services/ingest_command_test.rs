@@ -2,10 +2,15 @@ use crate::command::ports::command_dispatcher_port::CommandDispatcher;
 use crate::command::ports::id_mapping_port::{IdMappingRepository, MappingEntityType};
 use crate::command::ports::status_publisher_port::CommandStatusPublisher;
 use crate::command::services::ingest_command::IngestCommandService;
+use crate::command::{
+    Command as ApplicationCommand, CommandEnvelope as ApplicationCommandEnvelope,
+};
 use async_trait::async_trait;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::typer::CommandLifecycleEvent;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandSequence};
+use lib_schemas::skuffen::command::commands::{
+    Command as WireCommand, CommandEnvelope as WireCommandEnvelope, CommandSequence,
+};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost,
     OpprettUgåendeJournalpost,
@@ -42,20 +47,13 @@ impl IdMappingRepository for FakeIdMappingRepository {
         command_id: Uuid,
         client_reference: Uuid,
         skuffen_id: SkuffenSakId,
-        command: &Command,
+        entity_type: MappingEntityType,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
         if self.should_fail {
             return Err(anyhow::anyhow!("DB Error"));
         }
-        let entity_type = match command {
-            Command::OpprettSak(_) | Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => {
-                "sak"
-            }
-            Command::OpprettInngåendeJournalpost(_)
-            | Command::OpprettUtgåendeJournalpost(_)
-            | Command::OpprettInterntNotatJournalpost(_) => "journalpost",
-        };
+        let entity_type = entity_type.as_code();
         let mut store = self.mappings.lock().unwrap();
         if let Some((_, _, existing_skuffen_id, _, _)) = store
             .iter()
@@ -172,13 +170,16 @@ impl IdMappingRepository for FakeIdMappingRepository {
 
 #[derive(Clone, Default)]
 struct FakeCommandDispatcher {
-    pub dispatched: Arc<Mutex<Vec<CommandEnvelope<Command>>>>,
+    pub dispatched: Arc<Mutex<Vec<ApplicationCommandEnvelope<ApplicationCommand>>>>,
     pub should_fail: bool,
 }
 
 #[async_trait]
 impl CommandDispatcher for FakeCommandDispatcher {
-    async fn dispatch(&self, command: &CommandEnvelope<Command>) -> Result<(), anyhow::Error> {
+    async fn dispatch(
+        &self,
+        command: &ApplicationCommandEnvelope<ApplicationCommand>,
+    ) -> Result<(), anyhow::Error> {
         if self.should_fail {
             return Err(anyhow::anyhow!("NATS Error"));
         }
@@ -221,7 +222,7 @@ async fn test_ingest_command_opprett_sak_success() {
     let fake_dispatcher = FakeCommandDispatcher::default();
 
     let command_id = Uuid::new_v4();
-    let command = Command::OpprettSak(OpprettSak {
+    let command = WireCommand::OpprettSak(OpprettSak {
         client_reference: Uuid::new_v4(),
         sakstittel: Sakstittel("Test Sak".to_string()),
         ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
@@ -230,7 +231,7 @@ async fn test_ingest_command_opprett_sak_success() {
         saksbehandler_enhet: "42".to_string(),
         tilgang: None,
     });
-    let envelope = CommandEnvelope {
+    let envelope = WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
         payload: command,
@@ -270,7 +271,7 @@ async fn test_ingest_command_journalpost_success() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+    let command = WireCommand::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Inngående brev".to_string(),
@@ -286,7 +287,7 @@ async fn test_ingest_command_journalpost_success() {
         mottaker: None,
     });
 
-    let envelope = CommandEnvelope {
+    let envelope = WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
         payload: command,
@@ -341,7 +342,7 @@ async fn test_ingest_command_registers_document_mappings() {
         },
     ];
 
-    let command = Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+    let command = WireCommand::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Inngående brev".to_string(),
@@ -357,7 +358,7 @@ async fn test_ingest_command_registers_document_mappings() {
         mottaker: None,
     });
 
-    let envelope = CommandEnvelope {
+    let envelope = WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
         payload: command,
@@ -406,7 +407,7 @@ async fn test_ingest_command_idempotency_duplicate_command() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+    let command = WireCommand::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Inngående brev".to_string(),
@@ -422,7 +423,7 @@ async fn test_ingest_command_idempotency_duplicate_command() {
         mottaker: None,
     });
 
-    let envelope = CommandEnvelope {
+    let envelope = WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
         payload: command,
@@ -480,7 +481,7 @@ async fn test_ingest_command_allows_multiple_mappings_per_command_id() {
         },
     ];
 
-    let command = Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+    let command = WireCommand::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Inngående brev".to_string(),
@@ -496,7 +497,7 @@ async fn test_ingest_command_allows_multiple_mappings_per_command_id() {
         mottaker: None,
     });
 
-    let envelope = CommandEnvelope {
+    let envelope = WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
         payload: command,
@@ -532,7 +533,7 @@ async fn test_ingest_command_mapping_failure() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+    let command = WireCommand::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Inngående brev".to_string(),
@@ -548,7 +549,7 @@ async fn test_ingest_command_mapping_failure() {
         mottaker: None,
     });
 
-    let envelope = CommandEnvelope {
+    let envelope = WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
         payload: command,
@@ -584,7 +585,7 @@ async fn test_ingest_command_dispatch_failure() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+    let command = WireCommand::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Inngående brev".to_string(),
@@ -600,7 +601,7 @@ async fn test_ingest_command_dispatch_failure() {
         mottaker: None,
     });
 
-    let envelope = CommandEnvelope {
+    let envelope = WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
         payload: command,
@@ -633,7 +634,7 @@ async fn test_ingest_command_idempotent_duplicate_command_id() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = Command::OpprettSak(OpprettSak {
+    let command = WireCommand::OpprettSak(OpprettSak {
         client_reference,
         sakstittel: Sakstittel("Test Sak".to_string()),
         ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
@@ -642,7 +643,7 @@ async fn test_ingest_command_idempotent_duplicate_command_id() {
         saksbehandler_enhet: "42".to_string(),
         tilgang: None,
     });
-    let envelope = CommandEnvelope {
+    let envelope = WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
         payload: command,
@@ -655,7 +656,7 @@ async fn test_ingest_command_idempotent_duplicate_command_id() {
     let result1 = service.handle(sequence).await;
     assert!(result1.is_ok());
 
-    let command2 = Command::OpprettSak(OpprettSak {
+    let command2 = WireCommand::OpprettSak(OpprettSak {
         client_reference,
         sakstittel: Sakstittel("Test Sak 2".to_string()),
         ordningsverdi: Ordningsverdi::new("456".to_string()).unwrap(),
@@ -665,7 +666,7 @@ async fn test_ingest_command_idempotent_duplicate_command_id() {
         tilgang: None,
     });
 
-    let envelope2 = CommandEnvelope {
+    let envelope2 = WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
         payload: command2,
@@ -695,7 +696,7 @@ async fn test_ingest_command_utgående_journalpost_success() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = Command::OpprettUtgåendeJournalpost(OpprettUgåendeJournalpost {
+    let command = WireCommand::OpprettUtgåendeJournalpost(OpprettUgåendeJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Utgående brev".to_string(),
@@ -711,7 +712,7 @@ async fn test_ingest_command_utgående_journalpost_success() {
         mottaker: "Mottaker AS".to_string(),
     });
 
-    let envelope = CommandEnvelope {
+    let envelope = WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
         payload: command,
@@ -748,7 +749,7 @@ async fn test_ingest_command_internt_notat_journalpost_success() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = Command::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
+    let command = WireCommand::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Internt notat".to_string(),
@@ -762,7 +763,7 @@ async fn test_ingest_command_internt_notat_journalpost_success() {
         },
     });
 
-    let envelope = CommandEnvelope {
+    let envelope = WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
         payload: command,
@@ -816,7 +817,7 @@ async fn test_ingest_command_returns_ids_preserving_order_with_idempotent_skip()
         ));
     }
 
-    let command1 = Command::OpprettSak(OpprettSak {
+    let command1 = WireCommand::OpprettSak(OpprettSak {
         client_reference: Uuid::new_v4(),
         sakstittel: Sakstittel("Test Sak 1".to_string()),
         ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
@@ -826,7 +827,7 @@ async fn test_ingest_command_returns_ids_preserving_order_with_idempotent_skip()
         tilgang: None,
     });
 
-    let command2 = Command::OpprettSak(OpprettSak {
+    let command2 = WireCommand::OpprettSak(OpprettSak {
         client_reference: Uuid::new_v4(),
         sakstittel: Sakstittel("Test Sak 2".to_string()),
         ordningsverdi: Ordningsverdi::new("456".to_string()).unwrap(),
@@ -836,7 +837,7 @@ async fn test_ingest_command_returns_ids_preserving_order_with_idempotent_skip()
         tilgang: None,
     });
 
-    let command3 = Command::OpprettSak(OpprettSak {
+    let command3 = WireCommand::OpprettSak(OpprettSak {
         client_reference: Uuid::new_v4(),
         sakstittel: Sakstittel("Test Sak 3".to_string()),
         ordningsverdi: Ordningsverdi::new("789".to_string()).unwrap(),
@@ -846,19 +847,19 @@ async fn test_ingest_command_returns_ids_preserving_order_with_idempotent_skip()
         tilgang: None,
     });
 
-    let envelope1 = CommandEnvelope {
+    let envelope1 = WireCommandEnvelope {
         command_id: command_id_1,
         correlation_id: None,
         payload: command1,
     };
 
-    let envelope2 = CommandEnvelope {
+    let envelope2 = WireCommandEnvelope {
         command_id: command_id_2,
         correlation_id: None,
         payload: command2,
     };
 
-    let envelope3 = CommandEnvelope {
+    let envelope3 = WireCommandEnvelope {
         command_id: command_id_3,
         correlation_id: None,
         payload: command3,

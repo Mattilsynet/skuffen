@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
+use application::command::{Command, CommandEnvelope};
 use async_trait::async_trait;
 use domain::eksekvering::tilstand::JournalpostMedDokumenter;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 
 use application::command::ports::eksekvering_port::{
     ArkivGateway, OpprettJournalpostResultat, Utsendingsvalg,

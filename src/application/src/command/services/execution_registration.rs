@@ -2,14 +2,13 @@ use anyhow::Result;
 use domain::command::Command as DomainCommand;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::typer::CommandTypeCode;
-use lib_schemas::skuffen::command::commands::{Command as WireCommand, CommandEnvelope};
-use lib_schemas::skuffen::command::journalpost::JournalpostCommon;
-use lib_schemas::skuffen::command::sak::{AvsluttSak, OpprettSak};
-use lib_schemas::skuffen::dokument::Dokument;
-use lib_schemas::skuffen::query::queries::SakKey;
 use uuid::Uuid;
 
 use crate::command::ports::id_mapping_port::{IdMappingRepository, MappingEntityType};
+use crate::command::{
+    AvsluttSakCommand, Command as ApplicationCommand, CommandEnvelope, Dokument, JournalpostCommon,
+    OpprettSakCommand, SakKey, SettSaksansvarligCommand,
+};
 
 /// Provenance origin for a resolved sak registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,31 +106,31 @@ pub(crate) fn domain_command_for_type(
 
 pub(crate) async fn resolve_registration(
     id_mapping_repo: &dyn IdMappingRepository,
-    envelope: &CommandEnvelope<WireCommand>,
+    envelope: &CommandEnvelope<ApplicationCommand>,
 ) -> Result<ResolvedRegistration> {
     match &envelope.payload {
-        WireCommand::OpprettSak(cmd) => Ok(ResolvedRegistration::new(
+        ApplicationCommand::OpprettSak(cmd) => Ok(ResolvedRegistration::new(
             Some(resolve_opprett_sak_registration(id_mapping_repo, cmd).await?),
             None,
             Vec::new(),
         )),
-        WireCommand::AvsluttSak(cmd) => Ok(ResolvedRegistration::new(
+        ApplicationCommand::AvsluttSak(cmd) => Ok(ResolvedRegistration::new(
             Some(resolve_avslutt_sak_registration(id_mapping_repo, cmd).await?),
             None,
             Vec::new(),
         )),
-        WireCommand::SettSaksansvarlig(cmd) => Ok(ResolvedRegistration::new(
+        ApplicationCommand::SettSaksansvarlig(cmd) => Ok(ResolvedRegistration::new(
             Some(resolve_sett_saksansvarlig_registration(id_mapping_repo, cmd).await?),
             None,
             Vec::new(),
         )),
-        WireCommand::OpprettInngåendeJournalpost(cmd) => {
+        ApplicationCommand::OpprettInngaaendeJournalpost(cmd) => {
             resolve_journalpost_registration(id_mapping_repo, &cmd.felles).await
         }
-        WireCommand::OpprettUtgåendeJournalpost(cmd) => {
+        ApplicationCommand::OpprettUtgaaendeJournalpost(cmd) => {
             resolve_journalpost_registration(id_mapping_repo, &cmd.felles).await
         }
-        WireCommand::OpprettInterntNotatJournalpost(cmd) => {
+        ApplicationCommand::OpprettInterntNotatJournalpost(cmd) => {
             resolve_journalpost_registration(id_mapping_repo, &cmd.felles).await
         }
     }
@@ -139,7 +138,7 @@ pub(crate) async fn resolve_registration(
 
 async fn resolve_opprett_sak_registration(
     id_mapping_repo: &dyn IdMappingRepository,
-    command: &OpprettSak,
+    command: &OpprettSakCommand,
 ) -> Result<ResolvedSakRegistration> {
     Ok(ResolvedSakRegistration {
         sak_id: resolve_skuffen_sak_id_for_client_reference(
@@ -153,14 +152,14 @@ async fn resolve_opprett_sak_registration(
 
 async fn resolve_avslutt_sak_registration(
     id_mapping_repo: &dyn IdMappingRepository,
-    command: &AvsluttSak,
+    command: &AvsluttSakCommand,
 ) -> Result<ResolvedSakRegistration> {
     resolve_sak_registration(id_mapping_repo, &command.sak_key).await
 }
 
 async fn resolve_sett_saksansvarlig_registration(
     id_mapping_repo: &dyn IdMappingRepository,
-    command: &lib_schemas::skuffen::command::sak::SettSaksansvarlig,
+    command: &SettSaksansvarligCommand,
 ) -> Result<ResolvedSakRegistration> {
     resolve_sak_registration(id_mapping_repo, &command.sak_key).await
 }

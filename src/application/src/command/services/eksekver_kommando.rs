@@ -3,12 +3,12 @@ mod journalpost_handlers;
 mod lifecycle_publisher;
 mod sak_handlers;
 
+use crate::command::{Command as ApplicationCommand, CommandEnvelope, SakKey};
 use anyhow::Context;
+use domain::command::Command as DomainCommand;
 use domain::eksekvering::id::{SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::tilstand::{planlegg_neste_handling, CommandStateDecision, SakMedBarn};
-use domain::eksekvering::typer::{command_metadata, CommandTypeCode, EksekveringFeil};
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use lib_schemas::skuffen::query::queries::SakKey;
+use domain::eksekvering::typer::EksekveringFeil;
 use uuid::Uuid;
 
 use crate::command::ports::dokument_lager_port::DokumentLager;
@@ -21,7 +21,16 @@ use crate::command::ports::id_mapping_port::IdMappingRepository;
 use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
 use crate::command::ports::ventende_kommando_wakeup_port::VentendeKommandoWakeup;
 use crate::command::services::command_state_decision::{blocked_detail, invalid_detail};
-use crate::command::services::execution_registration::domain_command_for_type;
+
+pub trait IntoExecutorEnvelope {
+    fn into_executor_envelope(self) -> CommandEnvelope<ApplicationCommand>;
+}
+
+impl IntoExecutorEnvelope for CommandEnvelope<ApplicationCommand> {
+    fn into_executor_envelope(self) -> CommandEnvelope<ApplicationCommand> {
+        self
+    }
+}
 
 pub struct EksekverKommandoService {
     entity_tilstand_repo: Box<dyn EntityTilstandRepository>,
@@ -72,15 +81,20 @@ impl EksekverKommandoService {
 
     pub async fn handle(
         &self,
-        envelope: CommandEnvelope<Command>,
+        envelope: impl IntoExecutorEnvelope,
         attempt: u32,
     ) -> Result<ExecutionOutcome, anyhow::Error> {
-        let (command_type, _) = command_metadata(&envelope.payload);
-        let sak_id = self.resolve_sak_id_for_envelope(&envelope).await?;
-        let journalpost_id = self
-            .resolve_journalpost_id_for_envelope(&envelope, command_type)
-            .await?;
-        let domain_command = domain_command_for_type(command_type, sak_id, journalpost_id)?;
+        self.handle_internal(envelope.into_executor_envelope(), attempt)
+            .await
+    }
+
+    async fn handle_internal(
+        &self,
+        envelope: CommandEnvelope<ApplicationCommand>,
+        attempt: u32,
+    ) -> Result<ExecutionOutcome, anyhow::Error> {
+        let domain_command = self.resolve_domain_command_for_envelope(&envelope).await?;
+        let sak_id = domain_command.sak_id();
 
         let sak_med_barn = self.hent_sak_med_barn(sak_id).await?;
         match planlegg_neste_handling(&domain_command, &sak_med_barn) {
@@ -116,6 +130,39 @@ impl EksekverKommandoService {
         }
     }
 
+    async fn resolve_domain_command_for_envelope(
+        &self,
+        envelope: &CommandEnvelope<ApplicationCommand>,
+    ) -> Result<DomainCommand, anyhow::Error> {
+        let sak_id = self.resolve_sak_id_for_envelope(envelope).await?;
+
+        match &envelope.payload {
+            ApplicationCommand::OpprettSak(_) => Ok(DomainCommand::OpprettSak { sak_id }),
+            ApplicationCommand::AvsluttSak(_) => Ok(DomainCommand::AvsluttSak { sak_id }),
+            ApplicationCommand::SettSaksansvarlig(_) => {
+                Ok(DomainCommand::SettSaksansvarlig { sak_id })
+            }
+            ApplicationCommand::OpprettInngaaendeJournalpost(_) => {
+                Ok(DomainCommand::OpprettInngaaendeJournalpost {
+                    sak_id,
+                    journalpost_id: self.resolve_journalpost_id_for_envelope(envelope).await?,
+                })
+            }
+            ApplicationCommand::OpprettUtgaaendeJournalpost(_) => {
+                Ok(DomainCommand::OpprettUtgaaendeJournalpost {
+                    sak_id,
+                    journalpost_id: self.resolve_journalpost_id_for_envelope(envelope).await?,
+                })
+            }
+            ApplicationCommand::OpprettInterntNotatJournalpost(_) => {
+                Ok(DomainCommand::OpprettInterntNotatJournalpost {
+                    sak_id,
+                    journalpost_id: self.resolve_journalpost_id_for_envelope(envelope).await?,
+                })
+            }
+        }
+    }
+
     async fn hent_sak_med_barn(&self, sak_id: SkuffenSakId) -> Result<SakMedBarn, anyhow::Error> {
         self.entity_tilstand_repo
             .hent_sak_med_barn(sak_id)
@@ -126,7 +173,7 @@ impl EksekverKommandoService {
 
     async fn materialiser_beslutning(
         &self,
-        envelope: &CommandEnvelope<Command>,
+        envelope: &CommandEnvelope<ApplicationCommand>,
         attempt: u32,
         beslutning: CommandStateDecision,
     ) -> Result<ExecutionOutcome, anyhow::Error> {
@@ -177,7 +224,7 @@ impl EksekverKommandoService {
 
     async fn utfoer_operasjon(
         &self,
-        envelope: &CommandEnvelope<Command>,
+        envelope: &CommandEnvelope<ApplicationCommand>,
         sak: &SakMedBarn,
         operasjon: domain::eksekvering::tilstand::ArkivOperasjon,
     ) -> Result<(), EksekveringFeil> {
@@ -215,10 +262,9 @@ impl EksekverKommandoService {
             }
         }
     }
-
     async fn resolve_sak_id_for_envelope(
         &self,
-        envelope: &CommandEnvelope<Command>,
+        envelope: &CommandEnvelope<ApplicationCommand>,
     ) -> Result<SkuffenSakId, anyhow::Error> {
         let sak_key = extract_sak_key(envelope)?;
         match sak_key {
@@ -249,32 +295,22 @@ impl EksekverKommandoService {
 
     async fn resolve_journalpost_id_for_envelope(
         &self,
-        envelope: &CommandEnvelope<Command>,
-        command_type: CommandTypeCode,
-    ) -> Result<Option<SkuffenJournalpostId>, anyhow::Error> {
-        let Some(client_reference) = extract_journalpost_client_reference(envelope) else {
-            return Ok(None);
-        };
+        envelope: &CommandEnvelope<ApplicationCommand>,
+    ) -> Result<SkuffenJournalpostId, anyhow::Error> {
+        let client_reference = extract_journalpost_client_reference(envelope).ok_or_else(|| {
+            anyhow::anyhow!("Mangler journalpost client_reference for journalpost-kommando")
+        })?;
 
-        match command_type {
-            CommandTypeCode::OpprettInngaaendeJournalpost
-            | CommandTypeCode::OpprettUtgaaendeJournalpost
-            | CommandTypeCode::OpprettInterntNotatJournalpost => self
-                .id_mapping
-                .hent_journalpost_id_fra_mapping(client_reference)
-                .await
-                .context("Feil ved oppslag av journalpost_id fra client_reference")?
-                .map(Some)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Fant ikke skuffen_id for journalpost client_reference {}",
-                        client_reference
-                    )
-                }),
-            CommandTypeCode::OpprettSak
-            | CommandTypeCode::AvsluttSak
-            | CommandTypeCode::SettSaksansvarlig => Ok(None),
-        }
+        self.id_mapping
+            .hent_journalpost_id_fra_mapping(client_reference)
+            .await
+            .context("Feil ved oppslag av journalpost_id fra client_reference")?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Fant ikke skuffen_id for journalpost client_reference {}",
+                    client_reference
+                )
+            })
     }
 
     fn map_arkiv_feil(&self, err: anyhow::Error) -> EksekveringFeil {
@@ -520,48 +556,54 @@ fn truncate_execution_detail(detail: &str, max_chars: usize) -> String {
 // Envelope helpers
 // ---------------------------------------------------------------------------
 
-fn extract_sak_key(envelope: &CommandEnvelope<Command>) -> Result<SakKey, anyhow::Error> {
+fn extract_sak_key(
+    envelope: &CommandEnvelope<ApplicationCommand>,
+) -> Result<SakKey, anyhow::Error> {
     match &envelope.payload {
-        Command::OpprettSak(cmd) => Ok(SakKey::ClientReference(cmd.client_reference)),
-        Command::OpprettInngåendeJournalpost(cmd) => Ok(cmd.felles.sak_key.clone()),
-        Command::OpprettUtgåendeJournalpost(cmd) => Ok(cmd.felles.sak_key.clone()),
-        Command::OpprettInterntNotatJournalpost(cmd) => Ok(cmd.felles.sak_key.clone()),
-        Command::AvsluttSak(cmd) => Ok(cmd.sak_key.clone()),
-        Command::SettSaksansvarlig(cmd) => Ok(cmd.sak_key.clone()),
+        ApplicationCommand::OpprettSak(cmd) => Ok(SakKey::ClientReference(cmd.client_reference)),
+        ApplicationCommand::OpprettInngaaendeJournalpost(cmd) => Ok(cmd.felles.sak_key.clone()),
+        ApplicationCommand::OpprettUtgaaendeJournalpost(cmd) => Ok(cmd.felles.sak_key.clone()),
+        ApplicationCommand::OpprettInterntNotatJournalpost(cmd) => Ok(cmd.felles.sak_key.clone()),
+        ApplicationCommand::AvsluttSak(cmd) => Ok(cmd.sak_key.clone()),
+        ApplicationCommand::SettSaksansvarlig(cmd) => Ok(cmd.sak_key.clone()),
     }
 }
 
-fn extract_sak_client_reference(envelope: &CommandEnvelope<Command>) -> Option<Uuid> {
+fn extract_sak_client_reference(envelope: &CommandEnvelope<ApplicationCommand>) -> Option<Uuid> {
     match &envelope.payload {
-        Command::OpprettSak(cmd) => Some(cmd.client_reference),
+        ApplicationCommand::OpprettSak(cmd) => Some(cmd.client_reference),
         _ => None,
     }
 }
 
-fn extract_journalpost_client_reference(envelope: &CommandEnvelope<Command>) -> Option<Uuid> {
+fn extract_journalpost_client_reference(
+    envelope: &CommandEnvelope<ApplicationCommand>,
+) -> Option<Uuid> {
     match &envelope.payload {
-        Command::OpprettInngåendeJournalpost(cmd) => Some(cmd.felles.client_reference),
-        Command::OpprettUtgåendeJournalpost(cmd) => Some(cmd.felles.client_reference),
-        Command::OpprettInterntNotatJournalpost(cmd) => Some(cmd.felles.client_reference),
+        ApplicationCommand::OpprettInngaaendeJournalpost(cmd) => Some(cmd.felles.client_reference),
+        ApplicationCommand::OpprettUtgaaendeJournalpost(cmd) => Some(cmd.felles.client_reference),
+        ApplicationCommand::OpprettInterntNotatJournalpost(cmd) => {
+            Some(cmd.felles.client_reference)
+        }
         _ => None,
     }
 }
 
-fn extract_dokument_client_references(envelope: &CommandEnvelope<Command>) -> Vec<Uuid> {
+fn extract_dokument_client_references(envelope: &CommandEnvelope<ApplicationCommand>) -> Vec<Uuid> {
     match &envelope.payload {
-        Command::OpprettInngåendeJournalpost(cmd) => cmd
+        ApplicationCommand::OpprettInngaaendeJournalpost(cmd) => cmd
             .felles
             .dokumenter
             .iter()
             .map(|d| d.client_reference)
             .collect(),
-        Command::OpprettUtgåendeJournalpost(cmd) => cmd
+        ApplicationCommand::OpprettUtgaaendeJournalpost(cmd) => cmd
             .felles
             .dokumenter
             .iter()
             .map(|d| d.client_reference)
             .collect(),
-        Command::OpprettInterntNotatJournalpost(cmd) => cmd
+        ApplicationCommand::OpprettInterntNotatJournalpost(cmd) => cmd
             .felles
             .dokumenter
             .iter()

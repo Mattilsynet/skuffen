@@ -1,7 +1,7 @@
+use crate::command::{Command, CommandEnvelope};
 use domain::eksekvering::id::SkuffenSakId;
 use domain::eksekvering::tilstand::{SakMedBarn, SakTilstand};
 use domain::eksekvering::typer::EksekveringFeil;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 
 use super::{extract_sak_client_reference, EksekverKommandoService};
 

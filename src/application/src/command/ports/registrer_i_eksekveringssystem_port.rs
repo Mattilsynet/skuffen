@@ -1,5 +1,6 @@
 use async_trait::async_trait;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+
+use crate::command::{Command, CommandEnvelope};
 
 /// Tar imot en validert kommando og registrerer den i eksekveringssystemet.
 ///

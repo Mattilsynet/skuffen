@@ -1,7 +1,4 @@
 use anyhow::Result;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use lib_schemas::skuffen::query::queries::SakKey;
-use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
 
 use crate::command::lifecycle::LifecycleDecision;
 use crate::command::ports::{
@@ -13,21 +10,33 @@ use crate::command::ports::{
 use crate::command::status::{
     validert_blocked_event, validert_error_event, validert_ok_event, validert_retrying_event,
 };
-use domain::eksekvering::typer::CommandLifecycleEvent;
+use crate::command::SakKey;
+use crate::command::{Command, CommandEnvelope};
+use domain::eksekvering::typer::{CommandLifecycleEvent, StatusErrorCode};
+
+pub trait IntoCommandEnvelope {
+    fn into_command_envelope(self) -> CommandEnvelope<Command>;
+}
+
+impl IntoCommandEnvelope for CommandEnvelope<Command> {
+    fn into_command_envelope(self) -> CommandEnvelope<Command> {
+        self
+    }
+}
 
 pub enum ValidationOutcome {
     Ok,
     Blocked {
         message: String,
-        error_code: SkuffenStatusErrorCode,
+        error_code: StatusErrorCode,
     },
     Recoverable {
         message: String,
-        error_code: SkuffenStatusErrorCode,
+        error_code: StatusErrorCode,
     },
     Irrecoverable {
         message: String,
-        error_code: SkuffenStatusErrorCode,
+        error_code: StatusErrorCode,
     },
 }
 
@@ -45,15 +54,15 @@ impl ValidationOutcome {
             ValidationOutcome::Blocked {
                 message,
                 error_code,
-            } => LifecycleDecision::blocked(message.clone(), Some(error_code.clone())),
+            } => LifecycleDecision::blocked(message.clone(), Some(*error_code)),
             ValidationOutcome::Recoverable {
                 message,
                 error_code,
-            } => LifecycleDecision::retrying(message.clone(), Some(error_code.clone())),
+            } => LifecycleDecision::retrying(message.clone(), Some(*error_code)),
             ValidationOutcome::Irrecoverable {
                 message,
                 error_code,
-            } => LifecycleDecision::error(message.clone(), Some(error_code.clone())),
+            } => LifecycleDecision::error(message.clone(), Some(*error_code)),
         }
     }
 }
@@ -100,7 +109,8 @@ impl ValidateCommandService {
         }
     }
 
-    pub async fn handle(&self, envelope: CommandEnvelope<Command>) -> Result<ValidationOutcome> {
+    pub async fn handle(&self, envelope: impl IntoCommandEnvelope) -> Result<ValidationOutcome> {
+        let envelope = envelope.into_command_envelope();
         let context = self
             .outward_status_projector
             .resolve_context(&envelope)
@@ -108,10 +118,10 @@ impl ValidateCommandService {
 
         let outcome = match envelope.payload.clone() {
             Command::OpprettSak(_) => ValidationOutcome::Ok,
-            Command::OpprettInngåendeJournalpost(c) => {
+            Command::OpprettInngaaendeJournalpost(c) => {
                 self.validate_sak_ref(c.felles.sak_key).await
             }
-            Command::OpprettUtgåendeJournalpost(c) => {
+            Command::OpprettUtgaaendeJournalpost(c) => {
                 self.validate_sak_ref(c.felles.sak_key).await
             }
             Command::OpprettInterntNotatJournalpost(c) => {
@@ -136,7 +146,7 @@ impl ValidateCommandService {
                 self.emit_status(validert_blocked_event(
                     &envelope,
                     decision.detail.clone().unwrap_or_else(|| message.clone()),
-                    decision.error_code.clone(),
+                    decision.error_code,
                     context.clone(),
                 ))
                 .await?;
@@ -152,7 +162,7 @@ impl ValidateCommandService {
                 self.emit_status(validert_retrying_event(
                     &envelope,
                     decision.detail.clone().unwrap_or_else(|| message.clone()),
-                    decision.error_code.clone(),
+                    decision.error_code,
                     context.clone(),
                 ))
                 .await?;
@@ -168,7 +178,7 @@ impl ValidateCommandService {
                 self.emit_status(validert_error_event(
                     &envelope,
                     decision.detail.clone().unwrap_or_else(|| message.clone()),
-                    decision.error_code.clone(),
+                    decision.error_code,
                     context,
                 ))
                 .await?;
@@ -196,21 +206,21 @@ impl ValidateCommandService {
                             Ok(None) => ValidationOutcome::Ok,
                             Err(err) => ValidationOutcome::Recoverable {
                                 message: err.to_string(),
-                                error_code: SkuffenStatusErrorCode::TemporaryUnavailable,
+                                error_code: StatusErrorCode::TemporaryUnavailable,
                             },
                         }
                     }
                     Ok(None) => ValidationOutcome::Irrecoverable {
                         message: "Sak finnes ikke i Skuffen".to_string(),
-                        error_code: SkuffenStatusErrorCode::NotFound,
+                        error_code: StatusErrorCode::NotFound,
                     },
                     Err(err) => ValidationOutcome::Recoverable {
                         message: err.to_string(),
-                        error_code: SkuffenStatusErrorCode::TemporaryUnavailable,
+                        error_code: StatusErrorCode::TemporaryUnavailable,
                     },
                 }
             }
-            SakKey::ArkivId(saksnummer) => self.validate_sak_fra_arkivet(saksnummer.as_str()).await,
+            SakKey::ArkivId(saksnummer) => self.validate_sak_fra_arkivet(&saksnummer).await,
         }
     }
 
@@ -220,7 +230,7 @@ impl ValidateCommandService {
                 if state.avsluttet {
                     ValidationOutcome::Irrecoverable {
                         message: "Sak er avsluttet".to_string(),
-                        error_code: SkuffenStatusErrorCode::Conflict,
+                        error_code: StatusErrorCode::Conflict,
                     }
                 } else {
                     ValidationOutcome::Ok
@@ -230,13 +240,13 @@ impl ValidateCommandService {
                 crate::command::ports::command_state_port::ArkivSakTilstandErrorKind::Irrecoverable => {
                     ValidationOutcome::Irrecoverable {
                         message: err.message,
-                        error_code: SkuffenStatusErrorCode::InvalidRequest,
+                        error_code: StatusErrorCode::InvalidRequest,
                     }
                 }
                 crate::command::ports::command_state_port::ArkivSakTilstandErrorKind::Recoverable => {
                     ValidationOutcome::Recoverable {
                         message: err.message,
-                        error_code: SkuffenStatusErrorCode::TemporaryUnavailable,
+                        error_code: StatusErrorCode::TemporaryUnavailable,
                     }
                 }
             },

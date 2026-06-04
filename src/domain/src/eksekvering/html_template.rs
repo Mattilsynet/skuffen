@@ -1,9 +1,26 @@
 use std::collections::HashSet;
 
-use lib_schemas::skuffen::dokument::Felt;
-
 const SAKSNUMMER_TOKEN: &str = "{{saksnummer}}";
 const MAX_TEMPLATE_BYTES: usize = 5 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TemplateFelt {
+    Saksnummer,
+}
+
+impl TemplateFelt {
+    pub fn as_token(self) -> &'static str {
+        match self {
+            Self::Saksnummer => "saksnummer",
+        }
+    }
+
+    pub fn token_pattern(self) -> &'static str {
+        match self {
+            Self::Saksnummer => SAKSNUMMER_TOKEN,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum HtmlTemplateFeil {
@@ -28,13 +45,13 @@ pub struct FeltVerdier<'a> {
     pub saksnummer: Option<&'a str>,
 }
 
-pub fn er_felter_klare(felter: &[Felt], verdier: &FeltVerdier<'_>) -> bool {
+pub fn er_felter_klare(felter: &[TemplateFelt], verdier: &FeltVerdier<'_>) -> bool {
     felter.iter().all(|felt| match felt {
-        Felt::Saksnummer => verdier.saksnummer.is_some(),
+        TemplateFelt::Saksnummer => verdier.saksnummer.is_some(),
     })
 }
 
-pub fn valider_felter(felter: &[Felt]) -> Result<(), HtmlTemplateFeil> {
+pub fn valider_felter(felter: &[TemplateFelt]) -> Result<(), HtmlTemplateFeil> {
     let mut sett = HashSet::with_capacity(felter.len());
     for felt in felter {
         if !sett.insert(*felt) {
@@ -44,11 +61,11 @@ pub fn valider_felter(felter: &[Felt]) -> Result<(), HtmlTemplateFeil> {
     Ok(())
 }
 
-pub fn valider_tokens(html: &[u8], felter: &[Felt]) -> Result<(), HtmlTemplateFeil> {
+pub fn valider_tokens(html: &[u8], felter: &[TemplateFelt]) -> Result<(), HtmlTemplateFeil> {
     let tokens = scan_tokens(html)?;
     valider_felter(felter)?;
 
-    let deklarerte: HashSet<Felt> = felter.iter().copied().collect();
+    let deklarerte: HashSet<TemplateFelt> = felter.iter().copied().collect();
 
     for token in &tokens {
         if !deklarerte.contains(token) {
@@ -67,7 +84,7 @@ pub fn valider_tokens(html: &[u8], felter: &[Felt]) -> Result<(), HtmlTemplateFe
 
 pub fn substituer_tokens(
     html: &[u8],
-    felter: &[Felt],
+    felter: &[TemplateFelt],
     verdier: &FeltVerdier<'_>,
 ) -> Result<Vec<u8>, HtmlTemplateFeil> {
     valider_tokens(html, felter)?;
@@ -83,17 +100,17 @@ pub fn substituer_tokens(
     let html = std::str::from_utf8(html).map_err(|_| HtmlTemplateFeil::UgyldigUtf8)?;
     let mut rendered = html.to_string();
 
-    if felter.contains(&Felt::Saksnummer) {
+    if felter.contains(&TemplateFelt::Saksnummer) {
         let saksnummer = verdier
             .saksnummer
             .ok_or(HtmlTemplateFeil::ManglerSaksnummer)?;
-        rendered = rendered.replace(SAKSNUMMER_TOKEN, saksnummer);
+        rendered = rendered.replace(TemplateFelt::Saksnummer.token_pattern(), saksnummer);
     }
 
     Ok(rendered.into_bytes())
 }
 
-fn scan_tokens(html: &[u8]) -> Result<HashSet<Felt>, HtmlTemplateFeil> {
+fn scan_tokens(html: &[u8]) -> Result<HashSet<TemplateFelt>, HtmlTemplateFeil> {
     if html.len() > MAX_TEMPLATE_BYTES {
         return Err(HtmlTemplateFeil::ForStor);
     }
@@ -110,7 +127,7 @@ fn scan_tokens(html: &[u8]) -> Result<HashSet<Felt>, HtmlTemplateFeil> {
 
         let token = after_start[..end].trim();
         let felt = match token {
-            "saksnummer" => Felt::Saksnummer,
+            "saksnummer" => TemplateFelt::Saksnummer,
             _ => return Err(HtmlTemplateFeil::UkjentToken),
         };
 
@@ -129,10 +146,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn template_field_token_literals_are_stable() {
+        assert_eq!(TemplateFelt::Saksnummer.as_token(), "saksnummer");
+        assert_eq!(TemplateFelt::Saksnummer.token_pattern(), "{{saksnummer}}");
+    }
+
+    #[test]
     fn substituerer_saksnummer() {
         let result = substituer_tokens(
             b"<p>{{saksnummer}}</p>",
-            &[Felt::Saksnummer],
+            &[TemplateFelt::Saksnummer],
             &FeltVerdier {
                 saksnummer: Some("2026/42"),
             },
@@ -144,38 +167,42 @@ mod tests {
 
     #[test]
     fn manglende_token_feiler() {
-        let err = valider_tokens(b"<p>ingen token</p>", &[Felt::Saksnummer]).unwrap_err();
+        let err = valider_tokens(b"<p>ingen token</p>", &[TemplateFelt::Saksnummer]).unwrap_err();
         assert_eq!(err, HtmlTemplateFeil::ManglerToken);
     }
 
     #[test]
     fn ekstra_token_feiler() {
-        let err = valider_tokens(b"{{saksnummer}} {{ukjent}}", &[Felt::Saksnummer]).unwrap_err();
+        let err =
+            valider_tokens(b"{{saksnummer}} {{ukjent}}", &[TemplateFelt::Saksnummer]).unwrap_err();
         assert_eq!(err, HtmlTemplateFeil::UkjentToken);
     }
 
     #[test]
     fn duplikate_tokens_feiler() {
-        let err =
-            valider_tokens(b"{{saksnummer}} {{saksnummer}}", &[Felt::Saksnummer]).unwrap_err();
+        let err = valider_tokens(
+            b"{{saksnummer}} {{saksnummer}}",
+            &[TemplateFelt::Saksnummer],
+        )
+        .unwrap_err();
         assert_eq!(err, HtmlTemplateFeil::DuplikatToken);
     }
 
     #[test]
     fn store_inputs_avvises() {
         let html = vec![b'a'; MAX_TEMPLATE_BYTES + 1];
-        let err = valider_tokens(&html, &[Felt::Saksnummer]).unwrap_err();
+        let err = valider_tokens(&html, &[TemplateFelt::Saksnummer]).unwrap_err();
         assert_eq!(err, HtmlTemplateFeil::ForStor);
     }
 
     #[test]
     fn readiness_krever_saksnummer() {
         assert!(!er_felter_klare(
-            &[Felt::Saksnummer],
+            &[TemplateFelt::Saksnummer],
             &FeltVerdier { saksnummer: None }
         ));
         assert!(er_felter_klare(
-            &[Felt::Saksnummer],
+            &[TemplateFelt::Saksnummer],
             &FeltVerdier {
                 saksnummer: Some("2026/1")
             }
@@ -233,13 +260,18 @@ mod tests {
 
     #[test]
     fn valider_felter_duplikat_felt_feiler() {
-        let err = valider_felter(&[Felt::Saksnummer, Felt::Saksnummer]).unwrap_err();
+        let err =
+            valider_felter(&[TemplateFelt::Saksnummer, TemplateFelt::Saksnummer]).unwrap_err();
         assert_eq!(err, HtmlTemplateFeil::DuplikatFelt);
     }
 
     #[test]
     fn duplikate_felter_feiler() {
-        let err = valider_tokens(b"<p>noe</p>", &[Felt::Saksnummer, Felt::Saksnummer]).unwrap_err();
+        let err = valider_tokens(
+            b"<p>noe</p>",
+            &[TemplateFelt::Saksnummer, TemplateFelt::Saksnummer],
+        )
+        .unwrap_err();
         assert_eq!(err, HtmlTemplateFeil::DuplikatFelt);
     }
 }

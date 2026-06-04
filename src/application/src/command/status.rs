@@ -1,8 +1,65 @@
 use domain::eksekvering::typer::{
-    status_event, CommandLifecycleContext, CommandLifecycleEvent, CommandStage, CommandStageStatus,
+    CommandLifecycleContext, CommandLifecycleEvent, CommandLifecycleMetadata, CommandStage,
+    CommandStageStatus, CommandStatus, CommandTypeCode, StatusErrorCode,
 };
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandStatus};
-use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
+
+use crate::command::{Command, CommandEnvelope};
+pub(crate) fn command_metadata(command: &Command) -> CommandTypeCode {
+    match command {
+        Command::OpprettSak(_) => CommandTypeCode::OpprettSak,
+        Command::OpprettInngaaendeJournalpost(_) => CommandTypeCode::OpprettInngaaendeJournalpost,
+        Command::OpprettUtgaaendeJournalpost(_) => CommandTypeCode::OpprettUtgaaendeJournalpost,
+        Command::OpprettInterntNotatJournalpost(_) => {
+            CommandTypeCode::OpprettInterntNotatJournalpost
+        }
+        Command::AvsluttSak(_) => CommandTypeCode::AvsluttSak,
+        Command::SettSaksansvarlig(_) => CommandTypeCode::SettSaksansvarlig,
+    }
+}
+
+pub trait StatusEventEnvelope {
+    fn command_id(&self) -> uuid::Uuid;
+    fn correlation_id(&self) -> Option<uuid::Uuid>;
+    fn command_type(&self) -> CommandTypeCode;
+}
+
+impl StatusEventEnvelope for CommandEnvelope<Command> {
+    fn command_id(&self) -> uuid::Uuid {
+        self.command_id
+    }
+
+    fn correlation_id(&self) -> Option<uuid::Uuid> {
+        self.correlation_id
+    }
+
+    fn command_type(&self) -> CommandTypeCode {
+        command_metadata(&self.payload)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn status_event(
+    envelope: &(impl StatusEventEnvelope + ?Sized),
+    status: CommandStatus,
+    stage: CommandStage,
+    stage_status: CommandStageStatus,
+    error_code: Option<StatusErrorCode>,
+    detail: Option<String>,
+    context: CommandLifecycleContext,
+    attempt: Option<u32>,
+) -> CommandLifecycleEvent {
+    CommandLifecycleEvent::new(
+        CommandLifecycleMetadata::new(envelope.command_id(), envelope.command_type()),
+        envelope.correlation_id(),
+        status,
+        stage,
+        stage_status,
+        error_code,
+        detail,
+        context,
+        attempt,
+    )
+}
 
 // Static outward messages for validation non-ok statuses
 const VALIDERT_BLOCKED_OUTWARD_MESSAGE: &str = "Request validation is waiting for prerequisites.";
@@ -30,7 +87,7 @@ fn outward_message(stage: CommandStage, stage_status: CommandStageStatus) -> &'s
 }
 
 pub fn mottatt_event(
-    envelope: &CommandEnvelope<Command>,
+    envelope: &(impl StatusEventEnvelope + ?Sized),
     context: CommandLifecycleContext,
 ) -> CommandLifecycleEvent {
     status_event(
@@ -50,7 +107,7 @@ pub fn mottatt_event(
 }
 
 pub fn validert_ok_event(
-    envelope: &CommandEnvelope<Command>,
+    envelope: &(impl StatusEventEnvelope + ?Sized),
     context: CommandLifecycleContext,
 ) -> CommandLifecycleEvent {
     status_event(
@@ -70,9 +127,9 @@ pub fn validert_ok_event(
 }
 
 pub fn validert_blocked_event(
-    envelope: &CommandEnvelope<Command>,
+    envelope: &(impl StatusEventEnvelope + ?Sized),
     detail: impl Into<String>,
-    error_code: Option<SkuffenStatusErrorCode>,
+    error_code: Option<StatusErrorCode>,
     context: CommandLifecycleContext,
 ) -> CommandLifecycleEvent {
     status_event(
@@ -80,7 +137,7 @@ pub fn validert_blocked_event(
         CommandStatus::Blocked,
         CommandStage::Validert,
         CommandStageStatus::Blocked,
-        error_code.or(Some(SkuffenStatusErrorCode::PrerequisitePending)),
+        error_code.or(Some(StatusErrorCode::PrerequisitePending)),
         Some(detail.into()),
         context,
         None,
@@ -89,9 +146,9 @@ pub fn validert_blocked_event(
 }
 
 pub fn validert_retrying_event(
-    envelope: &CommandEnvelope<Command>,
+    envelope: &(impl StatusEventEnvelope + ?Sized),
     detail: impl Into<String>,
-    error_code: Option<SkuffenStatusErrorCode>,
+    error_code: Option<StatusErrorCode>,
     context: CommandLifecycleContext,
 ) -> CommandLifecycleEvent {
     status_event(
@@ -99,7 +156,7 @@ pub fn validert_retrying_event(
         CommandStatus::Retrying,
         CommandStage::Validert,
         CommandStageStatus::Retrying,
-        error_code.or(Some(SkuffenStatusErrorCode::TemporaryUnavailable)),
+        error_code.or(Some(StatusErrorCode::TemporaryUnavailable)),
         Some(detail.into()),
         context,
         None,
@@ -108,9 +165,9 @@ pub fn validert_retrying_event(
 }
 
 pub fn validert_error_event(
-    envelope: &CommandEnvelope<Command>,
+    envelope: &(impl StatusEventEnvelope + ?Sized),
     detail: impl Into<String>,
-    error_code: Option<SkuffenStatusErrorCode>,
+    error_code: Option<StatusErrorCode>,
     context: CommandLifecycleContext,
 ) -> CommandLifecycleEvent {
     status_event(
@@ -118,7 +175,7 @@ pub fn validert_error_event(
         CommandStatus::Error,
         CommandStage::Validert,
         CommandStageStatus::Error,
-        error_code.or(Some(SkuffenStatusErrorCode::InvalidRequest)),
+        error_code.or(Some(StatusErrorCode::InvalidRequest)),
         Some(detail.into()),
         context,
         None,
@@ -127,7 +184,7 @@ pub fn validert_error_event(
 }
 
 pub fn utfores_venter_event(
-    envelope: &CommandEnvelope<Command>,
+    envelope: &(impl StatusEventEnvelope + ?Sized),
     context: CommandLifecycleContext,
     attempt: Option<u32>,
 ) -> CommandLifecycleEvent {
@@ -148,7 +205,7 @@ pub fn utfores_venter_event(
 }
 
 pub fn utfores_ok_event(
-    envelope: &CommandEnvelope<Command>,
+    envelope: &(impl StatusEventEnvelope + ?Sized),
     detail: Option<String>,
     context: CommandLifecycleContext,
     attempt: Option<u32>,
@@ -167,9 +224,9 @@ pub fn utfores_ok_event(
 }
 
 pub fn utfores_retrying_event(
-    envelope: &CommandEnvelope<Command>,
+    envelope: &(impl StatusEventEnvelope + ?Sized),
     detail: impl Into<String>,
-    error_code: Option<SkuffenStatusErrorCode>,
+    error_code: Option<StatusErrorCode>,
     context: CommandLifecycleContext,
     attempt: Option<u32>,
 ) -> CommandLifecycleEvent {
@@ -179,7 +236,7 @@ pub fn utfores_retrying_event(
         CommandStatus::Retrying,
         CommandStage::Utfores,
         CommandStageStatus::Retrying,
-        error_code.or(Some(SkuffenStatusErrorCode::TemporaryUnavailable)),
+        error_code.or(Some(StatusErrorCode::TemporaryUnavailable)),
         Some(detail.clone()),
         context,
         attempt,
@@ -191,9 +248,9 @@ pub fn utfores_retrying_event(
 }
 
 pub fn utfores_blocked_event(
-    envelope: &CommandEnvelope<Command>,
+    envelope: &(impl StatusEventEnvelope + ?Sized),
     detail: impl Into<String>,
-    error_code: Option<SkuffenStatusErrorCode>,
+    error_code: Option<StatusErrorCode>,
     context: CommandLifecycleContext,
     attempt: Option<u32>,
 ) -> CommandLifecycleEvent {
@@ -203,7 +260,7 @@ pub fn utfores_blocked_event(
         CommandStatus::Blocked,
         CommandStage::Utfores,
         CommandStageStatus::Blocked,
-        error_code.or(Some(SkuffenStatusErrorCode::PrerequisitePending)),
+        error_code.or(Some(StatusErrorCode::PrerequisitePending)),
         Some(detail.clone()),
         context,
         attempt,
@@ -215,9 +272,9 @@ pub fn utfores_blocked_event(
 }
 
 pub fn utfores_error_event(
-    envelope: &CommandEnvelope<Command>,
+    envelope: &(impl StatusEventEnvelope + ?Sized),
     detail: impl Into<String>,
-    error_code: Option<SkuffenStatusErrorCode>,
+    error_code: Option<StatusErrorCode>,
     context: CommandLifecycleContext,
     attempt: Option<u32>,
 ) -> CommandLifecycleEvent {
@@ -227,7 +284,7 @@ pub fn utfores_error_event(
         CommandStatus::Error,
         CommandStage::Utfores,
         CommandStageStatus::Error,
-        error_code.or(Some(SkuffenStatusErrorCode::ProcessingFailed)),
+        error_code.or(Some(StatusErrorCode::ProcessingFailed)),
         Some(detail.clone()),
         context,
         attempt,
@@ -241,21 +298,20 @@ pub fn utfores_error_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lib_schemas::skuffen::command::sak::{Arkivdel, OpprettSak};
-    use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
+    use crate::command::{Arkivdel, OpprettSakCommand};
     use uuid::Uuid;
 
     fn make_test_envelope() -> CommandEnvelope<Command> {
         CommandEnvelope {
             command_id: Uuid::new_v4(),
             correlation_id: Some(Uuid::new_v4()),
-            payload: Command::OpprettSak(OpprettSak {
+            payload: Command::OpprettSak(OpprettSakCommand {
                 client_reference: Uuid::new_v4(),
-                sakstittel: Sakstittel("Test sak".to_string()),
+                sakstittel: "Test sak".to_string(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
                 saksbehandler_id: "Z12345".to_string(),
                 saksbehandler_enhet: "42".to_string(),
-                ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
+                ordningsverdi: "123".to_string(),
                 tilgang: None,
             }),
         }

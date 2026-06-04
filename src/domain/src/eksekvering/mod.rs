@@ -3,4 +3,6 @@ pub mod html_template;
 pub mod id;
 pub mod tilstand;
 pub mod typer;
-pub mod validering;
+
+pub use html_template::TemplateFelt;
+pub use typer::{CommandStatus, StatusErrorCode};

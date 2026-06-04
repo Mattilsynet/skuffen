@@ -1,7 +1,6 @@
 use application::command::ports::id_mapping_port::{IdMappingRepository, MappingEntityType};
 use async_trait::async_trait;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
-use lib_schemas::skuffen::command::commands::Command;
 use sqlx::postgres::PgPool;
 use uuid::Uuid;
 
@@ -36,7 +35,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
         command_id: Uuid,
         client_reference: Uuid,
         skuffen_id: SkuffenSakId,
-        command: &Command,
+        entity_type: MappingEntityType,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
         let skuffen_id = Uuid::from(skuffen_id);
@@ -80,14 +79,7 @@ impl IdMappingRepository for PostgresIdMappingRepository {
             return Ok(());
         }
 
-        let entity_type = match command {
-            Command::OpprettSak(_) | Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => {
-                "sak"
-            }
-            Command::OpprettInngåendeJournalpost(_)
-            | Command::OpprettUtgåendeJournalpost(_)
-            | Command::OpprettInterntNotatJournalpost(_) => "journalpost",
-        };
+        let entity_type = entity_type.as_code();
 
         // Insert into id_mapping.
         // We now have distinct client_reference and command_id.

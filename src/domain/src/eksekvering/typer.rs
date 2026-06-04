@@ -1,19 +1,46 @@
 use chrono::Utc;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope, CommandStatus};
-use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandEntityType {
-    Sak,
-    Journalpost,
+pub enum CommandStatus {
+    Pending,
+    Ok,
+    Blocked,
+    Retrying,
+    Error,
 }
 
-impl CommandEntityType {
+impl CommandStatus {
     pub fn as_code(self) -> &'static str {
         match self {
-            Self::Sak => "sak",
-            Self::Journalpost => "journalpost",
+            Self::Pending => "pending",
+            Self::Ok => "ok",
+            Self::Blocked => "blocked",
+            Self::Retrying => "retrying",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusErrorCode {
+    InvalidRequest,
+    NotFound,
+    Conflict,
+    PrerequisitePending,
+    TemporaryUnavailable,
+    ProcessingFailed,
+}
+
+impl StatusErrorCode {
+    pub fn as_code(self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "invalid_request",
+            Self::NotFound => "not_found",
+            Self::Conflict => "conflict",
+            Self::PrerequisitePending => "prerequisite_pending",
+            Self::TemporaryUnavailable => "temporary_unavailable",
+            Self::ProcessingFailed => "processing_failed",
         }
     }
 }
@@ -45,19 +72,13 @@ impl CommandTypeCode {
 pub struct CommandLifecycleMetadata {
     pub command_id: Uuid,
     pub command_type: CommandTypeCode,
-    pub entity_type: CommandEntityType,
 }
 
 impl CommandLifecycleMetadata {
-    pub fn new(
-        command_id: Uuid,
-        command_type: CommandTypeCode,
-        entity_type: CommandEntityType,
-    ) -> Self {
+    pub fn new(command_id: Uuid, command_type: CommandTypeCode) -> Self {
         Self {
             command_id,
             command_type,
-            entity_type,
         }
     }
 }
@@ -126,14 +147,13 @@ pub struct CommandLifecycleEvent {
     pub command_id: Uuid,
     pub correlation_id: Option<Uuid>,
     pub command_type: CommandTypeCode,
-    pub entity_type: CommandEntityType,
     pub status: CommandStatus,
     pub stage: CommandStage,
     pub stage_status: CommandStageStatus,
     pub terminal: bool,
     pub message: String,
     pub outward_message: Option<String>,
-    pub error_code: Option<SkuffenStatusErrorCode>,
+    pub error_code: Option<StatusErrorCode>,
     pub detail: Option<String>,
     pub context: CommandLifecycleContext,
     pub attempt: Option<u32>,
@@ -148,7 +168,7 @@ impl CommandLifecycleEvent {
         status: CommandStatus,
         stage: CommandStage,
         stage_status: CommandStageStatus,
-        error_code: Option<SkuffenStatusErrorCode>,
+        error_code: Option<StatusErrorCode>,
         detail: Option<String>,
         context: CommandLifecycleContext,
         attempt: Option<u32>,
@@ -157,7 +177,6 @@ impl CommandLifecycleEvent {
             command_id: metadata.command_id,
             correlation_id,
             command_type: metadata.command_type,
-            entity_type: metadata.entity_type,
             status,
             stage,
             stage_status,
@@ -264,66 +283,6 @@ pub fn is_terminal(stage: CommandStage, stage_status: CommandStageStatus) -> boo
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn status_event(
-    envelope: &CommandEnvelope<Command>,
-    status: CommandStatus,
-    stage: CommandStage,
-    stage_status: CommandStageStatus,
-    error_code: Option<SkuffenStatusErrorCode>,
-    detail: Option<String>,
-    context: CommandLifecycleContext,
-    attempt: Option<u32>,
-) -> CommandLifecycleEvent {
-    let (command_type, entity_type) = command_metadata(&envelope.payload);
-
-    CommandLifecycleEvent::new(
-        CommandLifecycleMetadata::new(envelope.command_id, command_type, entity_type),
-        envelope.correlation_id,
-        status,
-        stage,
-        stage_status,
-        error_code,
-        detail,
-        context,
-        attempt,
-    )
-}
-
-pub fn command_metadata(command: &Command) -> (CommandTypeCode, CommandEntityType) {
-    match command {
-        Command::OpprettSak(_) => (CommandTypeCode::OpprettSak, CommandEntityType::Sak),
-        Command::OpprettInngåendeJournalpost(_) => (
-            CommandTypeCode::OpprettInngaaendeJournalpost,
-            CommandEntityType::Journalpost,
-        ),
-        Command::OpprettUtgåendeJournalpost(_) => (
-            CommandTypeCode::OpprettUtgaaendeJournalpost,
-            CommandEntityType::Journalpost,
-        ),
-        Command::OpprettInterntNotatJournalpost(_) => (
-            CommandTypeCode::OpprettInterntNotatJournalpost,
-            CommandEntityType::Journalpost,
-        ),
-        Command::AvsluttSak(_) => (CommandTypeCode::AvsluttSak, CommandEntityType::Sak),
-        Command::SettSaksansvarlig(_) => {
-            (CommandTypeCode::SettSaksansvarlig, CommandEntityType::Sak)
-        }
-    }
-}
-
-pub fn done_subject(command: &CommandEnvelope<Command>) -> (String, Uuid) {
-    let (_, entity_type) = command_metadata(&command.payload);
-    (
-        format!(
-            "arkiv.command.done.{}.{}",
-            entity_type.as_code(),
-            command.command_id
-        ),
-        command.command_id,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,11 +290,7 @@ mod tests {
     #[test]
     fn mottatt_uses_stage_name_as_message() {
         let event = CommandLifecycleEvent::new(
-            CommandLifecycleMetadata::new(
-                Uuid::new_v4(),
-                CommandTypeCode::OpprettSak,
-                CommandEntityType::Sak,
-            ),
+            CommandLifecycleMetadata::new(Uuid::new_v4(), CommandTypeCode::OpprettSak),
             None,
             CommandStatus::Pending,
             CommandStage::Mottatt,
@@ -353,11 +308,7 @@ mod tests {
     fn retrying_message_id_includes_attempt() {
         let command_id = Uuid::new_v4();
         let event = CommandLifecycleEvent::new(
-            CommandLifecycleMetadata::new(
-                command_id,
-                CommandTypeCode::OpprettSak,
-                CommandEntityType::Sak,
-            ),
+            CommandLifecycleMetadata::new(command_id, CommandTypeCode::OpprettSak),
             None,
             CommandStatus::Retrying,
             CommandStage::Utfores,
@@ -373,5 +324,76 @@ mod tests {
             event.message_id(),
             format!("status:{command_id}:utfores:retrying:2")
         );
+    }
+
+    #[test]
+    fn command_status_literals_are_pinned() {
+        let values = [
+            (CommandStatus::Pending, "pending"),
+            (CommandStatus::Ok, "ok"),
+            (CommandStatus::Blocked, "blocked"),
+            (CommandStatus::Retrying, "retrying"),
+            (CommandStatus::Error, "error"),
+        ];
+
+        for (status, code) in values {
+            assert_eq!(status.as_code(), code);
+        }
+    }
+
+    #[test]
+    fn status_error_code_literals_are_pinned() {
+        let values = [
+            (StatusErrorCode::InvalidRequest, "invalid_request"),
+            (StatusErrorCode::NotFound, "not_found"),
+            (StatusErrorCode::Conflict, "conflict"),
+            (StatusErrorCode::PrerequisitePending, "prerequisite_pending"),
+            (
+                StatusErrorCode::TemporaryUnavailable,
+                "temporary_unavailable",
+            ),
+            (StatusErrorCode::ProcessingFailed, "processing_failed"),
+        ];
+
+        for (error_code, code) in values {
+            assert_eq!(error_code.as_code(), code);
+        }
+    }
+
+    #[test]
+    fn command_type_code_literals_are_pinned_for_persistence_and_routing() {
+        let values = [
+            (CommandTypeCode::OpprettSak, "opprett_sak"),
+            (
+                CommandTypeCode::OpprettInngaaendeJournalpost,
+                "opprett_inngaaende_journalpost",
+            ),
+            (
+                CommandTypeCode::OpprettUtgaaendeJournalpost,
+                "opprett_utgaaende_journalpost",
+            ),
+            (
+                CommandTypeCode::OpprettInterntNotatJournalpost,
+                "opprett_internt_notat_journalpost",
+            ),
+            (CommandTypeCode::AvsluttSak, "avslutt_sak"),
+            (CommandTypeCode::SettSaksansvarlig, "sett_saksansvarlig"),
+        ];
+
+        for (command_type, code) in values {
+            assert_eq!(command_type.as_code(), code);
+        }
+    }
+
+    #[test]
+    fn lifecycle_context_is_empty_only_without_identifiers() {
+        let empty = CommandLifecycleContext::default();
+        assert!(empty.is_empty());
+
+        let with_sak = CommandLifecycleContext {
+            sak_client_reference: Some(Uuid::new_v4().to_string()),
+            ..CommandLifecycleContext::default()
+        };
+        assert!(!with_sak.is_empty());
     }
 }

@@ -1,8 +1,7 @@
 use crate::command::Command;
-use crate::eksekvering::html_template::{er_felter_klare, FeltVerdier};
+use crate::eksekvering::html_template::{er_felter_klare, FeltVerdier, TemplateFelt};
 use crate::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use crate::eksekvering::typer::CommandTypeCode;
-use lib_schemas::skuffen::dokument::Felt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JournalpostType {
@@ -92,7 +91,7 @@ pub enum DokumentKildeTilstand {
     Bytes,
     HtmlTemplate {
         mal_referanse: uuid::Uuid,
-        felter: Vec<Felt>,
+        felter: Vec<TemplateFelt>,
         rendered_dokument_referanse: Option<uuid::Uuid>,
     },
 }
@@ -663,7 +662,7 @@ mod tests {
         }
     }
 
-    fn template_dok(tilstand: DokumentTilstand, felter: Vec<Felt>) -> DokumentMedTilstand {
+    fn template_dok(tilstand: DokumentTilstand, felter: Vec<TemplateFelt>) -> DokumentMedTilstand {
         DokumentMedTilstand {
             dokument_id: dok_id(),
             tilstand,
@@ -1256,7 +1255,7 @@ mod tests {
             false,
             vec![template_dok(
                 DokumentTilstand::AvventerRendring,
-                vec![Felt::Saksnummer],
+                vec![TemplateFelt::Saksnummer],
             )],
         );
         let mut sak = opprettet_sak_med_saksnummer(vec![jp]);
@@ -1308,7 +1307,7 @@ mod tests {
             false,
             vec![template_dok(
                 DokumentTilstand::AvventerRendring,
-                vec![Felt::Saksnummer],
+                vec![TemplateFelt::Saksnummer],
             )],
         );
         let mut sak = opprettet_sak_med_saksnummer(vec![jp]);
@@ -1361,7 +1360,7 @@ mod tests {
             false,
             vec![template_dok(
                 DokumentTilstand::AvventerRendring,
-                vec![Felt::Saksnummer],
+                vec![TemplateFelt::Saksnummer],
             )],
         );
         let sak = opprettet_sak_med_saksnummer(vec![jp]);
@@ -1387,7 +1386,7 @@ mod tests {
             false,
             vec![template_dok(
                 DokumentTilstand::AvventerRendring,
-                vec![Felt::Saksnummer],
+                vec![TemplateFelt::Saksnummer],
             )],
         );
         let sak = opprettet_sak_med_saksnummer(vec![jp]);
@@ -1407,7 +1406,10 @@ mod tests {
     #[test]
     fn html_template_med_rendered_referanse_rendres_ferdig_paa_retry() {
         let jp_id_1 = jp_id();
-        let mut dokument = template_dok(DokumentTilstand::AvventerRendring, vec![Felt::Saksnummer]);
+        let mut dokument = template_dok(
+            DokumentTilstand::AvventerRendring,
+            vec![TemplateFelt::Saksnummer],
+        );
         if let DokumentKildeTilstand::HtmlTemplate {
             rendered_dokument_referanse,
             ..
@@ -1444,7 +1446,10 @@ mod tests {
             JournalpostTilstand::IkkeRealisert,
             JournalpostType::InterntNotat,
             false,
-            vec![template_dok(DokumentTilstand::Ok, vec![Felt::Saksnummer])],
+            vec![template_dok(
+                DokumentTilstand::Ok,
+                vec![TemplateFelt::Saksnummer],
+            )],
         );
         let sak = opprettet_sak_med_saksnummer(vec![jp]);
 
@@ -1470,7 +1475,10 @@ mod tests {
             false,
             vec![
                 dok(DokumentTilstand::Ok),
-                template_dok(DokumentTilstand::AvventerRendring, vec![Felt::Saksnummer]),
+                template_dok(
+                    DokumentTilstand::AvventerRendring,
+                    vec![TemplateFelt::Saksnummer],
+                ),
             ],
         );
         let sak = opprettet_sak_med_saksnummer(vec![jp]);
@@ -1497,7 +1505,10 @@ mod tests {
             false,
             vec![
                 dok(DokumentTilstand::Ok),
-                template_dok(DokumentTilstand::AvventerRendring, vec![Felt::Saksnummer]),
+                template_dok(
+                    DokumentTilstand::AvventerRendring,
+                    vec![TemplateFelt::Saksnummer],
+                ),
             ],
         );
         let sak = opprettet_sak_med_saksnummer(vec![jp]);
@@ -1524,7 +1535,7 @@ mod tests {
             false,
             vec![template_dok(
                 DokumentTilstand::AvventerRendring,
-                vec![Felt::Saksnummer],
+                vec![TemplateFelt::Saksnummer],
             )],
         );
         let sak = opprettet_sak_med_saksnummer(vec![jp]);

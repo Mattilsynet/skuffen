@@ -1,13 +1,13 @@
 use anyhow::{Context, anyhow};
 use application::command::ports::entity_tilstand_port::EntityTilstandRepository;
 use async_trait::async_trait;
+use domain::eksekvering::html_template::TemplateFelt;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
     DokumentKildeTilstand, DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter,
     JournalpostTilstand, SakMedBarn, SakTilstand, Saksansvarlig,
 };
-use lib_schemas::skuffen::dokument::Felt;
 use sqlx::Row;
 use sqlx::postgres::PgPool;
 use std::collections::HashMap;
@@ -98,6 +98,21 @@ fn journalposttype_from_db(s: &str) -> Result<JournalpostType, anyhow::Error> {
         "X" => Ok(JournalpostType::InterntNotat),
         other => Err(anyhow!("Ukjent journalposttype: {other}")),
     }
+}
+
+fn template_felter_to_db(felter: &[TemplateFelt]) -> Vec<&'static str> {
+    felter.iter().map(|felt| felt.as_token()).collect()
+}
+
+fn template_felter_from_db(value: serde_json::Value) -> Result<Vec<TemplateFelt>, anyhow::Error> {
+    let felter: Vec<String> = serde_json::from_value(value).context("deserialize felter")?;
+    felter
+        .into_iter()
+        .map(|felt| match felt.as_str() {
+            "Saksnummer" | "saksnummer" => Ok(TemplateFelt::Saksnummer),
+            other => Err(anyhow!("Ukjent template_felt: {other}")),
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -310,11 +325,11 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
         journalpost_id: SkuffenJournalpostId,
         tilstand: DokumentTilstand,
         mal_referanse: Option<Uuid>,
-        felter: Vec<Felt>,
+        felter: Vec<TemplateFelt>,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
         let felter_json = if mal_referanse.is_some() {
-            Some(serde_json::to_value(&felter).context("serialize felter")?)
+            Some(serde_json::to_value(template_felter_to_db(&felter)).context("serialize felter")?)
         } else {
             None
         };
@@ -495,7 +510,7 @@ impl EntityTilstandRepository for PostgresEntityTilstandStore {
                     let rendered_dokument_referanse: Option<Uuid> =
                         row.get("rendered_dokument_referanse");
                     let felter = match felter_json {
-                        Some(value) => serde_json::from_value(value).unwrap_or_default(),
+                        Some(value) => template_felter_from_db(value).unwrap_or_default(),
                         None => Vec::new(),
                     };
                     let kilde = if let Some(mal_referanse) = mal_referanse {

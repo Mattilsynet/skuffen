@@ -2,6 +2,9 @@ use application::command::ports::command_execution_port::{
     CommandExecutionRepository, EksekveringKommando, EksekveringsregistreringResultat,
     NyKommandoEksekvering,
 };
+use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope as WireCommandEnvelope};
+
+use crate::command::wire_mapper::{map_application_envelope_to_wire, map_wire_envelope};
 use async_trait::async_trait;
 use domain::eksekvering::id::SkuffenSakId;
 use domain::eksekvering::typer::CommandTypeCode;
@@ -54,7 +57,8 @@ impl CommandExecutionRepository for PostgresExecutionStore {
     ) -> Result<EksekveringsregistreringResultat, anyhow::Error> {
         let mut tx = self.pool.begin().await?;
 
-        let payload = serde_json::to_value(&ny.envelope)?;
+        let wire_envelope = map_application_envelope_to_wire(&ny.envelope);
+        let payload = serde_json::to_value(&wire_envelope)?;
         let result = sqlx::query(
             r#"
             INSERT INTO command_execution (
@@ -162,7 +166,7 @@ impl CommandExecutionRepository for PostgresExecutionStore {
 
         row.map(
             |(command_id, payload, attempt_no, utfores_venter_publisert)| {
-                let envelope = serde_json::from_value(payload)?;
+                let envelope = payload_to_application_envelope(payload)?;
                 Ok(EksekveringKommando {
                     command_id,
                     envelope,
@@ -477,7 +481,7 @@ impl CommandExecutionRepository for PostgresExecutionStore {
         for (command_id, payload, attempt_no, utfores_venter_publisert) in rows {
             result.push(EksekveringKommando {
                 command_id,
-                envelope: serde_json::from_value(payload)?,
+                envelope: payload_to_application_envelope(payload)?,
                 attempt_no,
                 utfores_venter_publisert,
             });
@@ -841,6 +845,260 @@ fn error_category_for_detail(detail: &str) -> &'static str {
 mod tests {
     use super::error_category_for_detail;
     use domain::eksekvering::tilstand::{DomainViolation, DomainViolation::*};
+    use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+    use lib_schemas::skuffen::command::journalpost::{
+        JournalpostCommon, OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost,
+        OpprettUgåendeJournalpost,
+    };
+    use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettSaksansvarlig};
+    use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
+    use lib_schemas::skuffen::query::queries::SakKey;
+    use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
+    use serde_json::{Value, json};
+    use uuid::Uuid;
+
+    fn fixed_uuid(suffix: u16) -> Uuid {
+        Uuid::parse_str(&format!("123e4567-e89b-12d3-a456-42661417{suffix:04}"))
+            .expect("valid fixed uuid")
+    }
+
+    fn envelope(command_id: Uuid, payload: Command) -> CommandEnvelope<Command> {
+        CommandEnvelope {
+            command_id,
+            correlation_id: Some(fixed_uuid(900)),
+            payload,
+        }
+    }
+
+    fn sak_key() -> SakKey {
+        SakKey::ClientReference(fixed_uuid(1))
+    }
+
+    fn dokument() -> Dokument {
+        Dokument {
+            client_reference: fixed_uuid(10),
+            tittel: "Vedlegg".to_string(),
+            form: Dokumentform::Bytes {
+                dokument_referanse: fixed_uuid(11),
+                filtype: "PDF".to_string(),
+            },
+        }
+    }
+
+    fn journalpost_common(client_reference: Uuid) -> JournalpostCommon {
+        JournalpostCommon {
+            client_reference,
+            tittel: "Journalpost".to_string(),
+            dokument_dato: "2026-01-01".to_string(),
+            saksbehandler: "Z12345".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            tilgang: None,
+            dokumenter: vec![dokument()],
+            sak_key: sak_key(),
+            kildesystem: None,
+        }
+    }
+
+    fn assert_persisted_payload_json(envelope: CommandEnvelope<Command>, expected: Value) {
+        let persisted_payload = serde_json::to_value(&envelope).unwrap();
+        assert_eq!(persisted_payload, expected);
+
+        let decoded: CommandEnvelope<Command> = serde_json::from_value(expected.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), expected);
+    }
+
+    #[test]
+    fn command_execution_payload_json_is_pinned_for_all_command_variants() {
+        assert_persisted_payload_json(
+            envelope(
+                fixed_uuid(100),
+                Command::OpprettSak(OpprettSak {
+                    client_reference: fixed_uuid(1),
+                    sakstittel: Sakstittel("Test sak".to_string()),
+                    arkivdel: Arkivdel::Tilsynsdivisjonene,
+                    saksbehandler_id: "Z12345".to_string(),
+                    saksbehandler_enhet: "42".to_string(),
+                    ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
+                    tilgang: None,
+                }),
+            ),
+            json!({
+                "command_id": "123e4567-e89b-12d3-a456-426614170100",
+                "correlation_id": "123e4567-e89b-12d3-a456-426614170900",
+                "payload": {
+                    "OpprettSak": {
+                        "client_reference": "123e4567-e89b-12d3-a456-426614170001",
+                        "sakstittel": "Test sak",
+                        "arkivdel": "Tilsynsdivisjonene",
+                        "saksbehandler_id": "Z12345",
+                        "saksbehandler_enhet": "42",
+                        "ordningsverdi": "123",
+                        "tilgang": null
+                    }
+                }
+            }),
+        );
+
+        assert_persisted_payload_json(
+            envelope(
+                fixed_uuid(101),
+                Command::AvsluttSak(AvsluttSak { sak_key: sak_key() }),
+            ),
+            json!({
+                "command_id": "123e4567-e89b-12d3-a456-426614170101",
+                "correlation_id": "123e4567-e89b-12d3-a456-426614170900",
+                "payload": {
+                    "AvsluttSak": {
+                        "sak_key": {
+                            "type": "clientReference",
+                            "value": "123e4567-e89b-12d3-a456-426614170001"
+                        }
+                    }
+                }
+            }),
+        );
+
+        assert_persisted_payload_json(
+            envelope(
+                fixed_uuid(102),
+                Command::SettSaksansvarlig(SettSaksansvarlig {
+                    sak_key: sak_key(),
+                    saksbehandler_id: "Z12345".to_string(),
+                    saksbehandler_enhet: "42".to_string(),
+                }),
+            ),
+            json!({
+                "command_id": "123e4567-e89b-12d3-a456-426614170102",
+                "correlation_id": "123e4567-e89b-12d3-a456-426614170900",
+                "payload": {
+                    "SettSaksansvarlig": {
+                        "sak_key": {
+                            "type": "clientReference",
+                            "value": "123e4567-e89b-12d3-a456-426614170001"
+                        },
+                        "saksbehandler_id": "Z12345",
+                        "saksbehandler_enhet": "42"
+                    }
+                }
+            }),
+        );
+
+        assert_persisted_payload_json(
+            envelope(
+                fixed_uuid(200),
+                Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+                    felles: journalpost_common(fixed_uuid(2)),
+                    avsender: "Avsender".to_string(),
+                    mottaker: None,
+                }),
+            ),
+            json!({
+                "command_id": "123e4567-e89b-12d3-a456-426614170200",
+                "correlation_id": "123e4567-e89b-12d3-a456-426614170900",
+                "payload": {
+                    "OpprettInngåendeJournalpost": {
+                        "client_reference": "123e4567-e89b-12d3-a456-426614170002",
+                        "tittel": "Journalpost",
+                        "dokument_dato": "2026-01-01",
+                        "saksbehandler": "Z12345",
+                        "saksbehandler_enhet": "42",
+                        "dokumenter": [{
+                            "client_reference": "123e4567-e89b-12d3-a456-426614170010",
+                            "tittel": "Vedlegg",
+                            "form": {
+                                "Bytes": {
+                                    "dokument_referanse": "123e4567-e89b-12d3-a456-426614170011",
+                                    "filtype": "PDF"
+                                }
+                            }
+                        }],
+                        "sak_key": {
+                            "type": "clientReference",
+                            "value": "123e4567-e89b-12d3-a456-426614170001"
+                        },
+                        "avsender": "Avsender",
+                        "mottaker": null
+                    }
+                }
+            }),
+        );
+
+        assert_persisted_payload_json(
+            envelope(
+                fixed_uuid(201),
+                Command::OpprettUtgåendeJournalpost(OpprettUgåendeJournalpost {
+                    felles: journalpost_common(fixed_uuid(3)),
+                    avsender: Some("Avsender".to_string()),
+                    mottaker: "Mottaker".to_string(),
+                }),
+            ),
+            json!({
+                "command_id": "123e4567-e89b-12d3-a456-426614170201",
+                "correlation_id": "123e4567-e89b-12d3-a456-426614170900",
+                "payload": {
+                    "OpprettUtgåendeJournalpost": {
+                        "client_reference": "123e4567-e89b-12d3-a456-426614170003",
+                        "tittel": "Journalpost",
+                        "dokument_dato": "2026-01-01",
+                        "saksbehandler": "Z12345",
+                        "saksbehandler_enhet": "42",
+                        "dokumenter": [{
+                            "client_reference": "123e4567-e89b-12d3-a456-426614170010",
+                            "tittel": "Vedlegg",
+                            "form": {
+                                "Bytes": {
+                                    "dokument_referanse": "123e4567-e89b-12d3-a456-426614170011",
+                                    "filtype": "PDF"
+                                }
+                            }
+                        }],
+                        "sak_key": {
+                            "type": "clientReference",
+                            "value": "123e4567-e89b-12d3-a456-426614170001"
+                        },
+                        "avsender": "Avsender",
+                        "mottaker": "Mottaker"
+                    }
+                }
+            }),
+        );
+
+        assert_persisted_payload_json(
+            envelope(
+                fixed_uuid(202),
+                Command::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
+                    felles: journalpost_common(fixed_uuid(4)),
+                }),
+            ),
+            json!({
+                "command_id": "123e4567-e89b-12d3-a456-426614170202",
+                "correlation_id": "123e4567-e89b-12d3-a456-426614170900",
+                "payload": {
+                    "OpprettInterntNotatJournalpost": {
+                        "client_reference": "123e4567-e89b-12d3-a456-426614170004",
+                        "tittel": "Journalpost",
+                        "dokument_dato": "2026-01-01",
+                        "saksbehandler": "Z12345",
+                        "saksbehandler_enhet": "42",
+                        "dokumenter": [{
+                            "client_reference": "123e4567-e89b-12d3-a456-426614170010",
+                            "tittel": "Vedlegg",
+                            "form": {
+                                "Bytes": {
+                                    "dokument_referanse": "123e4567-e89b-12d3-a456-426614170011",
+                                    "filtype": "PDF"
+                                }
+                            }
+                        }],
+                        "sak_key": {
+                            "type": "clientReference",
+                            "value": "123e4567-e89b-12d3-a456-426614170001"
+                        }
+                    }
+                }
+            }),
+        );
+    }
 
     #[test]
     fn klassifiserer_alle_domain_violation_details() {
@@ -938,6 +1196,13 @@ fn truncate_log_detail(detail: &str, max_chars: usize) -> String {
         value.push_str("...");
     }
     value
+}
+
+fn payload_to_application_envelope(
+    payload: serde_json::Value,
+) -> Result<application::command::CommandEnvelope<application::command::Command>, anyhow::Error> {
+    let wire_envelope: WireCommandEnvelope<Command> = serde_json::from_value(payload)?;
+    Ok(map_wire_envelope(wire_envelope))
 }
 
 fn command_type_code(command_type: CommandTypeCode) -> &'static str {

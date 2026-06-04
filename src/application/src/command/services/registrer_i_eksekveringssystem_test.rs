@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use domain::eksekvering::execution::EksekveringStatus;
+use domain::eksekvering::html_template::TemplateFelt;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
@@ -9,12 +10,14 @@ use domain::eksekvering::tilstand::{
 use domain::eksekvering::typer::{
     CommandLifecycleContext, CommandLifecycleEvent, CommandStage, CommandStageStatus,
 };
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+use lib_schemas::skuffen::command::commands::{
+    Command as WireCommand, CommandEnvelope as WireCommandEnvelope,
+};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
 };
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettSaksansvarlig};
-use lib_schemas::skuffen::dokument::{Dokument, Dokumentform, Felt};
+use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
 use lib_schemas::skuffen::query::queries::SakKey;
 use lib_schemas::skuffen::sak::{Ordningsverdi, Saksnummer, Sakstittel};
 use std::collections::HashMap;
@@ -28,9 +31,11 @@ use crate::command::ports::command_execution_port::{
 use crate::command::ports::eksekvering_port::EksekveringStatusPublisher;
 use crate::command::ports::entity_tilstand_port::EntityTilstandRepository;
 use crate::command::ports::id_mapping_port::{IdMappingRepository, MappingEntityType};
-use crate::command::ports::registrer_i_eksekveringssystem_port::RegistrerIEksekveringssystemUseCase;
 use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
 use crate::command::services::registrer_i_eksekveringssystem::RegistrerIEksekveringssystemService;
+use crate::command::{
+    Command as ApplicationCommand, CommandEnvelope as ApplicationCommandEnvelope,
+};
 
 // ---------------------------------------------------------------------------
 // FakeEntityTilstandRepository
@@ -38,7 +43,14 @@ use crate::command::services::registrer_i_eksekveringssystem::RegistrerIEksekver
 
 type OpprettetSakRecord = (Uuid, Uuid);
 type OppdatertSakRecord = (Uuid, SakTilstand, Option<i64>, Option<String>);
-type OpprettetDokumentRecord = (Uuid, Uuid, DokumentTilstand, Option<Uuid>, Vec<Felt>, Uuid);
+type OpprettetDokumentRecord = (
+    Uuid,
+    Uuid,
+    DokumentTilstand,
+    Option<Uuid>,
+    Vec<TemplateFelt>,
+    Uuid,
+);
 type OppdatertSaksansvarligRecord = (Uuid, String, String);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -312,7 +324,7 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         journalpost_id: SkuffenJournalpostId,
         tilstand: DokumentTilstand,
         mal_referanse: Option<Uuid>,
-        felter: Vec<Felt>,
+        felter: Vec<TemplateFelt>,
         command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
         let mut data = self.data.lock().unwrap();
@@ -559,7 +571,7 @@ impl IdMappingRepository for FakeIdMappingRepository {
         _command_id: Uuid,
         _client_reference: Uuid,
         _skuffen_id: SkuffenSakId,
-        _command: &Command,
+        _entity_type: MappingEntityType,
         _arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
         Ok(())
@@ -702,7 +714,7 @@ struct FakeStatusContextResolver;
 impl CommandOutwardStatusProjector for FakeStatusContextResolver {
     async fn resolve_context(
         &self,
-        _envelope: &CommandEnvelope<Command>,
+        _envelope: &ApplicationCommandEnvelope<ApplicationCommand>,
     ) -> Result<CommandLifecycleContext, anyhow::Error> {
         Ok(CommandLifecycleContext::default())
     }
@@ -1188,11 +1200,14 @@ async fn registrerer_invalid_som_klar_og_publiserer_venter() {
 // Test helpers
 // ---------------------------------------------------------------------------
 
-fn make_journalpost_command(journalpost_id: Uuid, sak_key: SakKey) -> CommandEnvelope<Command> {
-    CommandEnvelope {
+fn make_journalpost_command(
+    journalpost_id: Uuid,
+    sak_key: SakKey,
+) -> ApplicationCommandEnvelope<ApplicationCommand> {
+    crate::command::test_support::map_wire_envelope(WireCommandEnvelope {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
-        payload: Command::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
+        payload: WireCommand::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
             felles: JournalpostCommon {
                 client_reference: journalpost_id,
                 tittel: "Internt notat".to_string(),
@@ -1212,14 +1227,16 @@ fn make_journalpost_command(journalpost_id: Uuid, sak_key: SakKey) -> CommandEnv
                 kildesystem: None,
             },
         }),
-    }
+    })
 }
 
-fn make_opprett_sak_command(sak_client_reference: Uuid) -> CommandEnvelope<Command> {
-    CommandEnvelope {
+fn make_opprett_sak_command(
+    sak_client_reference: Uuid,
+) -> ApplicationCommandEnvelope<ApplicationCommand> {
+    crate::command::test_support::map_wire_envelope(WireCommandEnvelope {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
-        payload: Command::OpprettSak(OpprettSak {
+        payload: WireCommand::OpprettSak(OpprettSak {
             client_reference: sak_client_reference,
             sakstittel: Sakstittel("Test sak".to_string()),
             ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
@@ -1228,31 +1245,31 @@ fn make_opprett_sak_command(sak_client_reference: Uuid) -> CommandEnvelope<Comma
             saksbehandler_enhet: "42".to_string(),
             tilgang: None,
         }),
-    }
+    })
 }
 
-fn make_avslutt_sak_command(sak_key: SakKey) -> CommandEnvelope<Command> {
-    CommandEnvelope {
+fn make_avslutt_sak_command(sak_key: SakKey) -> ApplicationCommandEnvelope<ApplicationCommand> {
+    crate::command::test_support::map_wire_envelope(WireCommandEnvelope {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
-        payload: Command::AvsluttSak(AvsluttSak { sak_key }),
-    }
+        payload: WireCommand::AvsluttSak(AvsluttSak { sak_key }),
+    })
 }
 
 fn make_sett_saksansvarlig_command(
     sak_key: SakKey,
     saksbehandler_id: &str,
     saksbehandler_enhet: &str,
-) -> CommandEnvelope<Command> {
-    CommandEnvelope {
+) -> ApplicationCommandEnvelope<ApplicationCommand> {
+    crate::command::test_support::map_wire_envelope(WireCommandEnvelope {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
-        payload: Command::SettSaksansvarlig(SettSaksansvarlig {
+        payload: WireCommand::SettSaksansvarlig(SettSaksansvarlig {
             sak_key,
             saksbehandler_id: saksbehandler_id.to_string(),
             saksbehandler_enhet: saksbehandler_enhet.to_string(),
         }),
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------

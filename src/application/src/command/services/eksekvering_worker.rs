@@ -3,6 +3,7 @@ use tokio::time::{sleep, Duration};
 
 use crate::command::ports::command_execution_port::CommandExecutionRepository;
 use crate::command::services::eksekver_kommando::{EksekverKommandoService, ExecutionOutcome};
+use crate::command::{Command, CommandEnvelope};
 
 pub struct EksekveringWorker {
     execution_repo: Box<dyn CommandExecutionRepository>,
@@ -43,9 +44,7 @@ impl EksekveringWorker {
     pub(crate) async fn execute_one(
         &self,
         command_id: uuid::Uuid,
-        envelope: lib_schemas::skuffen::command::commands::CommandEnvelope<
-            lib_schemas::skuffen::command::commands::Command,
-        >,
+        envelope: CommandEnvelope<Command>,
     ) -> anyhow::Result<()> {
         let attempt_no = self.execution_repo.marker_kjorer(command_id).await?;
         self.execution_repo

@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::tilstand::{planlegg_neste_handling, CommandStateDecision};
-use domain::eksekvering::typer::{command_metadata, done_subject};
-use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
+use domain::eksekvering::typer::StatusErrorCode;
 
 use crate::command::ports::command_execution_port::{
     CommandExecutionRepository, EksekveringKommando,
@@ -108,7 +107,7 @@ impl ReevaluerVentendeKommandoerService {
             })?;
 
         let sak_id = registration.sak_id();
-        let (command_type, _) = command_metadata(&kommando.envelope.payload);
+        let command_type = crate::command::status::command_metadata(&kommando.envelope.payload);
 
         let Some(sak_id) = sak_id else {
             self.execution_repo
@@ -178,15 +177,14 @@ impl ReevaluerVentendeKommandoerService {
         let event = utfores_error_event(
             &kommando.envelope,
             detalj,
-            Some(SkuffenStatusErrorCode::ProcessingFailed),
+            Some(StatusErrorCode::ProcessingFailed),
             context,
             Some((kommando.attempt_no.max(1)) as u32),
         );
         self.status_publisher.publiser_status(event).await?;
         if kommando.utfores_venter_publisert {
-            let (subject, _) = done_subject(&kommando.envelope);
             self.done_publisher
-                .publiser_done(&subject, &kommando.envelope)
+                .publiser_done(&kommando.envelope)
                 .await?;
         }
         Ok(())

@@ -1,13 +1,11 @@
-use domain::eksekvering::typer::CommandStageStatus;
-use lib_schemas::skuffen::command::commands::CommandStatus;
-use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
+use domain::eksekvering::typer::{CommandStageStatus, CommandStatus, StatusErrorCode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LifecycleDecision {
     pub status: CommandStatus,
     pub stage_status: CommandStageStatus,
     pub detail: Option<String>,
-    pub error_code: Option<SkuffenStatusErrorCode>,
+    pub error_code: Option<StatusErrorCode>,
 }
 
 impl LifecycleDecision {
@@ -20,7 +18,7 @@ impl LifecycleDecision {
         }
     }
 
-    pub fn blocked(detail: impl Into<String>, error_code: Option<SkuffenStatusErrorCode>) -> Self {
+    pub fn blocked(detail: impl Into<String>, error_code: Option<StatusErrorCode>) -> Self {
         Self {
             status: CommandStatus::Blocked,
             stage_status: CommandStageStatus::Blocked,
@@ -29,7 +27,7 @@ impl LifecycleDecision {
         }
     }
 
-    pub fn retrying(detail: impl Into<String>, error_code: Option<SkuffenStatusErrorCode>) -> Self {
+    pub fn retrying(detail: impl Into<String>, error_code: Option<StatusErrorCode>) -> Self {
         Self {
             status: CommandStatus::Retrying,
             stage_status: CommandStageStatus::Retrying,
@@ -38,7 +36,7 @@ impl LifecycleDecision {
         }
     }
 
-    pub fn error(detail: impl Into<String>, error_code: Option<SkuffenStatusErrorCode>) -> Self {
+    pub fn error(detail: impl Into<String>, error_code: Option<StatusErrorCode>) -> Self {
         Self {
             status: CommandStatus::Error,
             stage_status: CommandStageStatus::Error,

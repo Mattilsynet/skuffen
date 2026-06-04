@@ -2,16 +2,14 @@ use crate::command::media::MediaStore;
 use application::command::ports::eksekvering_port::{
     ArkivGateway, OpprettJournalpostResultat, Utsendingsvalg,
 };
+use application::command::{
+    Arkivdel, Command, CommandEnvelope, Dokument, Dokumentform, OpprettJournalpostCommand,
+};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use domain::eksekvering::tilstand::{
     DokumentKildeTilstand, DokumentMedTilstand, JournalpostMedDokumenter,
 };
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use lib_schemas::skuffen::command::journalpost::{
-    OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost, OpprettUgåendeJournalpost,
-};
-use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
 use sikri_client::domain::ny_sak::NySak;
 use sikri_client::dto::elements_avsender_mottaker::ElementsAvsenderMottaker;
 use sikri_client::dto::elements_dokument::ElementsDokument;
@@ -39,21 +37,16 @@ impl ArkivGateway for SikriArkivGateway {
         };
 
         let ny_sak = NySak {
-            sakstittel: data.sakstittel.to_string(),
+            sakstittel: data.sakstittel.clone(),
             arkivdel: match data.arkivdel {
-                lib_schemas::skuffen::command::sak::Arkivdel::Tilsynsdivisjonene => {
+                Arkivdel::Tilsynsdivisjonene => {
                     sikri_client::domain::ny_sak::Arkivdel::Tilsynsdivisjonene
                 }
-                lib_schemas::skuffen::command::sak::Arkivdel::Hovedkontoret => {
-                    sikri_client::domain::ny_sak::Arkivdel::Hovedkontoret
-                }
+                Arkivdel::Hovedkontoret => sikri_client::domain::ny_sak::Arkivdel::Hovedkontoret,
             },
             saksbehandler_id: data.saksbehandler_id.clone(),
             saksbehandler_enhet: data.saksbehandler_enhet.clone(),
-            ordningsverdi: format!("{:?}", data.ordningsverdi)
-                .trim_start_matches("Ordningsverdi(\"")
-                .trim_end_matches("\")")
-                .to_string(),
+            ordningsverdi: data.ordningsverdi.clone(),
             tilgang: data
                 .tilgang
                 .as_ref()
@@ -79,10 +72,10 @@ impl ArkivGateway for SikriArkivGateway {
         utsending: Option<Utsendingsvalg>,
     ) -> Result<OpprettJournalpostResultat, anyhow::Error> {
         let journalpost = match &command.payload {
-            Command::OpprettInngåendeJournalpost(data) => {
+            Command::OpprettInngaaendeJournalpost(data) => {
                 self.opprett_inngaende(data, journalpost).await?
             }
-            Command::OpprettUtgåendeJournalpost(data) => {
+            Command::OpprettUtgaaendeJournalpost(data) => {
                 self.opprett_utgaaende(data, journalpost, utsending).await?
             }
             Command::OpprettInterntNotatJournalpost(data) => {
@@ -146,7 +139,7 @@ impl ArkivGateway for SikriArkivGateway {
 impl SikriArkivGateway {
     async fn opprett_inngaende(
         &self,
-        data: &OpprettInngåendeJournalpost,
+        data: &OpprettJournalpostCommand,
         journalpost: &JournalpostMedDokumenter,
     ) -> Result<ElementsJournalpost, anyhow::Error> {
         let dokumenter = self
@@ -168,7 +161,7 @@ impl SikriArkivGateway {
             saksbehandler_enhet: Some(data.felles.saksbehandler_enhet.clone()),
             avsendere_mottakere: Some(vec![ElementsAvsenderMottaker {
                 er_mottaker: Some(false),
-                navn: Some(data.avsender.clone()),
+                navn: Some(data.avsender.clone().unwrap_or_default()),
                 forsendelsesmetode: None,
                 kopi: None,
                 unntatt_offentlighet: None,
@@ -191,7 +184,7 @@ impl SikriArkivGateway {
 
     async fn opprett_utgaaende(
         &self,
-        data: &OpprettUgåendeJournalpost,
+        data: &OpprettJournalpostCommand,
         journalpost: &JournalpostMedDokumenter,
         utsending: Option<Utsendingsvalg>,
     ) -> Result<ElementsJournalpost, anyhow::Error> {
@@ -220,7 +213,7 @@ impl SikriArkivGateway {
             saksbehandler_enhet: Some(data.felles.saksbehandler_enhet.clone()),
             avsendere_mottakere: Some(vec![ElementsAvsenderMottaker {
                 er_mottaker: Some(true),
-                navn: Some(data.mottaker.clone()),
+                navn: Some(data.mottaker.clone().unwrap_or_default()),
                 forsendelsesmetode,
                 kopi: None,
                 unntatt_offentlighet: None,
@@ -243,7 +236,7 @@ impl SikriArkivGateway {
 
     async fn opprett_internt_notat(
         &self,
-        data: &OpprettInterntNotatJournalpost,
+        data: &OpprettJournalpostCommand,
         journalpost: &JournalpostMedDokumenter,
     ) -> Result<ElementsJournalpost, anyhow::Error> {
         let dokumenter = self
@@ -323,8 +316,8 @@ impl SikriArkivGateway {
         dokument_id: uuid::Uuid,
     ) -> Result<&Dokument, anyhow::Error> {
         let dokumenter = match &command.payload {
-            Command::OpprettInngåendeJournalpost(data) => &data.felles.dokumenter,
-            Command::OpprettUtgåendeJournalpost(data) => &data.felles.dokumenter,
+            Command::OpprettInngaaendeJournalpost(data) => &data.felles.dokumenter,
+            Command::OpprettUtgaaendeJournalpost(data) => &data.felles.dokumenter,
             Command::OpprettInterntNotatJournalpost(data) => &data.felles.dokumenter,
             _ => return Err(anyhow::anyhow!("Ugyldig kommando for dokumentmapping")),
         };
@@ -402,18 +395,17 @@ fn bytes_form(dokument: &Dokument) -> Result<(uuid::Uuid, &str), anyhow::Error> 
 mod tests {
     use super::{SikriArkivGateway, hoveddokument_referanse};
     use crate::command::media::{MediaFile, MediaMetadata, MediaStore};
+    use application::command::{
+        Command, CommandEnvelope, Dokument, Dokumentform, JournalpostCommon,
+        OpprettJournalpostCommand, SakKey,
+    };
     use async_trait::async_trait;
+    use domain::eksekvering::html_template::TemplateFelt;
     use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId};
     use domain::eksekvering::tilstand::{
         DokumentKildeTilstand, DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter,
         JournalpostTilstand, JournalpostType,
     };
-    use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-    use lib_schemas::skuffen::command::journalpost::{
-        JournalpostCommon, OpprettInterntNotatJournalpost,
-    };
-    use lib_schemas::skuffen::dokument::{Dokument, Dokumentform, Felt};
-    use lib_schemas::skuffen::query::queries::SakKey;
     use std::collections::HashMap;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -608,7 +600,7 @@ mod tests {
                         tilstand: DokumentTilstand::Ok,
                         kilde: DokumentKildeTilstand::HtmlTemplate {
                             mal_referanse: *mal_referanse,
-                            felter: felter.iter().copied().collect(),
+                            felter: felter.clone(),
                             rendered_dokument_referanse: Some(Uuid::new_v4()),
                         },
                     },
@@ -642,7 +634,7 @@ mod tests {
             },
             kilde: DokumentKildeTilstand::HtmlTemplate {
                 mal_referanse: Uuid::new_v4(),
-                felter: vec![Felt::Saksnummer],
+                felter: vec![TemplateFelt::Saksnummer],
                 rendered_dokument_referanse,
             },
         }
@@ -652,7 +644,7 @@ mod tests {
         CommandEnvelope {
             command_id: Uuid::new_v4(),
             correlation_id: Some(Uuid::new_v4()),
-            payload: Command::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
+            payload: Command::OpprettInterntNotatJournalpost(OpprettJournalpostCommand {
                 felles: JournalpostCommon {
                     client_reference: Uuid::new_v4(),
                     tittel: "Internt notat".to_string(),
@@ -664,6 +656,8 @@ mod tests {
                     sak_key: SakKey::ClientReference(Uuid::new_v4()),
                     kildesystem: None,
                 },
+                avsender: None,
+                mottaker: None,
             }),
         }
     }
@@ -685,7 +679,7 @@ mod tests {
             tittel: "HTML-template".to_string(),
             form: Dokumentform::HtmlTemplate {
                 mal_referanse: Uuid::new_v4(),
-                felter: vec![Felt::Saksnummer],
+                felter: vec![TemplateFelt::Saksnummer],
             },
         }
     }

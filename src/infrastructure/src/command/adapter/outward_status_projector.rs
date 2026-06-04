@@ -2,11 +2,11 @@ use application::command::ports::{
     id_mapping_port::{IdMappingRepository, MappingEntityType},
     status_projection_port::CommandOutwardStatusProjector,
 };
+use application::command::{Command, CommandEnvelope};
+use application::command::{Dokument, SakKey};
 use async_trait::async_trait;
 use domain::eksekvering::id::SkuffenSakId;
 use domain::eksekvering::typer::CommandLifecycleContext;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use lib_schemas::skuffen::query::queries::SakKey;
 use uuid::Uuid;
 
 pub struct IdMappingOutwardStatusProjector {
@@ -53,7 +53,7 @@ impl IdMappingOutwardStatusProjector {
 
     async fn resolve_saksnummer(&self, sak_key: &SakKey) -> Result<Option<String>, anyhow::Error> {
         match sak_key {
-            SakKey::ArkivId(saksnummer) => Ok(Some(saksnummer.as_str().to_string())),
+            SakKey::ArkivId(saksnummer) => Ok(Some(saksnummer.clone())),
             SakKey::ClientReference(client_reference) => {
                 self.resolve_arkiv_id_from_client_reference(
                     MappingEntityType::Sak,
@@ -66,7 +66,7 @@ impl IdMappingOutwardStatusProjector {
 
     async fn resolve_dokument_ids(
         &self,
-        dokumenter: &[lib_schemas::skuffen::dokument::Dokument],
+        dokumenter: &[Dokument],
     ) -> Result<Vec<String>, anyhow::Error> {
         let mut dokument_ids = Vec::new();
 
@@ -104,49 +104,9 @@ impl CommandOutwardStatusProjector for IdMappingOutwardStatusProjector {
                     )
                     .await?;
             }
-            Command::OpprettInngåendeJournalpost(cmd) => {
-                if let SakKey::ClientReference(client_reference) = &cmd.felles.sak_key {
-                    context.sak_client_reference = Some(client_reference.to_string());
-                }
-                context.saksnummer = self.resolve_saksnummer(&cmd.felles.sak_key).await?;
-                context.journalpost_client_reference =
-                    Some(cmd.felles.client_reference.to_string());
-                context.journalpost_id = self
-                    .resolve_arkiv_id_from_client_reference(
-                        MappingEntityType::Journalpost,
-                        cmd.felles.client_reference,
-                    )
-                    .await?;
-                context.dokument_client_references = cmd
-                    .felles
-                    .dokumenter
-                    .iter()
-                    .map(|dokument| dokument.client_reference.to_string())
-                    .collect();
-                context.dokument_ids = self.resolve_dokument_ids(&cmd.felles.dokumenter).await?;
-            }
-            Command::OpprettUtgåendeJournalpost(cmd) => {
-                if let SakKey::ClientReference(client_reference) = &cmd.felles.sak_key {
-                    context.sak_client_reference = Some(client_reference.to_string());
-                }
-                context.saksnummer = self.resolve_saksnummer(&cmd.felles.sak_key).await?;
-                context.journalpost_client_reference =
-                    Some(cmd.felles.client_reference.to_string());
-                context.journalpost_id = self
-                    .resolve_arkiv_id_from_client_reference(
-                        MappingEntityType::Journalpost,
-                        cmd.felles.client_reference,
-                    )
-                    .await?;
-                context.dokument_client_references = cmd
-                    .felles
-                    .dokumenter
-                    .iter()
-                    .map(|dokument| dokument.client_reference.to_string())
-                    .collect();
-                context.dokument_ids = self.resolve_dokument_ids(&cmd.felles.dokumenter).await?;
-            }
-            Command::OpprettInterntNotatJournalpost(cmd) => {
+            Command::OpprettInngaaendeJournalpost(cmd)
+            | Command::OpprettUtgaaendeJournalpost(cmd)
+            | Command::OpprettInterntNotatJournalpost(cmd) => {
                 if let SakKey::ClientReference(client_reference) = &cmd.felles.sak_key {
                     context.sak_client_reference = Some(client_reference.to_string());
                 }

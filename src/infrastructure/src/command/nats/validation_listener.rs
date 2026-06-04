@@ -3,6 +3,7 @@ use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use tracing::{Span, error, warn};
 
+use crate::command::wire_mapper::map_wire_envelope;
 use crate::nats::client::NatsClient;
 use crate::nats::jetstream_setup::{
     command_inbox_stream_config, command_ready_stream_config, ensure_pull_consumer, ensure_stream,
@@ -77,7 +78,9 @@ impl CommandValidationListener {
             tracing::field::debug(envelope.correlation_id),
         );
 
-        let outcome = match self.service.handle(envelope).await {
+        let application_envelope = map_wire_envelope(envelope);
+
+        let outcome = match self.service.handle(application_envelope).await {
             Ok(outcome) => outcome,
             Err(err) => {
                 error!("Validator failed: {err}");

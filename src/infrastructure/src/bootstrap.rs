@@ -19,7 +19,7 @@ use crate::command::adapter::html2pdf_renderer_adapter::{
 use crate::command::adapter::id_mapping_postgres::PostgresIdMappingRepository;
 use crate::command::adapter::nats_done_publisher::NatsDonePublisher;
 use crate::command::adapter::nats_eksekvering_status_publisher::NatsEksekveringStatusPublisher;
-use crate::command::adapter::nats_publisher::NatsCommandDispatcher;
+use crate::command::adapter::nats_ingested_publisher::NatsCommandDispatcher;
 use crate::command::adapter::nats_status_publisher::NatsCommandStatusPublisher;
 use crate::command::adapter::nats_validated_publisher::NatsValidatedCommandDispatcher;
 use crate::command::adapter::outward_status_projector::IdMappingOutwardStatusProjector;

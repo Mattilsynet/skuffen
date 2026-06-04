@@ -3,8 +3,9 @@ use chrono::{DateTime, Utc};
 use domain::eksekvering::execution::EksekveringStatus;
 use domain::eksekvering::id::{SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::typer::CommandTypeCode;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use uuid::Uuid;
+
+use crate::command::{Command, CommandEnvelope};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EksekveringsregistreringResultat {

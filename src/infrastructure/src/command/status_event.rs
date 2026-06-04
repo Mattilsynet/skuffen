@@ -1,7 +1,11 @@
-use domain::eksekvering::typer::{CommandLifecycleEvent, CommandStage, CommandStageStatus};
+use domain::eksekvering::typer::{
+    CommandLifecycleEvent, CommandStage, CommandStageStatus, StatusErrorCode,
+};
 use lib_schemas::skuffen::journalpost::JournalpostId;
 use lib_schemas::skuffen::sak::Saksnummer;
-use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1, SkuffenStatusPhase};
+use lib_schemas::skuffen::status::{
+    SkuffenStatus, SkuffenStatusErrorCode, SkuffenStatusEventV1, SkuffenStatusPhase,
+};
 
 fn phase_for(stage: CommandStage) -> SkuffenStatusPhase {
     match stage {
@@ -21,6 +25,17 @@ fn status_for(stage_status: CommandStageStatus) -> SkuffenStatus {
     }
 }
 
+fn error_code_for(error_code: StatusErrorCode) -> SkuffenStatusErrorCode {
+    match error_code {
+        StatusErrorCode::InvalidRequest => SkuffenStatusErrorCode::InvalidRequest,
+        StatusErrorCode::NotFound => SkuffenStatusErrorCode::NotFound,
+        StatusErrorCode::Conflict => SkuffenStatusErrorCode::Conflict,
+        StatusErrorCode::PrerequisitePending => SkuffenStatusErrorCode::PrerequisitePending,
+        StatusErrorCode::TemporaryUnavailable => SkuffenStatusErrorCode::TemporaryUnavailable,
+        StatusErrorCode::ProcessingFailed => SkuffenStatusErrorCode::ProcessingFailed,
+    }
+}
+
 pub fn to_public_status_event(event: &CommandLifecycleEvent) -> SkuffenStatusEventV1 {
     SkuffenStatusEventV1 {
         command_id: event.command_id,
@@ -28,7 +43,7 @@ pub fn to_public_status_event(event: &CommandLifecycleEvent) -> SkuffenStatusEve
         phase: phase_for(event.stage),
         status: status_for(event.stage_status),
         terminal: event.terminal,
-        error_code: event.error_code.clone(),
+        error_code: event.error_code.map(error_code_for),
         message: event
             .outward_message
             .clone()
@@ -61,11 +76,133 @@ pub fn to_public_status_event(event: &CommandLifecycleEvent) -> SkuffenStatusEve
 mod tests {
     use super::*;
     use domain::eksekvering::typer::{
-        CommandEntityType, CommandLifecycleContext, CommandLifecycleMetadata, CommandTypeCode,
+        CommandLifecycleContext, CommandLifecycleMetadata, CommandStatus, CommandTypeCode,
     };
-    use lib_schemas::skuffen::command::commands::CommandStatus;
-    use lib_schemas::skuffen::status::SkuffenStatusErrorCode;
     use uuid::Uuid;
+
+    fn lifecycle_event(
+        stage: CommandStage,
+        stage_status: CommandStageStatus,
+    ) -> CommandLifecycleEvent {
+        CommandLifecycleEvent {
+            command_id: Uuid::parse_str("123e4567-e89b-12d3-a456-426614174100").unwrap(),
+            correlation_id: Some(Uuid::parse_str("123e4567-e89b-12d3-a456-426614174101").unwrap()),
+            command_type: CommandTypeCode::OpprettSak,
+            status: CommandStatus::Pending,
+            stage,
+            stage_status,
+            terminal: domain::eksekvering::typer::is_terminal(stage, stage_status),
+            message: domain::eksekvering::typer::status_message(stage, stage_status),
+            outward_message: None,
+            error_code: None,
+            detail: None,
+            context: CommandLifecycleContext::default(),
+            attempt: None,
+            timestamp: Some("2026-01-02T03:04:05Z".to_string()),
+        }
+    }
+
+    #[test]
+    fn public_status_event_json_pins_phase_and_status_wire_values() {
+        let cases = [
+            (
+                CommandStage::Mottatt,
+                CommandStageStatus::Venter,
+                "ingest",
+                "pending",
+                false,
+            ),
+            (
+                CommandStage::Mottatt,
+                CommandStageStatus::Ok,
+                "ingest",
+                "ok",
+                false,
+            ),
+            (
+                CommandStage::Validert,
+                CommandStageStatus::Ok,
+                "validate",
+                "ok",
+                false,
+            ),
+            (
+                CommandStage::Validert,
+                CommandStageStatus::Error,
+                "validate",
+                "error",
+                true,
+            ),
+            (
+                CommandStage::Utfores,
+                CommandStageStatus::Venter,
+                "execution",
+                "pending",
+                false,
+            ),
+            (
+                CommandStage::Utfores,
+                CommandStageStatus::Blocked,
+                "execution",
+                "blocked",
+                false,
+            ),
+            (
+                CommandStage::Utfores,
+                CommandStageStatus::Retrying,
+                "execution",
+                "retrying",
+                false,
+            ),
+            (
+                CommandStage::Utfores,
+                CommandStageStatus::Ok,
+                "execution",
+                "ok",
+                true,
+            ),
+            (
+                CommandStage::Utfores,
+                CommandStageStatus::Error,
+                "execution",
+                "error",
+                true,
+            ),
+        ];
+
+        for (stage, stage_status, expected_phase, expected_status, expected_terminal) in cases {
+            let outward = to_public_status_event(&lifecycle_event(stage, stage_status));
+            let json = serde_json::to_value(outward).unwrap();
+
+            assert_eq!(json["phase"], expected_phase);
+            assert_eq!(json["status"], expected_status);
+            assert_eq!(json["terminal"], expected_terminal);
+        }
+    }
+
+    #[test]
+    fn public_status_event_json_pins_error_code_wire_values() {
+        let cases = [
+            (StatusErrorCode::InvalidRequest, "INVALID_REQUEST"),
+            (StatusErrorCode::NotFound, "NOT_FOUND"),
+            (StatusErrorCode::Conflict, "CONFLICT"),
+            (StatusErrorCode::PrerequisitePending, "PREREQUISITE_PENDING"),
+            (
+                StatusErrorCode::TemporaryUnavailable,
+                "TEMPORARY_UNAVAILABLE",
+            ),
+            (StatusErrorCode::ProcessingFailed, "PROCESSING_FAILED"),
+        ];
+
+        for (error_code, expected_wire_value) in cases {
+            let mut event = lifecycle_event(CommandStage::Utfores, CommandStageStatus::Error);
+            event.error_code = Some(error_code);
+
+            let json = serde_json::to_value(to_public_status_event(&event)).unwrap();
+
+            assert_eq!(json["error_code"], expected_wire_value);
+        }
+    }
 
     #[test]
     fn converts_execution_ok_to_public_status_event() {
@@ -73,7 +210,6 @@ mod tests {
             CommandLifecycleMetadata::new(
                 Uuid::parse_str("123e4567-e89b-12d3-a456-426614174100").unwrap(),
                 CommandTypeCode::OpprettSak,
-                CommandEntityType::Sak,
             ),
             Some(Uuid::parse_str("123e4567-e89b-12d3-a456-426614174101").unwrap()),
             CommandStatus::Ok,
@@ -104,13 +240,12 @@ mod tests {
             CommandLifecycleMetadata::new(
                 Uuid::new_v4(),
                 CommandTypeCode::OpprettInterntNotatJournalpost,
-                CommandEntityType::Journalpost,
             ),
             None,
             CommandStatus::Error,
             CommandStage::Utfores,
             CommandStageStatus::Error,
-            Some(SkuffenStatusErrorCode::ProcessingFailed),
+            Some(StatusErrorCode::ProcessingFailed),
             Some("Sikri responded with internal archive detail".to_string()),
             CommandLifecycleContext::default(),
             Some(3),
@@ -131,13 +266,12 @@ mod tests {
             CommandLifecycleMetadata::new(
                 Uuid::new_v4(),
                 CommandTypeCode::OpprettInterntNotatJournalpost,
-                CommandEntityType::Journalpost,
             ),
             None,
             CommandStatus::Error,
             CommandStage::Utfores,
             CommandStageStatus::Error,
-            Some(SkuffenStatusErrorCode::ProcessingFailed),
+            Some(StatusErrorCode::ProcessingFailed),
             Some("Sikri responded with internal archive detail".to_string()),
             CommandLifecycleContext::default(),
             Some(3),
@@ -155,13 +289,12 @@ mod tests {
             CommandLifecycleMetadata::new(
                 Uuid::new_v4(),
                 CommandTypeCode::OpprettInterntNotatJournalpost,
-                CommandEntityType::Journalpost,
             ),
             None,
             CommandStatus::Blocked,
             CommandStage::Utfores,
             CommandStageStatus::Blocked,
-            Some(SkuffenStatusErrorCode::PrerequisitePending),
+            Some(StatusErrorCode::PrerequisitePending),
             Some("Saksnummer mangler".to_string()),
             CommandLifecycleContext::default(),
             Some(2),

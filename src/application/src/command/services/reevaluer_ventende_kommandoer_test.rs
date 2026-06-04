@@ -1,17 +1,20 @@
 use async_trait::async_trait;
+use domain::eksekvering::html_template::TemplateFelt;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
     DokumentKildeTilstand, DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter,
     JournalpostTilstand, SakMedBarn, SakTilstand,
 };
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+use lib_schemas::skuffen::command::commands::{
+    Command as WireCommand, CommandEnvelope as WireCommandEnvelope,
+};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
 };
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::dokument::Dokument;
-use lib_schemas::skuffen::dokument::{Dokumentform, Felt};
+use lib_schemas::skuffen::dokument::Dokumentform;
 use lib_schemas::skuffen::query::queries::SakKey;
 use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
 use std::collections::HashMap;
@@ -29,6 +32,9 @@ use crate::command::ports::entity_tilstand_port::EntityTilstandRepository;
 use crate::command::ports::id_mapping_port::{IdMappingRepository, MappingEntityType};
 use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
 use crate::command::services::reevaluer_ventende_kommandoer::ReevaluerVentendeKommandoerService;
+use crate::command::{
+    Command as ApplicationCommand, CommandEnvelope as ApplicationCommandEnvelope,
+};
 use domain::eksekvering::typer::{CommandLifecycleContext, CommandLifecycleEvent};
 
 // ---------------------------------------------------------------------------
@@ -144,7 +150,7 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         _journalpost_id: SkuffenJournalpostId,
         _tilstand: DokumentTilstand,
         _mal_referanse: Option<Uuid>,
-        _felter: Vec<Felt>,
+        _felter: Vec<TemplateFelt>,
         _command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
         Ok(())
@@ -215,18 +221,14 @@ impl EksekveringStatusPublisher for FakeStatusPublisher {
 }
 
 #[derive(Clone, Default)]
-struct FakeDonePublisher {
-    subjects: Arc<Mutex<Vec<String>>>,
-}
+struct FakeDonePublisher;
 
 #[async_trait]
 impl EksekveringKvitteringPublisher for FakeDonePublisher {
     async fn publiser_done(
         &self,
-        subject: &str,
-        _command: &CommandEnvelope<Command>,
+        _command: &ApplicationCommandEnvelope<ApplicationCommand>,
     ) -> Result<(), anyhow::Error> {
-        self.subjects.lock().unwrap().push(subject.to_string());
         Ok(())
     }
 }
@@ -238,7 +240,7 @@ struct FakeStatusProjector;
 impl CommandOutwardStatusProjector for FakeStatusProjector {
     async fn resolve_context(
         &self,
-        _envelope: &CommandEnvelope<Command>,
+        _envelope: &ApplicationCommandEnvelope<ApplicationCommand>,
     ) -> Result<CommandLifecycleContext, anyhow::Error> {
         Ok(CommandLifecycleContext::default())
     }
@@ -395,7 +397,7 @@ impl IdMappingRepository for FakeIdMappingRepository {
         _command_id: Uuid,
         _client_reference: Uuid,
         _skuffen_id: SkuffenSakId,
-        _command: &Command,
+        _entity_type: MappingEntityType,
         _arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
         Ok(())
@@ -1157,11 +1159,11 @@ fn make_internt_notat_command(
     journalpost_client_reference: Uuid,
     sak_client_reference: Uuid,
     dokument_client_reference: Uuid,
-) -> CommandEnvelope<Command> {
-    CommandEnvelope {
+) -> ApplicationCommandEnvelope<ApplicationCommand> {
+    crate::command::test_support::map_wire_envelope(WireCommandEnvelope {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
-        payload: Command::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
+        payload: WireCommand::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
             felles: JournalpostCommon {
                 client_reference: journalpost_client_reference,
                 tittel: "Internt notat".to_string(),
@@ -1181,14 +1183,16 @@ fn make_internt_notat_command(
                 kildesystem: None,
             },
         }),
-    }
+    })
 }
 
-fn make_opprett_sak_command(sak_client_reference: Uuid) -> CommandEnvelope<Command> {
-    CommandEnvelope {
+fn make_opprett_sak_command(
+    sak_client_reference: Uuid,
+) -> ApplicationCommandEnvelope<ApplicationCommand> {
+    crate::command::test_support::map_wire_envelope(WireCommandEnvelope {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
-        payload: Command::OpprettSak(OpprettSak {
+        payload: WireCommand::OpprettSak(OpprettSak {
             client_reference: sak_client_reference,
             sakstittel: Sakstittel("Test sak".to_string()),
             ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
@@ -1197,15 +1201,17 @@ fn make_opprett_sak_command(sak_client_reference: Uuid) -> CommandEnvelope<Comma
             saksbehandler_enhet: "42".to_string(),
             tilgang: None,
         }),
-    }
+    })
 }
 
-fn make_avslutt_sak_command(sak_client_reference: Uuid) -> CommandEnvelope<Command> {
-    CommandEnvelope {
+fn make_avslutt_sak_command(
+    sak_client_reference: Uuid,
+) -> ApplicationCommandEnvelope<ApplicationCommand> {
+    crate::command::test_support::map_wire_envelope(WireCommandEnvelope {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
-        payload: Command::AvsluttSak(AvsluttSak {
+        payload: WireCommand::AvsluttSak(AvsluttSak {
             sak_key: SakKey::ClientReference(sak_client_reference),
         }),
-    }
+    })
 }

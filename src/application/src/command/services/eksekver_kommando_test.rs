@@ -2,17 +2,20 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use domain::eksekvering::html_template::TemplateFelt;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::tilstand::{
     DokumentKildeTilstand, DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter,
     JournalpostTilstand, JournalpostType, SakMedBarn, SakTilstand,
 };
 use domain::eksekvering::typer::{CommandLifecycleContext, CommandLifecycleEvent};
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+use lib_schemas::skuffen::command::commands::{
+    Command as WireCommand, CommandEnvelope as WireCommandEnvelope,
+};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
 };
-use lib_schemas::skuffen::dokument::{Dokument, Dokumentform, Felt};
+use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
 use lib_schemas::skuffen::query::queries::SakKey;
 use uuid::Uuid;
 
@@ -34,6 +37,9 @@ use crate::command::ports::status_projection_port::CommandOutwardStatusProjector
 use crate::command::ports::ventende_kommando_wakeup_port::VentendeKommandoWakeup;
 use crate::command::services::eksekver_kommando::{EksekverKommandoService, ExecutionOutcome};
 use crate::command::services::eksekvering_worker::EksekveringWorker;
+use crate::command::{
+    Command as ApplicationCommand, CommandEnvelope as ApplicationCommandEnvelope,
+};
 
 type OppdatertJournalpost = (Uuid, JournalpostTilstand, Option<i64>, Option<i32>);
 
@@ -177,7 +183,7 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         _journalpost_id: SkuffenJournalpostId,
         _tilstand: DokumentTilstand,
         _mal_referanse: Option<Uuid>,
-        _felter: Vec<Felt>,
+        _felter: Vec<TemplateFelt>,
         _command_id: Uuid,
     ) -> Result<(), anyhow::Error> {
         Ok(())
@@ -267,7 +273,7 @@ struct FakeArkivGateway {
 impl ArkivGateway for FakeArkivGateway {
     async fn opprett_sak(
         &self,
-        _command: &CommandEnvelope<Command>,
+        _command: &ApplicationCommandEnvelope<ApplicationCommand>,
     ) -> Result<String, anyhow::Error> {
         if let Some(error) = &self.opprett_sak_error {
             anyhow::bail!(error.clone());
@@ -277,7 +283,7 @@ impl ArkivGateway for FakeArkivGateway {
 
     async fn opprett_journalpost(
         &self,
-        command: &CommandEnvelope<Command>,
+        command: &ApplicationCommandEnvelope<ApplicationCommand>,
         _journalpost: &JournalpostMedDokumenter,
         _saksnummer: &str,
         _utsending: Option<Utsendingsvalg>,
@@ -291,7 +297,7 @@ impl ArkivGateway for FakeArkivGateway {
 
     async fn legg_til_vedlegg(
         &self,
-        _command: &CommandEnvelope<Command>,
+        _command: &ApplicationCommandEnvelope<ApplicationCommand>,
         _journalpost_id: i32,
         _dokument_ids: Vec<Uuid>,
     ) -> Result<Vec<Option<i32>>, anyhow::Error> {
@@ -500,7 +506,7 @@ impl IdMappingRepository for FakeIdMappingRepository {
         _command_id: Uuid,
         _client_reference: Uuid,
         _skuffen_id: SkuffenSakId,
-        _command: &Command,
+        _entity_type: MappingEntityType,
         _arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
         Ok(())
@@ -614,8 +620,7 @@ struct FakeDonePublisher;
 impl EksekveringKvitteringPublisher for FakeDonePublisher {
     async fn publiser_done(
         &self,
-        _subject: &str,
-        _command: &CommandEnvelope<Command>,
+        _command: &ApplicationCommandEnvelope<ApplicationCommand>,
     ) -> Result<(), anyhow::Error> {
         Ok(())
     }
@@ -628,7 +633,7 @@ struct FakeStatusProjector;
 impl CommandOutwardStatusProjector for FakeStatusProjector {
     async fn resolve_context(
         &self,
-        _envelope: &CommandEnvelope<Command>,
+        _envelope: &ApplicationCommandEnvelope<ApplicationCommand>,
     ) -> Result<CommandLifecycleContext, anyhow::Error> {
         Ok(CommandLifecycleContext::default())
     }
@@ -841,7 +846,7 @@ async fn html_template_mangler_mal_retryer_uten_opprett_journalpost() {
                     tilstand: DokumentTilstand::AvventerRendring,
                     kilde: DokumentKildeTilstand::HtmlTemplate {
                         mal_referanse,
-                        felter: vec![Felt::Saksnummer],
+                        felter: vec![TemplateFelt::Saksnummer],
                         rendered_dokument_referanse: None,
                     },
                 }],
@@ -932,7 +937,7 @@ async fn html_template_med_saksnummer_felt_blokkerer_uten_saksnummer() {
                     tilstand: DokumentTilstand::AvventerRendring,
                     kilde: DokumentKildeTilstand::HtmlTemplate {
                         mal_referanse,
-                        felter: vec![Felt::Saksnummer],
+                        felter: vec![TemplateFelt::Saksnummer],
                         rendered_dokument_referanse: None,
                     },
                 }],
@@ -1030,7 +1035,7 @@ async fn html_template_rendres_for_opprett_journalpost() {
                     tilstand: DokumentTilstand::AvventerRendring,
                     kilde: DokumentKildeTilstand::HtmlTemplate {
                         mal_referanse,
-                        felter: vec![Felt::Saksnummer],
+                        felter: vec![TemplateFelt::Saksnummer],
                         rendered_dokument_referanse: None,
                     },
                 }],
@@ -1136,7 +1141,7 @@ async fn html_template_med_rendered_referanse_fullfoerer_retry_uten_rendering() 
                     tilstand: DokumentTilstand::AvventerRendring,
                     kilde: DokumentKildeTilstand::HtmlTemplate {
                         mal_referanse,
-                        felter: vec![Felt::Saksnummer],
+                        felter: vec![TemplateFelt::Saksnummer],
                         rendered_dokument_referanse: Some(rendered_dokument_referanse),
                     },
                 }],
@@ -1209,10 +1214,10 @@ async fn sikri_feil_publiserer_kun_stabil_safe_detail() {
     let command_id = Uuid::new_v4();
     let sak_client_reference = Uuid::new_v4();
     let sak_id = Uuid::new_v4();
-    let envelope = CommandEnvelope {
+    let envelope = WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
-        payload: Command::OpprettSak(lib_schemas::skuffen::command::sak::OpprettSak {
+        payload: WireCommand::OpprettSak(lib_schemas::skuffen::command::sak::OpprettSak {
             client_reference: sak_client_reference,
             sakstittel: lib_schemas::skuffen::sak::Sakstittel("Test sak".to_string()),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())
@@ -1280,10 +1285,10 @@ async fn ukjent_sikri_feil_publiserer_generisk_upstream_safe_detail() {
     let command_id = Uuid::new_v4();
     let sak_client_reference = Uuid::new_v4();
     let sak_id = Uuid::new_v4();
-    let envelope = CommandEnvelope {
+    let envelope = WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
-        payload: Command::OpprettSak(lib_schemas::skuffen::command::sak::OpprettSak {
+        payload: WireCommand::OpprettSak(lib_schemas::skuffen::command::sak::OpprettSak {
             client_reference: sak_client_reference,
             sakstittel: lib_schemas::skuffen::sak::Sakstittel("Test sak".to_string()),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())
@@ -1458,11 +1463,11 @@ fn make_internt_notat_command(
     command_id: Uuid,
     journalpost_client_reference: Uuid,
     sak_client_reference: Uuid,
-) -> CommandEnvelope<Command> {
-    CommandEnvelope {
+) -> ApplicationCommandEnvelope<ApplicationCommand> {
+    crate::command::test_support::map_wire_envelope(WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
-        payload: Command::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
+        payload: WireCommand::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
             felles: JournalpostCommon {
                 client_reference: journalpost_client_reference,
                 tittel: "Internt notat".to_string(),
@@ -1482,7 +1487,7 @@ fn make_internt_notat_command(
                 kildesystem: None,
             },
         }),
-    }
+    })
 }
 
 #[tokio::test]

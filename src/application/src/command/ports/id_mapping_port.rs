@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
-use lib_schemas::skuffen::command::commands::Command;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,7 +32,7 @@ pub trait IdMappingRepository: Send + Sync {
         command_id: Uuid,
         client_reference: Uuid,
         skuffen_id: SkuffenSakId,
-        command: &Command,
+        entity_type: MappingEntityType,
         arkiv_id: Option<String>,
     ) -> Result<(), anyhow::Error>;
 

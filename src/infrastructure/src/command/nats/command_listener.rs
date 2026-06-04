@@ -1,4 +1,5 @@
 use crate::command::media::MediaStore;
+use crate::command::wire_mapper::map_wire_envelope;
 use crate::nats::client::NatsClient;
 use crate::nats::supervisor::TaskSupervisor;
 use application::command::services::ingest_command::IngestCommandService;
@@ -159,7 +160,8 @@ impl CommandListener {
 
     #[tracing::instrument(skip_all, name = "command.ingest")]
     async fn ingest_sequence(&self, sequence: CommandSequence) -> anyhow::Result<Vec<uuid::Uuid>> {
-        self.service.handle(sequence).await
+        let commands: Vec<_> = sequence.into_iter().map(map_wire_envelope).collect();
+        self.service.handle(commands).await
     }
 
     async fn validate_media(&self, commands: &[CommandEnvelope<Command>]) -> Result<(), String> {

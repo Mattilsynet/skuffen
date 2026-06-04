@@ -1,13 +1,14 @@
 use crate::command::ports::dokument_lager_port::{DokumentFil, DokumentMetadata};
 use crate::command::ports::dokument_renderer_port::RendererKontekst;
-use domain::eksekvering::html_template::{substituer_tokens, FeltVerdier, HtmlTemplateFeil};
+use crate::command::{Command, CommandEnvelope};
+use domain::eksekvering::html_template::{
+    substituer_tokens, FeltVerdier, HtmlTemplateFeil, TemplateFelt,
+};
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId};
 use domain::eksekvering::tilstand::{
     DokumentKildeTilstand, DokumentMedTilstand, DokumentTilstand, SakMedBarn,
 };
 use domain::eksekvering::typer::{EksekveringFeil, EksekveringFeiltype};
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use lib_schemas::skuffen::dokument::Felt;
 use uuid::Uuid;
 
 use super::{extract_dokument_client_references, EksekverKommandoService};
@@ -58,7 +59,7 @@ impl EksekverKommandoService {
         }
 
         let saksnummer = sak.saksnummer.as_deref();
-        if felter.contains(&Felt::Saksnummer) && saksnummer.is_none() {
+        if felter.contains(&TemplateFelt::Saksnummer) && saksnummer.is_none() {
             return Err(EksekveringFeil::blocked("render_saksnummer_mangler"));
         }
 

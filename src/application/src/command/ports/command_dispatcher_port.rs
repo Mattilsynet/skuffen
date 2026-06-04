@@ -1,5 +1,6 @@
 use async_trait::async_trait;
-use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
+
+use crate::command::{Command, CommandEnvelope};
 
 #[async_trait]
 pub trait CommandDispatcher: Send + Sync {
