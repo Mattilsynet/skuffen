@@ -42,16 +42,33 @@ Denne guiden beskriver trygge, vanlige bygg-, test- og kvalitetssjekker for `sku
 - `SIKRI_SAKSBEHANDLER_ID` and `SIKRI_SAKSBEHANDLER_ENHET` are required for deployed
   test/dev environments to identify the case handler and unit.
 
+## Sikri error diagnostics
+
+- Skuffen does not log Sikri response bodies for successful 2xx responses.
+- For Sikri 4xx/5xx responses, Skuffen logs the full Sikri error response body in
+  chunked GCP log entries so operators can diagnose upstream validation and code-set
+  failures. This is an explicit operational risk acceptance: error bodies may contain
+  sensitive archive details and must be protected by GCP log IAM, retention, and sink
+  controls. Skuffen still does not log request payloads, authorization headers, or
+  secrets.
+
 ## Deployed test/dev workflow
 
-- `skuffen-manual send-sequence` against deployed test/dev includes both `Bytes`
-  documents and one `HtmlTemplate` document by default.
+- `skuffen-manual send-sequence` submits a 9-command sequence covering two complete
+  sak lifecycles: one regular sak (with `Bytes` and `HtmlTemplate` journalposts) and
+  one shielded sak (with a shielded internal-note journalpost). Shielded objects use
+  title syntax `[|Ola Norrmann|]` with environment-specific default values
+  `tilgangskode=UO` and `tilgangshjemmel=Offl. § 23 tredje ledd`. The tool does
+  not validate those code-set values before sending; it prints a warning to stderr
+  before side effects. Confirm the shielding values exist in the target Sikri
+  environment before running against real archive data.
 - Environments must have `SKUFFEN_HTML2PDF_RENDERER_ENDPOINT` configured to process
   `HtmlTemplate` documents.
-- The `watch-status` subcommand monitors template upload/rendering/status and fails
-  hard (non-zero exit) if any tracked command reaches non-`Ok`, times out, or the
-  status stream closes/errors before terminal status. Default timeout is 300s.
-- Use `--timeout-seconds <SECONDS>` to override the default timeout.
+- The `watch-status` subcommand monitors all tracked command IDs and fails hard
+  (non-zero exit) if any tracked command reaches non-`Ok`, times out, or the
+  status stream closes/errors before terminal status. Default timeout is 30s total
+  for the full watch run, not per command ID.
+- Use `--timeout-seconds <SECONDS>` to override the total timeout.
 
 ## Test suites
 

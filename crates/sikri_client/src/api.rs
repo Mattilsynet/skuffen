@@ -10,6 +10,8 @@ use reqwest::Client;
 use std::env;
 use tracing::{debug, error, info};
 
+const SIKRI_ERROR_RESPONSE_LOG_CHUNK_BYTES: usize = 60_000;
+
 fn base_url() -> String {
     env::var("BASE_URL_SIKRI").unwrap_or_else(|_| {
         panic!("Miljøvariabelen BASE_URL_SIKRI er ikke satt. Sett denne før oppstart")
@@ -40,16 +42,11 @@ async fn ensure_success(
     let body = response
         .text()
         .await
-        .unwrap_or_else(|err| format!("<klarte ikke lese respons-body: {err}>"));
+        .unwrap_or_else(|_| "<klarte ikke lese respons-body>".to_string());
     let body = body.trim();
-    let body_for_log = if body.len() > 2000 {
-        format!("{}...<truncated>", &body[..2000])
-    } else {
-        body.to_string()
-    };
-    let recoverability = classify_http_error(status, Some(&body_for_log));
+    let recoverability = classify_http_error(status, Some(body));
     let marker = marker_for(recoverability);
-    let safe_detail = safe_detail_for_http_error(status, Some(&body_for_log));
+    let safe_detail = safe_detail_for_http_error(status, Some(body));
 
     error!(
         target: "sikri.http",
@@ -57,10 +54,78 @@ async fn ensure_success(
         endpoint,
         status = %status,
         response_length = body.len(),
+        sikri_error_code = safe_detail,
+        sikri_recoverability = recoverability.as_str(),
         "Sikri response returned error status"
+    );
+    log_sikri_error_response_chunks(
+        method,
+        endpoint,
+        status,
+        body,
+        safe_detail,
+        recoverability.as_str(),
     );
 
     anyhow::bail!("{marker} {safe_detail}");
+}
+
+fn log_sikri_error_response_chunks(
+    method: &str,
+    endpoint: &str,
+    status: reqwest::StatusCode,
+    body: &str,
+    safe_detail: &str,
+    recoverability: &str,
+) {
+    if body.is_empty() {
+        return;
+    }
+
+    let chunks = chunk_text_by_bytes(body, SIKRI_ERROR_RESPONSE_LOG_CHUNK_BYTES);
+    let chunk_count = chunks.len();
+
+    for (chunk_index, chunk) in chunks.into_iter().enumerate() {
+        error!(
+            target: "sikri.http",
+            method,
+            endpoint,
+            status = %status,
+            response_length = body.len(),
+            sikri_error_code = safe_detail,
+            sikri_recoverability = recoverability,
+            sikri_error_response_chunk_index = chunk_index,
+            sikri_error_response_chunk_count = chunk_count,
+            sikri_error_response_chunk = chunk,
+            "Sikri error response body chunk"
+        );
+    }
+}
+
+fn chunk_text_by_bytes(text: &str, max_chunk_bytes: usize) -> Vec<&str> {
+    if text.is_empty() {
+        return vec![""];
+    }
+
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < text.len() {
+        let mut end = (start + max_chunk_bytes).min(text.len());
+        while end > start && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start {
+            end = text[start..]
+                .char_indices()
+                .nth(1)
+                .map(|(index, _)| start + index)
+                .unwrap_or(text.len());
+        }
+        chunks.push(&text[start..end]);
+        start = end;
+    }
+
+    chunks
 }
 
 async fn hent_brukernavn_passord_sikri() -> Result<(String, String)> {
@@ -350,4 +415,24 @@ pub async fn sett_saksansvarlig(
         .with_context(|| "Klarte ikke å sende Sikri request")?;
     let _ = ensure_success(resp, "PUT", &url).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunks_error_response_without_splitting_utf8() {
+        let text = "å".repeat(5);
+        let chunks = chunk_text_by_bytes(&text, 3);
+
+        assert_eq!(chunks, vec!["å", "å", "å", "å", "å"]);
+    }
+
+    #[test]
+    fn chunks_empty_error_response_as_one_empty_chunk() {
+        let chunks = chunk_text_by_bytes("", 60_000);
+
+        assert_eq!(chunks, vec![""]);
+    }
 }

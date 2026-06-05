@@ -18,6 +18,7 @@ use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettS
 use lib_schemas::skuffen::dokument::{Dokument as DtoDokument, Dokumentform, Felt};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1};
+use lib_schemas::skuffen::tilgang::Tilgang;
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -28,7 +29,7 @@ const ATTACHMENT_FOOD_SAFETY: &str = "attachment_food_safety_inspection.png";
 const ATTACHMENT_ANIMAL_WELFARE: &str = "attachment_animal_welfare_inspection.png";
 const INTERNAL_NOTE_TEMPLATE: &str = "internal_note_template.html";
 const HTML_TEMPLATE_CONTENT_TYPE: &str = "text/html; charset=utf-8";
-const DEFAULT_WATCH_STATUS_TIMEOUT_SECONDS: u64 = 300;
+const DEFAULT_WATCH_STATUS_TIMEOUT_SECONDS: u64 = 30;
 
 struct ManualAttachment {
     title: &'static str,
@@ -37,7 +38,7 @@ struct ManualAttachment {
     path: PathBuf,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct ConnectionConfig {
     url: String,
     creds: Option<String>,
@@ -235,10 +236,16 @@ async fn ready(config: &ConnectionConfig) -> Result<()> {
 async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
     let saksbehandler_id = required_env("SIKRI_SAKSBEHANDLER_ID")?;
     let saksbehandler_enhet = required_env("SIKRI_SAKSBEHANDLER_ENHET")?;
+    let skjerming_tilgang = manual_skjerming_tilgang();
+    print_skjerming_tilgang_warning(&skjerming_tilgang);
     let attachments = manual_attachments()?;
 
     let sak_client_reference = Uuid::new_v4();
+    let shielded_sak_client_reference = Uuid::new_v4();
     let bytes_journalpost_client_reference = Uuid::new_v4();
+    let shielded_journalpost_client_reference = Uuid::new_v4();
+    let shielded_dokument_client_reference = Uuid::new_v4();
+    let shielded_dokument_referanse = Uuid::new_v4();
     let template_journalpost_client_reference = Uuid::new_v4();
     let template_dokument_client_reference = Uuid::new_v4();
     let mal_referanse = Uuid::new_v4();
@@ -262,6 +269,16 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
         })
         .collect();
 
+    let shielded_dokument_path = resource_path(JOURNALPOST_PDF)?;
+    let shielded_dokument = DtoDokument {
+        client_reference: shielded_dokument_client_reference,
+        tittel: "Skjermet journalpost hoveddokument".to_string(),
+        form: Dokumentform::Bytes {
+            filtype: "PDF".to_string(),
+            dokument_referanse: shielded_dokument_referanse,
+        },
+    };
+
     for (dokument, dokument_referanse, content_type, path) in &dokumenter {
         publish_media(config, dokument_referanse.to_owned(), path, content_type).await?;
         println!(
@@ -271,6 +288,20 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
             dokument_referanse
         );
     }
+
+    publish_media(
+        config,
+        shielded_dokument_referanse,
+        &shielded_dokument_path,
+        "application/pdf",
+    )
+    .await?;
+    println!(
+        "Uploaded {} from {} as dokument_referanse={}",
+        shielded_dokument.tittel,
+        shielded_dokument_path.display(),
+        shielded_dokument_referanse
+    );
 
     let template_path = resource_path(INTERNAL_NOTE_TEMPLATE)?;
     publish_media(
@@ -302,6 +333,55 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
                 saksbehandler_enhet: saksbehandler_enhet.clone(),
                 ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
                 tilgang: None,
+            }),
+        },
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id,
+            payload: Command::OpprettSak(OpprettSak {
+                client_reference: shielded_sak_client_reference,
+                sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+                    "[|Ola Norrmann|] - Skuffen manual test {}",
+                    Uuid::new_v4()
+                )),
+                arkivdel: Arkivdel::Tilsynsdivisjonene,
+                saksbehandler_id: saksbehandler_id.clone(),
+                saksbehandler_enhet: saksbehandler_enhet.clone(),
+                ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
+                tilgang: Some(skjerming_tilgang.clone()),
+            }),
+        },
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id,
+            payload: Command::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
+                felles: JournalpostCommon {
+                    client_reference: shielded_journalpost_client_reference,
+                    tittel: format!("[|Ola Norrmann|] - Internt notat {}", Uuid::new_v4()),
+                    dokument_dato: "2025-01-01".to_string(),
+                    saksbehandler: saksbehandler_id.clone(),
+                    saksbehandler_enhet: saksbehandler_enhet.clone(),
+                    tilgang: Some(skjerming_tilgang.clone()),
+                    dokumenter: vec![shielded_dokument.clone()],
+                    sak_key: DtoSakKey::ClientReference(shielded_sak_client_reference),
+                    kildesystem: None,
+                },
+            }),
+        },
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id,
+            payload: Command::SettSaksansvarlig(SettSaksansvarlig {
+                sak_key: DtoSakKey::ClientReference(shielded_sak_client_reference),
+                saksbehandler_id: saksbehandler_id.clone(),
+                saksbehandler_enhet: saksbehandler_enhet.clone(),
+            }),
+        },
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id,
+            payload: Command::AvsluttSak(AvsluttSak {
+                sak_key: DtoSakKey::ClientReference(shielded_sak_client_reference),
             }),
         },
         CommandEnvelope {
@@ -370,6 +450,19 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
         .iter()
         .map(|command| command.command_id)
         .collect();
+    let command_roles = [
+        "OpprettSak",
+        "OpprettSak(skjermet)",
+        "OpprettInterntNotatJournalpost(skjermet)",
+        "SettSaksansvarlig(skjermet)",
+        "AvsluttSak(skjermet)",
+        "OpprettInterntNotatJournalpost(bytes)",
+        "OpprettInterntNotatJournalpost(html-template)",
+        "SettSaksansvarlig",
+        "AvsluttSak",
+    ];
+    assert_eq!(command_roles.len(), command_sequence.len());
+
     let response = request_json(config, "arkiv.arkiver", &command_sequence).await?;
     let ok_response = response
         .get("Ok")
@@ -381,7 +474,10 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
 
     println!("Sent sequence to {}", redact_url_userinfo(&config.url));
     println!("sak_client_reference={sak_client_reference}");
+    println!("shielded_sak_client_reference={shielded_sak_client_reference}");
     println!("bytes_journalpost_client_reference={bytes_journalpost_client_reference}");
+    println!("shielded_journalpost_client_reference={shielded_journalpost_client_reference}");
+    println!("shielded_dokument_client_reference={shielded_dokument_client_reference}");
     println!("template_journalpost_client_reference={template_journalpost_client_reference}");
     println!("template_dokument_client_reference={template_dokument_client_reference}");
     println!("mal_referanse={mal_referanse}");
@@ -394,14 +490,14 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
             path.display()
         );
     }
+    println!("shielded_dokument_referanse:");
+    println!(
+        "- {} {} {}",
+        shielded_dokument.tittel,
+        shielded_dokument_referanse,
+        shielded_dokument_path.display()
+    );
     println!("command_ids:");
-    let command_roles = [
-        "OpprettSak",
-        "OpprettInterntNotatJournalpost(bytes)",
-        "OpprettInterntNotatJournalpost(html-template)",
-        "SettSaksansvarlig",
-        "AvsluttSak",
-    ];
     for (role, command) in command_roles.iter().zip(&command_sequence) {
         println!("- {role}: {}", command.command_id);
     }
@@ -427,6 +523,22 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
         ),
     }
     Ok(())
+}
+
+fn manual_skjerming_tilgang() -> Tilgang {
+    // Disse defaultverdiene må finnes i target Sikri-kodeverk for
+    // TILGANGSKODE/TILGANGSHJEMMEL før sekvensen kjøres mot et miljø.
+    Tilgang {
+        tilgangskode: "UO".to_string(),
+        tilgangshjemmel: "Offl. § 23 tredje ledd".to_string(),
+    }
+}
+
+fn print_skjerming_tilgang_warning(tilgang: &Tilgang) {
+    eprintln!(
+        "Shielded title coverage uses synthetic [|Ola Norrmann|] titles with environment-specific default tilgangskode={} and tilgangshjemmel={}. These values are not validated by this tool; confirm they exist in the target Sikri code sets before running against real archive data.",
+        tilgang.tilgangskode, tilgang.tilgangshjemmel
+    );
 }
 
 fn redact_url_userinfo(url: &str) -> String {
@@ -525,6 +637,8 @@ async fn watch_status(config: &ConnectionConfig, raw_args: &[String]) -> Result<
         })
         .collect();
 
+    let deadline = Instant::now() + timeout;
+
     for summary in &mut summaries {
         let command_id = summary.command_id;
         println!();
@@ -542,14 +656,13 @@ async fn watch_status(config: &ConnectionConfig, raw_args: &[String]) -> Result<
             .await?;
         let mut messages = consumer.messages().await?;
 
-        let deadline = Instant::now() + timeout;
         let mut terminal_seen = false;
         while !terminal_seen {
             let now = Instant::now();
             if now >= deadline {
                 summary.final_status = Some("TimedOut".to_string());
                 summary.final_message = Some(format!(
-                    "Timed out after {} seconds waiting for terminal status event",
+                    "Timed out after {} total seconds waiting for terminal status event",
                     timeout.as_secs()
                 ));
                 break;
@@ -562,7 +675,7 @@ async fn watch_status(config: &ConnectionConfig, raw_args: &[String]) -> Result<
                 Err(_) => {
                     summary.final_status = Some("TimedOut".to_string());
                     summary.final_message = Some(format!(
-                        "Timed out after {} seconds waiting for terminal status event",
+                        "Timed out after {} total seconds waiting for terminal status event",
                         timeout.as_secs()
                     ));
                     break;
@@ -810,7 +923,9 @@ async fn connect_client(config: &ConnectionConfig) -> Result<Client> {
         if creds_path.exists() {
             options = options.credentials_file(creds_path).await?;
         } else {
-            options = options.credentials(creds)?;
+            options = options
+                .credentials(creds)
+                .map_err(|_| anyhow::anyhow!("invalid APP_NATS_CREDENTIALS inline credentials"))?;
         }
     }
     let client = options.connect(&config.url).await?;

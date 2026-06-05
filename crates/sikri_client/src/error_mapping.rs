@@ -9,6 +9,15 @@ pub enum Recoverability {
     Irrecoverable,
 }
 
+impl Recoverability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Recoverability::Recoverable => "recoverable",
+            Recoverability::Irrecoverable => "irrecoverable",
+        }
+    }
+}
+
 pub fn user_message_for_http_error(status: StatusCode, body: Option<&str>) -> String {
     if let Some(body_text) = body
         && contains_upstream_bad_gateway_pattern(body_text)
@@ -57,6 +66,20 @@ pub fn safe_detail_for_http_error(status: StatusCode, body: Option<&str>) -> &'s
         return "sikri_missing_document_content";
     }
 
+    if let Some(body_text) = body
+        && access_control_failure_is_irrecoverable(status)
+        && contains_access_control_pattern(body_text)
+    {
+        return "sikri_access_control_rejected";
+    }
+
+    if let Some(body_text) = body
+        && validation_failure_is_irrecoverable(status)
+        && contains_validation_pattern(body_text)
+    {
+        return "sikri_validation_failed";
+    }
+
     if status == StatusCode::NOT_FOUND {
         return "sikri_resource_not_found";
     }
@@ -99,6 +122,56 @@ const ERROR_RULES: &[ErrorRule] = &[
     ErrorRule {
         status: Some(StatusCode::INTERNAL_SERVER_ERROR),
         body_contains_all: &["ny journalpost har dokument-filer som mangler innhold"],
+        recoverability: Recoverability::Irrecoverable,
+    },
+    ErrorRule {
+        status: Some(StatusCode::BAD_REQUEST),
+        body_contains_all: &["tilgangskode"],
+        recoverability: Recoverability::Irrecoverable,
+    },
+    ErrorRule {
+        status: Some(StatusCode::INTERNAL_SERVER_ERROR),
+        body_contains_all: &["tilgangskode"],
+        recoverability: Recoverability::Irrecoverable,
+    },
+    ErrorRule {
+        status: Some(StatusCode::BAD_REQUEST),
+        body_contains_all: &["tilgangshjemmel"],
+        recoverability: Recoverability::Irrecoverable,
+    },
+    ErrorRule {
+        status: Some(StatusCode::INTERNAL_SERVER_ERROR),
+        body_contains_all: &["tilgangshjemmel"],
+        recoverability: Recoverability::Irrecoverable,
+    },
+    ErrorRule {
+        status: Some(StatusCode::BAD_REQUEST),
+        body_contains_all: &["mangler tilgang"],
+        recoverability: Recoverability::Irrecoverable,
+    },
+    ErrorRule {
+        status: Some(StatusCode::INTERNAL_SERVER_ERROR),
+        body_contains_all: &["mangler tilgang"],
+        recoverability: Recoverability::Irrecoverable,
+    },
+    ErrorRule {
+        status: Some(StatusCode::BAD_REQUEST),
+        body_contains_all: &["ikke har rettighet"],
+        recoverability: Recoverability::Irrecoverable,
+    },
+    ErrorRule {
+        status: Some(StatusCode::INTERNAL_SERVER_ERROR),
+        body_contains_all: &["ikke har rettighet"],
+        recoverability: Recoverability::Irrecoverable,
+    },
+    ErrorRule {
+        status: Some(StatusCode::BAD_REQUEST),
+        body_contains_all: &["validering", "feil"],
+        recoverability: Recoverability::Irrecoverable,
+    },
+    ErrorRule {
+        status: Some(StatusCode::INTERNAL_SERVER_ERROR),
+        body_contains_all: &["validering", "feil"],
         recoverability: Recoverability::Irrecoverable,
     },
 ];
@@ -154,6 +227,27 @@ fn contains_upstream_bad_gateway_pattern(body: &str) -> bool {
     normalized.contains("feil ved identifisering av bruker")
         && normalized.contains("502")
         && normalized.contains("bad gateway")
+}
+
+fn contains_access_control_pattern(body: &str) -> bool {
+    let normalized = body.to_lowercase();
+    normalized.contains("tilgangskode")
+        || normalized.contains("tilgangshjemmel")
+        || normalized.contains("mangler tilgang")
+        || normalized.contains("ikke har rettighet")
+}
+
+fn access_control_failure_is_irrecoverable(status: StatusCode) -> bool {
+    status == StatusCode::BAD_REQUEST || status == StatusCode::INTERNAL_SERVER_ERROR
+}
+
+fn contains_validation_pattern(body: &str) -> bool {
+    let normalized = body.to_lowercase();
+    normalized.contains("validering") && normalized.contains("feil")
+}
+
+fn validation_failure_is_irrecoverable(status: StatusCode) -> bool {
+    status == StatusCode::BAD_REQUEST || status == StatusCode::INTERNAL_SERVER_ERROR
 }
 
 #[cfg(test)]
@@ -249,5 +343,109 @@ mod tests {
             safe_detail_for_http_error(StatusCode::BAD_REQUEST, None),
             "sikri_invalid_request"
         );
+    }
+
+    #[test]
+    fn maps_tilgangskode_errors_to_safe_access_code() {
+        let body = "Tilgangskode UO er ugyldig for denne saken og bruker Z12345";
+        let result = classify_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+        let detail = safe_detail_for_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+
+        assert_eq!(result, Recoverability::Irrecoverable);
+        assert_eq!(detail, "sikri_access_control_rejected");
+        assert!(!detail.contains("UO"));
+        assert!(!detail.contains("Z12345"));
+        assert!(!detail.contains("Tilgangskode"));
+    }
+
+    #[test]
+    fn maps_tilgangshjemmel_errors_to_safe_access_code() {
+        let body = "Mangler tilgangshjemmel for skjermet operasjon";
+        let result = classify_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+        let detail = safe_detail_for_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+
+        assert_eq!(result, Recoverability::Irrecoverable);
+        assert_eq!(detail, "sikri_access_control_rejected");
+        assert!(!detail.contains("tilgangshjemmel"));
+    }
+
+    #[test]
+    fn maps_validation_errors_to_safe_validation_code() {
+        let body = "Validering feilet for felt med verdi som ikke skal logges";
+        let result = classify_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+        let detail = safe_detail_for_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+
+        assert_eq!(result, Recoverability::Irrecoverable);
+        assert_eq!(detail, "sikri_validation_failed");
+        assert!(!detail.contains("felt"));
+    }
+
+    #[test]
+    fn keeps_validation_text_on_service_unavailable_recoverable() {
+        let body = "Validering feilet fordi ekstern valideringstjeneste er utilgjengelig";
+        let result = classify_http_error(StatusCode::SERVICE_UNAVAILABLE, Some(body));
+        let detail = safe_detail_for_http_error(StatusCode::SERVICE_UNAVAILABLE, Some(body));
+
+        assert_eq!(result, Recoverability::Recoverable);
+        assert_eq!(detail, "sikri_upstream_error");
+    }
+
+    #[test]
+    fn keeps_validation_text_on_rate_limit_recoverable() {
+        let body = "Validering feilet fordi tjenesten er rate limited";
+        let result = classify_http_error(StatusCode::TOO_MANY_REQUESTS, Some(body));
+        let detail = safe_detail_for_http_error(StatusCode::TOO_MANY_REQUESTS, Some(body));
+
+        assert_eq!(result, Recoverability::Recoverable);
+        assert_eq!(detail, "sikri_rate_limited");
+    }
+
+    #[test]
+    fn keeps_access_text_on_service_unavailable_recoverable() {
+        let body = "Tilgangskode kunne ikke valideres fordi ekstern tjeneste er utilgjengelig";
+        let result = classify_http_error(StatusCode::SERVICE_UNAVAILABLE, Some(body));
+        let detail = safe_detail_for_http_error(StatusCode::SERVICE_UNAVAILABLE, Some(body));
+
+        assert_eq!(result, Recoverability::Recoverable);
+        assert_eq!(detail, "sikri_upstream_error");
+    }
+
+    #[test]
+    fn keeps_access_text_on_rate_limit_recoverable() {
+        let body = "Mangler tilgang kunne ikke valideres fordi tjenesten er rate limited";
+        let result = classify_http_error(StatusCode::TOO_MANY_REQUESTS, Some(body));
+        let detail = safe_detail_for_http_error(StatusCode::TOO_MANY_REQUESTS, Some(body));
+
+        assert_eq!(result, Recoverability::Recoverable);
+        assert_eq!(detail, "sikri_rate_limited");
+    }
+
+    #[test]
+    fn maps_missing_access_errors_to_safe_access_code() {
+        let body = "Mangler tilgang til skjermet sak for bruker Z12345";
+        let result = classify_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+        let detail = safe_detail_for_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+
+        assert_eq!(result, Recoverability::Irrecoverable);
+        assert_eq!(detail, "sikri_access_control_rejected");
+        assert!(!detail.contains("Z12345"));
+        assert!(!detail.contains("skjermet"));
+    }
+
+    #[test]
+    fn maps_missing_permission_errors_to_safe_access_code() {
+        let body = "Brukeren ikke har rettighet til tilgangskode XX";
+        let result = classify_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+        let detail = safe_detail_for_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+
+        assert_eq!(result, Recoverability::Irrecoverable);
+        assert_eq!(detail, "sikri_access_control_rejected");
+        assert!(!detail.contains("XX"));
+    }
+
+    #[test]
+    fn exposes_recoverability_as_safe_label() {
+        assert_eq!(Recoverability::Recoverable.as_str(), "recoverable");
+        assert_eq!(Recoverability::Irrecoverable.as_str(), "irrecoverable");
     }
 }
