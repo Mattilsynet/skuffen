@@ -1,4 +1,4 @@
-use crate::domain::ny_sak::{NySak, Tilgang};
+use crate::domain::ny_sak::NySak;
 use serde::{Deserialize, Serialize};
 
 pub const JOURNALENHET: &str = "DOKSENTER";
@@ -7,6 +7,7 @@ pub const DEFAULT_SAKSSTATUS: &str = "B";
 
 /// Represents a Sak (case) in the Sikri API.
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ElementsSak {
     /// Sakstittel (required)
     /// Max length: 256, Min length: 1
@@ -35,7 +36,10 @@ pub struct ElementsSak {
     /// Hjemmel for at saken skal være unntatt fra offentligheten.
     /// Kode fra kodeverk TILGANGSHJEMMEL
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tilgang: Option<Tilgang>,
+    pub tilgangskode: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tilgangshjemmel: Option<String>,
 
     /// VirksomhetsmappeId kommer fra saksbehandling i MATS.
     /// Dersom denne er inkludert, vil den opprettede saken knyttes til virksomheten via tilleggsattributt1 på saken.
@@ -54,7 +58,14 @@ impl From<NySak> for ElementsSak {
             saksbehandler_enhet: src.saksbehandler_enhet,
             saksstatus: DEFAULT_SAKSSTATUS.to_string(),
             ordningsverdi: src.ordningsverdi,
-            tilgang: src.tilgang,
+            tilgangskode: src
+                .tilgang
+                .as_ref()
+                .map(|tilgang| tilgang.tilgangskode.clone()),
+            tilgangshjemmel: src
+                .tilgang
+                .as_ref()
+                .map(|tilgang| tilgang.tilgangshjemmel.clone()),
             virksomhetsmappe_id: src.virksomhetsmappe_id,
         }
     }
