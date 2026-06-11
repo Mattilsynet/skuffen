@@ -11,7 +11,7 @@ lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", p
 lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats" }
 sikri_client = {path = "../../crates/sikri_client"}
 
-lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.5.2" }
+lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.5.5" }
 sqlx = { version = "0.8.6", default-features = false, features = [
   "postgres",
   "runtime-tokio-native-tls",
