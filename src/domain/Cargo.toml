@@ -1,12 +1,10 @@
-
 [package]
 name = "domain"
 version = "0.1.0"
 edition = "2021"
 
-
 [dependencies]
-uuid = { version = "1.23.3", features = ["serde", "v7", "v5", "v4"] }
-chrono = { version = "0.4.45", features = ["serde"] }
-anyhow = "1.0.102"
-thiserror = "2.0.18"
+uuid = { workspace = true, features = ["serde", "v7", "v5", "v4"] }
+chrono = { workspace = true, features = ["serde"] }
+anyhow = { workspace = true }
+thiserror = { workspace = true }

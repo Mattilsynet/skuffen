@@ -1,20 +1,19 @@
-
 [package]
 name = "application"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-domain = { path = "../domain" }
+domain = { workspace = true }
 
-async-trait = "0.1.89"
+async-trait = { workspace = true }
 
 # Feilhåndtering
-anyhow = "1.0.102"
-thiserror = "2.0.18"
-uuid = { version = "1.23.3", features = ["v7", "v5", "v4"] }
-tokio = { version = "1.52.3", features = ["macros", "rt", "time"] }
-chrono = { version = "0.4.45", features = ["serde"] }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v7", "v5", "v4"] }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+chrono = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
-lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", features = ["skuffen"] }
+lib-schemas = { workspace = true, features = ["skuffen"] }
