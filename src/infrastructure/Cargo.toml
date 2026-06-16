@@ -8,29 +8,30 @@ application = { path = "../application" }
 domain = { path = "../domain" }
 
 lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas", features = ["skuffen"] }
-lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats" }
+lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats", tag = "1.6.0" }
 sikri_client = {path = "../../crates/sikri_client"}
 
-lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.5.5" }
-sqlx = { version = "0.8.6", default-features = false, features = [
+lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.6.0" }
+sqlx = { version = "0.9.0", default-features = false, features = [
   "postgres",
-  "runtime-tokio-native-tls",
+  "runtime-tokio",
+  "tls-rustls",
   "uuid",
   "chrono",
   "migrate",
 ] }
 
-tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "time"] }
 futures = "0.3.32"
 async-trait = "0.1.89"
 axum = "0.8.9"
 dotenvy = "0.15.7"
-async-nats = "0.48.0"
+async-nats = "0.49.1"
 bytes = "1.11.1"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-reqwest = { version = "0.13.3" }
-http = "1.4.0"
+serde_json = "1.0.150"
+reqwest = { version = "0.13.4" }
+http = "1.4.2"
 base64 = "0.22.1"
 url = "2.5.7"
 
@@ -45,16 +46,16 @@ tracing-subscriber = { version = "0.3.23", features = [
   "env-filter",
   "registry",
 ] }
-tracing-opentelemetry = "0.32.1"
-opentelemetry = { version = "0.31.0", features = ["trace", "metrics"] }
-opentelemetry_sdk = { version = "0.31.0", features = ["trace", "metrics"] }
-opentelemetry-otlp = { version = "0.31.1", features = [
+tracing-opentelemetry = "0.33.0"
+opentelemetry = { version = "0.32.0", features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.32.1", features = ["trace", "metrics"] }
+opentelemetry-otlp = { version = "0.32.0", features = [
   "grpc-tonic",
   "trace",
   "metrics",
 ] }
-opentelemetry-http = "0.31.0"
+opentelemetry-http = "0.32.0"
 tracing-stackdriver = "0.10.0"
 tracing-log = "0.2.0"
 
-uuid = { version = "1.23.1", features = ["serde", "v7", "v5", "v4"] }
+uuid = { version = "1.23.3", features = ["serde", "v7", "v5", "v4"] }
