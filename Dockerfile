@@ -1,4 +1,4 @@
-ARG RUST_VERSION=1-bookworm
+ARG RUST_VERSION=1.96
 
 FROM rust:${RUST_VERSION}-bookworm AS chef
 WORKDIR /app
