@@ -1,6 +1,6 @@
 use crate::command::services::command_state_decision::registration_initial_status;
 use crate::command::services::execution_registration::{
-    domain_command_for_type, resolve_registration, SakResolutionOrigin,
+    SakResolutionOrigin, domain_command_for_type, resolve_registration,
 };
 
 use crate::command::{Command, CommandEnvelope, Dokument, Dokumentform};
@@ -10,7 +10,7 @@ use domain::eksekvering::execution::EksekveringStatus;
 use domain::eksekvering::id::SkuffenSakId;
 use domain::eksekvering::tilstand::JournalpostType;
 use domain::eksekvering::tilstand::{
-    planlegg_neste_handling, BlockedReason, CommandStateDecision, DokumentTilstand,
+    BlockedReason, CommandStateDecision, DokumentTilstand, planlegg_neste_handling,
 };
 use domain::eksekvering::typer::{CommandLifecycleEvent, CommandTypeCode};
 
@@ -108,13 +108,12 @@ impl RegistrerIEksekveringssystemService {
         command_id: uuid::Uuid,
         registration: &super::execution_registration::ResolvedRegistration,
     ) -> Result<()> {
-        if let Some(sak_reg) = registration.sak.as_ref() {
-            if let SakResolutionOrigin::ArkivId { saksnummer } = &sak_reg.origin {
+        if let Some(sak_reg) = registration.sak.as_ref()
+            && let SakResolutionOrigin::ArkivId { saksnummer } = &sak_reg.origin {
                 self.entity_tilstand_repo
                     .ensure_sak_tilstand_for_arkiv_id(sak_reg.sak_id, saksnummer, command_id)
                     .await?;
             }
-        }
         Ok(())
     }
 

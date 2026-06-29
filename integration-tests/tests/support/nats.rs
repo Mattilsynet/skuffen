@@ -6,7 +6,7 @@ use async_nats::jetstream;
 use bytes::Bytes;
 use futures::StreamExt;
 use lib_nats::chunked_upload::protocol::{
-    build_chunk_headers, split_payload, ChunkedUploadConfig, UploadMetadata,
+    ChunkedUploadConfig, UploadMetadata, build_chunk_headers, split_payload,
 };
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::journalpost::JournalpostKey as DtoJournalpostKey;

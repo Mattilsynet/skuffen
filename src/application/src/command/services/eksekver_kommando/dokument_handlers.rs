@@ -2,7 +2,7 @@ use crate::command::ports::dokument_lager_port::{DokumentFil, DokumentMetadata};
 use crate::command::ports::dokument_renderer_port::RendererKontekst;
 use crate::command::{Command, CommandEnvelope};
 use domain::eksekvering::html_template::{
-    substituer_tokens, FeltVerdier, HtmlTemplateFeil, TemplateFelt,
+    FeltVerdier, HtmlTemplateFeil, TemplateFelt, substituer_tokens,
 };
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId};
 use domain::eksekvering::tilstand::{
@@ -11,7 +11,7 @@ use domain::eksekvering::tilstand::{
 use domain::eksekvering::typer::{EksekveringFeil, EksekveringFeiltype};
 use uuid::Uuid;
 
-use super::{extract_dokument_client_references, EksekverKommandoService};
+use super::{EksekverKommandoService, extract_dokument_client_references};
 
 impl EksekverKommandoService {
     pub(super) async fn render_dokument(

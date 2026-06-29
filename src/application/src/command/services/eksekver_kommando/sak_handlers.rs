@@ -3,7 +3,7 @@ use domain::eksekvering::id::SkuffenSakId;
 use domain::eksekvering::tilstand::{SakMedBarn, SakTilstand};
 use domain::eksekvering::typer::EksekveringFeil;
 
-use super::{extract_sak_client_reference, EksekverKommandoService};
+use super::{EksekverKommandoService, extract_sak_client_reference};
 
 impl EksekverKommandoService {
     pub(super) async fn opprett_sak(

@@ -16,7 +16,7 @@ pub trait QueryUseCase {
 #[async_trait]
 pub trait HentSakUseCase: Send + Sync {
     async fn handle(&self, req: SakKey, inkluder_journalposter: bool)
-        -> Result<Sak, anyhow::Error>;
+    -> Result<Sak, anyhow::Error>;
 }
 
 #[async_trait]

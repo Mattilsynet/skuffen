@@ -9,9 +9,9 @@ use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
 use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1, SkuffenStatusPhase};
 
 use support::{
-    extract_saksnummer, hent_bruker_mt_enheter_via_nats, hent_journalpost_via_nats,
-    hent_sak_via_nats_by_arkiv_id, publish_media, send_command_batch, wait_for_status_events,
-    CommandScenario,
+    CommandScenario, extract_saksnummer, hent_bruker_mt_enheter_via_nats,
+    hent_journalpost_via_nats, hent_sak_via_nats_by_arkiv_id, publish_media, send_command_batch,
+    wait_for_status_events,
 };
 
 mod support;

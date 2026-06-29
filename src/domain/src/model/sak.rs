@@ -1,7 +1,7 @@
 use core::fmt;
 use std::str::FromStr;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use uuid::Uuid;
 
 use crate::model::{journalpost::Journalpost, tilgang::Tilgang};

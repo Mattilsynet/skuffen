@@ -3,7 +3,7 @@ use crate::command::services::ingest_command::IntoCommandBatch;
 use crate::command::services::registrer_i_eksekveringssystem::IntoRegistrationEnvelope;
 use crate::command::services::validate_command::IntoCommandEnvelope;
 use crate::command::{
-    test_support, Command as ApplicationCommand, CommandEnvelope as ApplicationCommandEnvelope,
+    Command as ApplicationCommand, CommandEnvelope as ApplicationCommandEnvelope, test_support,
 };
 use lib_schemas::skuffen::command::commands::{
     Command as WireCommand, CommandEnvelope as WireCommandEnvelope, CommandSequence,

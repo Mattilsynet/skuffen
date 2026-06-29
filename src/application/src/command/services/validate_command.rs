@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+use crate::command::SakKey;
 use crate::command::lifecycle::LifecycleDecision;
 use crate::command::ports::{
     command_state_port::ArkivSakTilstandRepository, id_mapping_port::IdMappingRepository,
@@ -10,7 +11,6 @@ use crate::command::ports::{
 use crate::command::status::{
     validert_blocked_event, validert_error_event, validert_ok_event, validert_retrying_event,
 };
-use crate::command::SakKey;
 use crate::command::{Command, CommandEnvelope};
 use domain::eksekvering::typer::{CommandLifecycleEvent, StatusErrorCode};
 

@@ -801,11 +801,13 @@ async fn handle_utfoerer_akkurat_en_operasjon_og_returnerer_klar_nar_mer_arbeid_
         entity_repo.oppdaterte_journalposter.lock().unwrap().len(),
         1
     );
-    assert!(arkiv_gateway
-        .legg_til_vedlegg_calls
-        .lock()
-        .unwrap()
-        .is_empty());
+    assert!(
+        arkiv_gateway
+            .legg_til_vedlegg_calls
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
     assert!(arkiv_gateway.journalfoer_calls.lock().unwrap().is_empty());
 }
 
@@ -881,11 +883,13 @@ async fn html_template_mangler_mal_retryer_uten_opprett_journalpost() {
         ExecutionOutcome::Retrying { last_error: Some(ref detail) }
             if detail.starts_with("render_html_mal_mangler")
     ));
-    assert!(arkiv_gateway
-        .opprett_journalpost_calls
-        .lock()
-        .unwrap()
-        .is_empty());
+    assert!(
+        arkiv_gateway
+            .opprett_journalpost_calls
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
     assert!(entity_repo.oppdaterte_dokumenter.lock().unwrap().is_empty());
     let sak = entity_repo
         .sak_med_barn
@@ -984,18 +988,22 @@ async fn html_template_med_saksnummer_felt_blokkerer_uten_saksnummer() {
         ExecutionOutcome::BlokkertVenter { last_error: Some(ref detail) }
             if detail.starts_with("blocked_reason=saksnummer_mangler")
     ));
-    assert!(arkiv_gateway
-        .opprett_journalpost_calls
-        .lock()
-        .unwrap()
-        .is_empty());
+    assert!(
+        arkiv_gateway
+            .opprett_journalpost_calls
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
     assert!(entity_repo.oppdaterte_dokumenter.lock().unwrap().is_empty());
     let events = status_publisher.events.lock().unwrap();
     assert_eq!(events.len(), 1);
-    assert!(events[0]
-        .detail
-        .as_deref()
-        .is_some_and(|detail| detail.starts_with("blocked_reason=saksnummer_mangler")));
+    assert!(
+        events[0]
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.starts_with("blocked_reason=saksnummer_mangler"))
+    );
 }
 
 #[tokio::test]

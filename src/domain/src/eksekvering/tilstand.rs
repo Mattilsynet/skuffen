@@ -1,5 +1,5 @@
 use crate::command::Command;
-use crate::eksekvering::html_template::{er_felter_klare, FeltVerdier, TemplateFelt};
+use crate::eksekvering::html_template::{FeltVerdier, TemplateFelt, er_felter_klare};
 use crate::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use crate::eksekvering::typer::CommandTypeCode;
 
@@ -352,8 +352,8 @@ fn planlegg_journalpost_lifecycle(
     // Journalpost creation normally requires a hoveddokument; HTML templates must
     // therefore be materialized to a PDF fact before OpprettJournalpost.
     if jp.tilstand == JournalpostTilstand::IkkeRealisert {
-        if let Some(hoveddokument) = jp.dokumenter.first() {
-            if hoveddokument.tilstand == DokumentTilstand::AvventerRendring {
+        if let Some(hoveddokument) = jp.dokumenter.first()
+            && hoveddokument.tilstand == DokumentTilstand::AvventerRendring {
                 if dokument_kan_rendres(hoveddokument, sak.saksnummer.as_deref()) {
                     return CommandStateDecision::Ready(ArkivOperasjon::RenderDokument {
                         journalpost_id: jp.journalpost_id,
@@ -363,7 +363,6 @@ fn planlegg_journalpost_lifecycle(
                     return CommandStateDecision::Blocked(BlockedReason::FelterIkkeKlare);
                 }
             }
-        }
 
         if sak.saksnummer.is_none() {
             return CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler);
@@ -390,8 +389,8 @@ fn planlegg_journalpost_lifecycle(
         }
 
         // Sjekk deretter om hoveddokumentet trenger idempotent ferdigstilling av rendring.
-        if let Some(dok) = jp.dokumenter.first() {
-            if dok.tilstand == DokumentTilstand::AvventerRendring {
+        if let Some(dok) = jp.dokumenter.first()
+            && dok.tilstand == DokumentTilstand::AvventerRendring {
                 if dokument_kan_rendres(dok, sak.saksnummer.as_deref()) {
                     return CommandStateDecision::Ready(ArkivOperasjon::RenderDokument {
                         journalpost_id: jp.journalpost_id,
@@ -401,7 +400,6 @@ fn planlegg_journalpost_lifecycle(
                     return CommandStateDecision::Blocked(BlockedReason::FelterIkkeKlare);
                 }
             }
-        }
 
         // Then add unrealized documents
         for dok in &jp.dokumenter {
@@ -868,12 +866,13 @@ mod tests {
         let decision = super::planlegg_neste_handling(&command, &sak);
         match decision {
             CommandStateDecision::Ready(ArkivOperasjon::OpprettJournalpost { journalpost_id }) => {
-                assert!(sak
-                    .journalposter
-                    .iter()
-                    .find(|jp| jp.journalpost_id == journalpost_id)
-                    .map(|jp| jp.journalposttype == JournalpostType::Inngaende)
-                    .unwrap_or(false));
+                assert!(
+                    sak.journalposter
+                        .iter()
+                        .find(|jp| jp.journalpost_id == journalpost_id)
+                        .map(|jp| jp.journalposttype == JournalpostType::Inngaende)
+                        .unwrap_or(false)
+                );
             }
             _ => panic!("Expected Ready for inngående journalpost"),
         }

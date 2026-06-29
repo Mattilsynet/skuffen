@@ -7,7 +7,7 @@ use crate::command::{Command as ApplicationCommand, CommandEnvelope, SakKey};
 use anyhow::Context;
 use domain::command::Command as DomainCommand;
 use domain::eksekvering::id::{SkuffenJournalpostId, SkuffenSakId};
-use domain::eksekvering::tilstand::{planlegg_neste_handling, CommandStateDecision, SakMedBarn};
+use domain::eksekvering::tilstand::{CommandStateDecision, SakMedBarn, planlegg_neste_handling};
 use domain::eksekvering::typer::EksekveringFeil;
 use uuid::Uuid;
 
@@ -808,9 +808,10 @@ mod tests {
         let feil = map_arkiv_feil_detail(detail, safe_execution_detail(detail));
 
         assert_eq!(feil.feiltype, EksekveringFeiltype::Irrecoverable);
-        assert!(feil
-            .melding
-            .starts_with("arkivmapping_dokumentform_mismatch"));
+        assert!(
+            feil.melding
+                .starts_with("arkivmapping_dokumentform_mismatch")
+        );
         assert!(!feil.melding.contains("sikri_recoverability"));
     }
 

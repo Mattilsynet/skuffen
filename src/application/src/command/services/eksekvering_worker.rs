@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 use crate::command::ports::command_execution_port::CommandExecutionRepository;
 use crate::command::services::eksekver_kommando::{EksekverKommandoService, ExecutionOutcome};

@@ -9,7 +9,7 @@ use domain::eksekvering::typer::EksekveringFeil;
 
 use crate::command::ports::eksekvering_port::Utsendingsvalg;
 
-use super::{extract_journalpost_client_reference, EksekverKommandoService};
+use super::{EksekverKommandoService, extract_journalpost_client_reference};
 
 impl EksekverKommandoService {
     pub(super) async fn opprett_journalpost(
@@ -69,8 +69,8 @@ impl EksekverKommandoService {
         // is archive-ready. HTML-template hoveddokumenter are rendered to PDF
         // before OpprettJournalpost and are included from rendered facts by the
         // archive gateway.
-        if let Some(hoveddokument) = jp.dokumenter.first() {
-            if hoveddokument.kilde == DokumentKildeTilstand::Bytes {
+        if let Some(hoveddokument) = jp.dokumenter.first()
+            && hoveddokument.kilde == DokumentKildeTilstand::Bytes {
                 self.entity_tilstand_repo
                     .oppdater_dokument_tilstand(hoveddokument.dokument_id, DokumentTilstand::Ok)
                     .await
@@ -89,7 +89,6 @@ impl EksekverKommandoService {
                     .await
                     .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
             }
-        }
 
         Ok(())
     }

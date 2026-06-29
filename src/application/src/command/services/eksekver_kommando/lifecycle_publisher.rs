@@ -8,7 +8,7 @@ use crate::command::status::{
     utfores_blocked_event, utfores_error_event, utfores_ok_event, utfores_retrying_event,
 };
 
-use super::{safe_execution_detail, EksekverKommandoService, ExecutionOutcome};
+use super::{EksekverKommandoService, ExecutionOutcome, safe_execution_detail};
 
 impl EksekverKommandoService {
     pub(super) async fn publish_success(

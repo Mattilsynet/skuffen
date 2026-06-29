@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
-use domain::eksekvering::tilstand::{planlegg_neste_handling, CommandStateDecision};
+use domain::eksekvering::tilstand::{CommandStateDecision, planlegg_neste_handling};
 use domain::eksekvering::typer::StatusErrorCode;
 
 use crate::command::ports::command_execution_port::{

@@ -13,7 +13,7 @@ use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
 use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1, SkuffenStatusPhase};
 
-use support::{extract_saksnummer, send_command_batch, wait_for_status_events, CommandScenario};
+use support::{CommandScenario, extract_saksnummer, send_command_batch, wait_for_status_events};
 
 mod support;
 

@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use testcontainers::{
-    core::ContainerPort, runners::AsyncRunner, ContainerAsync, ContainerRequest, GenericImage,
-    ImageExt,
+    ContainerAsync, ContainerRequest, GenericImage, ImageExt, core::ContainerPort,
+    runners::AsyncRunner,
 };
 use testcontainers_modules::postgres::Postgres;
 use tokio::sync::{Mutex, OwnedMutexGuard};
