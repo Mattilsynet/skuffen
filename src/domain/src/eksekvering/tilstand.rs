@@ -353,16 +353,17 @@ fn planlegg_journalpost_lifecycle(
     // therefore be materialized to a PDF fact before OpprettJournalpost.
     if jp.tilstand == JournalpostTilstand::IkkeRealisert {
         if let Some(hoveddokument) = jp.dokumenter.first()
-            && hoveddokument.tilstand == DokumentTilstand::AvventerRendring {
-                if dokument_kan_rendres(hoveddokument, sak.saksnummer.as_deref()) {
-                    return CommandStateDecision::Ready(ArkivOperasjon::RenderDokument {
-                        journalpost_id: jp.journalpost_id,
-                        dokument_id: hoveddokument.dokument_id,
-                    });
-                } else {
-                    return CommandStateDecision::Blocked(BlockedReason::FelterIkkeKlare);
-                }
+            && hoveddokument.tilstand == DokumentTilstand::AvventerRendring
+        {
+            if dokument_kan_rendres(hoveddokument, sak.saksnummer.as_deref()) {
+                return CommandStateDecision::Ready(ArkivOperasjon::RenderDokument {
+                    journalpost_id: jp.journalpost_id,
+                    dokument_id: hoveddokument.dokument_id,
+                });
+            } else {
+                return CommandStateDecision::Blocked(BlockedReason::FelterIkkeKlare);
             }
+        }
 
         if sak.saksnummer.is_none() {
             return CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler);
@@ -390,16 +391,17 @@ fn planlegg_journalpost_lifecycle(
 
         // Sjekk deretter om hoveddokumentet trenger idempotent ferdigstilling av rendring.
         if let Some(dok) = jp.dokumenter.first()
-            && dok.tilstand == DokumentTilstand::AvventerRendring {
-                if dokument_kan_rendres(dok, sak.saksnummer.as_deref()) {
-                    return CommandStateDecision::Ready(ArkivOperasjon::RenderDokument {
-                        journalpost_id: jp.journalpost_id,
-                        dokument_id: dok.dokument_id,
-                    });
-                } else {
-                    return CommandStateDecision::Blocked(BlockedReason::FelterIkkeKlare);
-                }
+            && dok.tilstand == DokumentTilstand::AvventerRendring
+        {
+            if dokument_kan_rendres(dok, sak.saksnummer.as_deref()) {
+                return CommandStateDecision::Ready(ArkivOperasjon::RenderDokument {
+                    journalpost_id: jp.journalpost_id,
+                    dokument_id: dok.dokument_id,
+                });
+            } else {
+                return CommandStateDecision::Blocked(BlockedReason::FelterIkkeKlare);
             }
+        }
 
         // Then add unrealized documents
         for dok in &jp.dokumenter {

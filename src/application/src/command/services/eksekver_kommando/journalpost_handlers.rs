@@ -70,25 +70,26 @@ impl EksekverKommandoService {
         // before OpprettJournalpost and are included from rendered facts by the
         // archive gateway.
         if let Some(hoveddokument) = jp.dokumenter.first()
-            && hoveddokument.kilde == DokumentKildeTilstand::Bytes {
-                self.entity_tilstand_repo
-                    .oppdater_dokument_tilstand(hoveddokument.dokument_id, DokumentTilstand::Ok)
-                    .await
-                    .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+            && hoveddokument.kilde == DokumentKildeTilstand::Bytes
+        {
+            self.entity_tilstand_repo
+                .oppdater_dokument_tilstand(hoveddokument.dokument_id, DokumentTilstand::Ok)
+                .await
+                .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
 
-                self.entity_tilstand_repo
-                    .logg_overgang(
-                        "dokument",
-                        hoveddokument.dokument_id.0,
-                        envelope.command_id,
-                        "ikke_realisert",
-                        "ok",
-                        "opprett_journalpost",
-                        None,
-                    )
-                    .await
-                    .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
-            }
+            self.entity_tilstand_repo
+                .logg_overgang(
+                    "dokument",
+                    hoveddokument.dokument_id.0,
+                    envelope.command_id,
+                    "ikke_realisert",
+                    "ok",
+                    "opprett_journalpost",
+                    None,
+                )
+                .await
+                .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+        }
 
         Ok(())
     }

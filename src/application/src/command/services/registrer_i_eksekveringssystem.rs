@@ -109,11 +109,12 @@ impl RegistrerIEksekveringssystemService {
         registration: &super::execution_registration::ResolvedRegistration,
     ) -> Result<()> {
         if let Some(sak_reg) = registration.sak.as_ref()
-            && let SakResolutionOrigin::ArkivId { saksnummer } = &sak_reg.origin {
-                self.entity_tilstand_repo
-                    .ensure_sak_tilstand_for_arkiv_id(sak_reg.sak_id, saksnummer, command_id)
-                    .await?;
-            }
+            && let SakResolutionOrigin::ArkivId { saksnummer } = &sak_reg.origin
+        {
+            self.entity_tilstand_repo
+                .ensure_sak_tilstand_for_arkiv_id(sak_reg.sak_id, saksnummer, command_id)
+                .await?;
+        }
         Ok(())
     }
 
