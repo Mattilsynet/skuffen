@@ -242,11 +242,11 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.17.1"
+version = "1.17.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4342d8937fc7e5dd9b1c60292261c0670c882a2cd1719cfc11b1af41731e32ad"
+checksum = "00bdb5da18dac48ca2cc7cd4a98e533e8635a58e2361d13a1a4ee3888e0d72f1"
 dependencies = [
- "aws-lc-sys",
+ "aws-lc-sys 0.43.0",
  "untrusted 0.7.1",
  "zeroize",
 ]
@@ -256,6 +256,19 @@ name = "aws-lc-sys"
 version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d9ceb1da931507a12f4fccea479dccd00da1943e1b4ae72d8e502d707361444"
+dependencies = [
+ "cc",
+ "cmake",
+ "dunce",
+ "fs_extra",
+ "pkg-config",
+]
+
+[[package]]
+name = "aws-lc-sys"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43103168cc76fe62678a375e722fc9cb3a0146159ac5828bc4f0dfd755c2224c"
 dependencies = [
  "cc",
  "cmake",
@@ -3016,7 +3029,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
- "aws-lc-sys",
+ "aws-lc-sys 0.42.0",
  "base64",
  "chrono",
  "gcp_auth",
@@ -3052,7 +3065,7 @@ dependencies = [
  "application",
  "async-trait",
  "aws-lc-rs",
- "aws-lc-sys",
+ "aws-lc-sys 0.42.0",
  "domain",
  "dotenvy",
  "infrastructure",
@@ -3074,7 +3087,7 @@ dependencies = [
  "application",
  "async-nats",
  "aws-lc-rs",
- "aws-lc-sys",
+ "aws-lc-sys 0.42.0",
  "bytes",
  "domain",
  "dotenvy",
@@ -3429,7 +3442,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.52.0",
