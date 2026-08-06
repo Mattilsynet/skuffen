@@ -15,7 +15,7 @@ use crate::command::ports::status_projection_port::CommandOutwardStatusProjector
 use crate::command::ports::ventende_kommando_wakeup_port::VentendeKommandoWakeup;
 use crate::command::services::command_state_decision::{blocked_detail, invalid_detail};
 use crate::command::services::execution_registration::{
-    domain_command_for_type, resolve_registration,
+    domain_command_for_type, resolve_command_ids,
 };
 use crate::command::status::utfores_error_event;
 
@@ -97,16 +97,16 @@ impl ReevaluerVentendeKommandoerService {
     }
 
     async fn reevaluer_kommando(&self, kommando: EksekveringKommando) -> Result<()> {
-        let registration = resolve_registration(self.id_mapping_repo.as_ref(), &kommando.envelope)
+        let command_ids = resolve_command_ids(self.id_mapping_repo.as_ref(), &kommando.envelope)
             .await
             .with_context(|| {
                 format!(
-                    "Klarte ikke resolve registration for ventende command {}",
+                    "Klarte ikke resolve kommando-IDer for ventende command {}",
                     kommando.command_id
                 )
             })?;
 
-        let sak_id = registration.sak_id();
+        let sak_id = command_ids.sak_id();
         let command_type = crate::command::status::command_metadata(&kommando.envelope.payload);
 
         let Some(sak_id) = sak_id else {
@@ -124,7 +124,7 @@ impl ReevaluerVentendeKommandoerService {
         };
 
         let domain_command =
-            match domain_command_for_type(command_type, sak_id, registration.journalpost_id()) {
+            match domain_command_for_type(command_type, sak_id, command_ids.journalpost_id()) {
                 Ok(command) => command,
                 Err(feil) => {
                     let detalj = feil.to_string();

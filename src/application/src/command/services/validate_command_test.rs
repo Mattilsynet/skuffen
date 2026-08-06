@@ -13,6 +13,7 @@ use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
 use lib_schemas::skuffen::query::queries::SakKey;
 use lib_schemas::skuffen::sak::{Ordningsverdi, Saksnummer, Sakstittel};
+use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -305,7 +306,7 @@ fn make_journalpost_command(sak_key: SakKey) -> WireCommand {
             dokument_dato: "2025-01-01".to_string(),
             saksbehandler: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
             dokumenter: vec![sample_dokument()],
             sak_key,
             kildesystem: None,
@@ -321,7 +322,7 @@ fn make_opprett_sak_command() -> WireCommand {
         arkivdel: Arkivdel::Tilsynsdivisjonene,
         saksbehandler_id: "Z12345".to_string(),
         saksbehandler_enhet: "42".to_string(),
-        tilgang: None,
+        tilgjengelighet: Tilgjengelighet::Offentlig,
     })
 }
 

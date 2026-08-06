@@ -44,9 +44,11 @@ Log level rules:
 - `warn!`: retryable failures, blocked commands awaiting redelivery
 - `error!`: irrecoverable failures, terminal command drops, infrastructure errors
 - `debug!`: detailed diagnostics (Sikri response parsing, query replies)
-- Include useful error messages from external responses in internal logs; they are needed for debugging and monitoring
-- Never log request payloads sent to external systems, because they may contain client-submitted sensitive data
-- Never log domain structs that may contain PII at any default level
+- Raw Sikri error-body logges KUN på `debug!`-nivå, aldri på `info!`/`error!`; ellers brukes safe code (`sikri_unknown_error` fallback fra `safe_detail_for_http_error`)
+- Rå Sikri error-body skal aldri til NATS replies, public status events, `command_execution.last_detail` eller `tilstand_historikk.feil_detalj`
+- Bounded safe error messages (koder + Norwegian user messages) er greit i internal logs for debugging og monitoring
+- Never log request payloads sent to external systems at `info!`/`error!`, because they may contain client-submitted sensitive data
+- PII in structured domain/command types may be rendered via `Debug` at `debug!` level only. `debug!` is off by default in prod, so this is acceptable; the hard rule is that raw external response text and request payloads must never appear at `info!`/`error!`
 
 ## Error taxonomy
 
@@ -128,7 +130,8 @@ Never logged:
 - Secrets, credentials, or PII
 
 Acceptable and encouraged in internal logs:
-- Error messages and status details from external response bodies when useful for debugging and monitoring
+- Safe error codes and bounded status details from external responses when useful for debugging and monitoring
+- Raw Sikri error-body only at `debug!` level; never at `info!`/`error!`, and never echoed to NATS replies, public status events, `command_execution.last_detail`, or `tilstand_historikk.feil_detalj`
 - `command_id` and `correlation_id` wherever command context is available
 
 The public outward status remains static and safe. Command execution internal details are for operators only.
@@ -139,7 +142,10 @@ NATS error replies to callers must not echo internal details:
 - Deserialization failures: reply with "Invalid payload format" / "Invalid request format"
 - Use case errors: reply with "Internal error"
 - Sikri HTTP errors: the `ensure_success` function logs response metadata but does
-  not echo response bodies to callers
+  not echo response bodies to callers. Raw Sikri error-body is logged only at `debug!`
+  level; safe codes (`safe_detail_for_http_error`, `sikri_unknown_error` fallback) are
+  used everywhere else and are the only Sikri error detail allowed on NATS replies,
+  public status events, `command_execution.last_detail`, and `tilstand_historikk.feil_detalj`
 
 This section governs what is echoed back to callers over NATS. Internal logs may include useful external response error messages as long as request payloads, HTML/PDF contents, secrets, and auth material are not logged.
 
@@ -198,6 +204,8 @@ If ingestion created an ArkivId mapping and validation fails irrecoverably, dele
 | `sikri_unknown_error` | Unclassified error | Recoverable |
 
 The companion `user_message_for_http_error` function returns a Norwegian human-readable message for status events. It shares the same classification logic. Neither function echoes raw Sikri response bodies or user identifiers.
+
+Logging policy: raw Sikri error-body is logged only at `debug!` level (never `error!`/`info!`). Everywhere else the safe code applies, with `sikri_unknown_error` as fallback. Raw bodies must never reach NATS replies, public status events, `command_execution.last_detail`, or `tilstand_historikk.feil_detalj`. Raw error bodies may contain sensitive archive details; the previous risk acceptance permitting full 4xx/5xx body logging on `error!`/`info!` is withdrawn.
 
 ## NATS server URL redaction
 

@@ -23,6 +23,7 @@ pub fn routing_token_from_wire_command(command: &Command) -> &'static str {
         Command::OpprettSak(_) | Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => "sak",
         Command::OpprettInngåendeJournalpost(_)
         | Command::OpprettUtgåendeJournalpost(_)
+        | Command::OpprettUtgåendeJournalpostMedUtsending(_)
         | Command::OpprettInterntNotatJournalpost(_) => "journalpost",
     }
 }
@@ -41,12 +42,17 @@ mod tests {
     use super::{CommandStreamStage, command_subject, routing_token_from_wire_command};
     use lib_schemas::skuffen::command::commands::Command;
     use lib_schemas::skuffen::command::journalpost::{
-        JournalpostCommon, OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost,
-        OpprettUgåendeJournalpost,
+        JournalpostCommon, Korrespondansepart, OpprettInngåendeJournalpost,
+        OpprettInterntNotatJournalpost, OpprettUtgåendeJournalpost,
+        OpprettUtgåendeJournalpostMedUtsending, Parttype, Utsendingsmottaker,
     };
+    use lib_schemas::skuffen::command::journalpost::{MottakerId, Postadresse};
     use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettSaksansvarlig};
+    use lib_schemas::skuffen::journalpost::Postnummer;
     use lib_schemas::skuffen::query::queries::SakKey;
     use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
+    use lib_schemas::skuffen::tilgang::Tilgjengelighet;
+    use lib_schemas::typer::organisasjonsnummer::Organisasjonsnummer;
     use uuid::Uuid;
 
     fn fixed_uuid(suffix: u16) -> Uuid {
@@ -65,14 +71,14 @@ mod tests {
             dokument_dato: "2026-01-01".to_string(),
             saksbehandler: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
             dokumenter: Vec::new(),
             sak_key: sak_key(),
             kildesystem: None,
         }
     }
 
-    fn command_cases() -> [(Uuid, Command, &'static str); 6] {
+    fn command_cases() -> [(Uuid, Command, &'static str); 7] {
         [
             (
                 fixed_uuid(100),
@@ -83,7 +89,7 @@ mod tests {
                     saksbehandler_id: "Z12345".to_string(),
                     saksbehandler_enhet: "42".to_string(),
                     ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
-                    tilgang: None,
+                    tilgjengelighet: Tilgjengelighet::Offentlig,
                 }),
                 "sak",
             ),
@@ -105,18 +111,42 @@ mod tests {
                 fixed_uuid(200),
                 Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
                     felles: journalpost_common(fixed_uuid(2)),
-                    avsender: "Avsender".to_string(),
-                    mottaker: None,
+                    avsender: Korrespondansepart {
+                        navn: "Avsender".to_string(),
+                        parttype: Parttype::Virksomhet,
+                    },
                 }),
                 "journalpost",
             ),
             (
                 fixed_uuid(201),
-                Command::OpprettUtgåendeJournalpost(OpprettUgåendeJournalpost {
+                Command::OpprettUtgåendeJournalpost(OpprettUtgåendeJournalpost {
                     felles: journalpost_common(fixed_uuid(3)),
-                    avsender: Some("Avsender".to_string()),
-                    mottaker: "Mottaker".to_string(),
+                    mottakere: vec![Korrespondansepart {
+                        navn: "Mottaker".to_string(),
+                        parttype: Parttype::Virksomhet,
+                    }],
                 }),
+                "journalpost",
+            ),
+            (
+                fixed_uuid(203),
+                Command::OpprettUtgåendeJournalpostMedUtsending(
+                    OpprettUtgåendeJournalpostMedUtsending {
+                        felles: journalpost_common(fixed_uuid(5)),
+                        mottakere: vec![Utsendingsmottaker {
+                            navn: "Bedrift AS".to_string(),
+                            id: MottakerId::Virksomhet {
+                                organisasjonsnummer: Organisasjonsnummer::new("995298775").unwrap(),
+                            },
+                            adresse: Postadresse {
+                                adresse: "Storgata 1".to_string(),
+                                postnummer: Postnummer::new("0350").unwrap(),
+                                poststed: "Oslo".to_string(),
+                            },
+                        }],
+                    },
+                ),
                 "journalpost",
             ),
             (

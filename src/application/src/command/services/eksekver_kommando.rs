@@ -106,6 +106,8 @@ impl EksekverKommandoService {
                     Ok(()) => {
                         let _ = self.wakeup_after_operation(sak_id, operasjon).await;
                         let oppdatert_sak_med_barn = self.hent_sak_med_barn(sak_id).await?;
+                        //TODO: Trenger dette å være en nested loop, eller kan vi ha en mer generell
+                        //loop som dekker begge?
                         let neste_beslutning =
                             planlegg_neste_handling(&domain_command, &oppdatert_sak_med_barn);
                         match neste_beslutning {
@@ -180,6 +182,8 @@ impl EksekverKommandoService {
         match beslutning {
             CommandStateDecision::Ready(_) => Ok(ExecutionOutcome::Klar),
             CommandStateDecision::Blocked(reason) => {
+                //TODO: Separer publish og logikk.
+                //Her skal det være publish, og return Ok(ExectuionOutcome)
                 self.publish_blocked_with_detail(envelope, attempt, blocked_detail(reason))
                     .await
             }

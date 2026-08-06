@@ -1,9 +1,9 @@
 # SKU-0014. Wire compatibility under internal boundary cleanup
 
 Date: 2026-06-02
-Last-reviewed: 2026-06-03
+Last-reviewed: 2026-08-05
 Tier: B
-Status: Accepted
+Status: Superseded by SKU-0015
 Crates: infrastructure, application, skuffen, skuffen-integration-tests
 
 ## Related
@@ -44,3 +44,27 @@ R8 [5]: Application-laget skal ikke bruke `MappingEntityType` eller andre applic
   invariants holder.
 - Endring av NATS subject, payload shape eller status/error values krever egen
   contract migration.
+
+## Retirement
+
+SKU-0014 er superseded by SKU-0015. Superseringen er avgrenset, ikke total:
+
+- R5 (gaten som blokkerer wire-type-cleanup inntil pinning-tester finnes) oppheves.
+  Skjermingssikker kontrakt-redesign er en koordinert breaking change; det finnes
+  ingen live klienter, og det er derfor ikke lenger noe krav om at cleanup PRs skal
+  blokkeres inntil tester pinner done subjects, persistert payload og status/error
+  mapping value-kompatibelt.
+- R2 (persistert `command_execution.payload` wire-JSON skal bevares kompatibelt)
+  oppheves. Kun dev/test-data finnes, og payload wipes ved cutover, så det er ingen
+  historisk payload-JSON som må deserialiseres på tvers av den nye shapen.
+
+Alt annet i SKU-0014 gjelder fortsatt i ånd (subject-routing, infrastructure-eid
+mapping, `MappingEntityType` som ikke-routing-vokabular).
+
+Viktig nyanse: Boundary-prinsippet om at wire-typer IKKE skal blø inn i
+application/domain eies av SKU-0013 og står HELT urørt av denne superseringen.
+SKU-0013 R1-R4 gjelder fullt ut: `domain` og `application` importerer ikke
+wire-typer, infrastructure oversetter ved laggrensen. Skjermingsredesignen tar
+INGEN snarveier her; den nye wire-shapen (Tilgjengelighet, Korrespondansepart,
+egne permissive respons-typer) lever i kontrakts-/infrastructure-laget og mappes
+til interne typer som før.

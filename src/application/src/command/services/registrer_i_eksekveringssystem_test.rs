@@ -14,12 +14,16 @@ use lib_schemas::skuffen::command::commands::{
     Command as WireCommand, CommandEnvelope as WireCommandEnvelope,
 };
 use lib_schemas::skuffen::command::journalpost::{
-    JournalpostCommon, OpprettInterntNotatJournalpost,
+    JournalpostCommon, MottakerId, OpprettInterntNotatJournalpost,
+    OpprettUtgåendeJournalpostMedUtsending, Postadresse, Utsendingsmottaker,
 };
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettSaksansvarlig};
 use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
+use lib_schemas::skuffen::journalpost::Postnummer;
 use lib_schemas::skuffen::query::queries::SakKey;
 use lib_schemas::skuffen::sak::{Ordningsverdi, Saksnummer, Sakstittel};
+use lib_schemas::skuffen::tilgang::Tilgjengelighet;
+use lib_schemas::typer::personnummer::Personnummer;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -850,6 +854,51 @@ async fn journalpost_med_client_reference_sak_ikke_i_tilstand_gir_blokkert_vente
 }
 
 #[tokio::test]
+async fn utgaaende_med_utsending_propagerer_med_utsending_flagg() {
+    let execution_repo = FakeExecutionRepository::default();
+    let entity_repo = FakeEntityTilstandRepository::default();
+    let id_mapping_repo = FakeIdMappingRepository::default();
+    let status_publisher = FakeStatusPublisher::default();
+
+    let sak_client_reference = Uuid::new_v4();
+    let sak_skuffen_id = Uuid::new_v4();
+    let journalpost_client_reference = Uuid::new_v4();
+    let journalpost_skuffen_id = Uuid::new_v4();
+    id_mapping_repo
+        .data
+        .lock()
+        .unwrap()
+        .skuffen_id_for_client_reference = vec![
+        (sak_client_reference, sak_skuffen_id),
+        (journalpost_client_reference, journalpost_skuffen_id),
+    ];
+
+    let service = build_service(
+        execution_repo.clone(),
+        entity_repo.clone(),
+        id_mapping_repo,
+        status_publisher.clone(),
+    );
+
+    let envelope = make_utgaaende_med_utsending_command(
+        journalpost_client_reference,
+        SakKey::ClientReference(sak_client_reference),
+    );
+    service.handle(&envelope).await.unwrap();
+
+    let entity_data = entity_repo.data.lock().unwrap();
+    assert_eq!(entity_data.opprettede_journalposter.len(), 1);
+    let (jp_id, _sak_id, jp_type, med_utsending, _cmd_id) =
+        &entity_data.opprettede_journalposter[0];
+    assert_eq!(*jp_id, journalpost_skuffen_id);
+    assert_eq!(*jp_type, JournalpostType::Utgaaende);
+    assert!(
+        *med_utsending,
+        "med_utsending skal propageres til journalpost-tilstand for MedUtsending-kommando"
+    );
+}
+
+#[tokio::test]
 async fn journalpost_med_arkiv_id_sak_opprettet_gir_klar() {
     let execution_repo = FakeExecutionRepository::default();
     let entity_repo = FakeEntityTilstandRepository::default();
@@ -1214,7 +1263,7 @@ fn make_journalpost_command(
                 dokument_dato: "2025-01-01".to_string(),
                 saksbehandler: "Z12345".to_string(),
                 saksbehandler_enhet: "42".to_string(),
-                tilgang: None,
+                tilgjengelighet: Tilgjengelighet::Offentlig,
                 dokumenter: vec![Dokument {
                     client_reference: Uuid::new_v4(),
                     tittel: "Vedlegg".to_string(),
@@ -1227,6 +1276,49 @@ fn make_journalpost_command(
                 kildesystem: None,
             },
         }),
+    })
+}
+
+fn make_utgaaende_med_utsending_command(
+    journalpost_id: Uuid,
+    sak_key: SakKey,
+) -> ApplicationCommandEnvelope<ApplicationCommand> {
+    crate::command::test_support::map_wire_envelope(WireCommandEnvelope {
+        command_id: Uuid::new_v4(),
+        correlation_id: Some(Uuid::new_v4()),
+        payload: WireCommand::OpprettUtgåendeJournalpostMedUtsending(
+            OpprettUtgåendeJournalpostMedUtsending {
+                felles: JournalpostCommon {
+                    client_reference: journalpost_id,
+                    tittel: "Utgående med utsending".to_string(),
+                    dokument_dato: "2025-01-01".to_string(),
+                    saksbehandler: "Z12345".to_string(),
+                    saksbehandler_enhet: "42".to_string(),
+                    tilgjengelighet: Tilgjengelighet::Offentlig,
+                    dokumenter: vec![Dokument {
+                        client_reference: Uuid::new_v4(),
+                        tittel: "Vedlegg".to_string(),
+                        form: Dokumentform::Bytes {
+                            filtype: "PDF".to_string(),
+                            dokument_referanse: Uuid::new_v4(),
+                        },
+                    }],
+                    sak_key,
+                    kildesystem: None,
+                },
+                mottakere: vec![Utsendingsmottaker {
+                    navn: "Ola Nordmann".to_string(),
+                    id: MottakerId::Person {
+                        fødselsnummer: Personnummer::new("01010101006").unwrap(),
+                    },
+                    adresse: Postadresse {
+                        adresse: "Storgata 1".to_string(),
+                        postnummer: Postnummer::new("0350").unwrap(),
+                        poststed: "Oslo".to_string(),
+                    },
+                }],
+            },
+        ),
     })
 }
 
@@ -1243,7 +1335,7 @@ fn make_opprett_sak_command(
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
     })
 }

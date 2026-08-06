@@ -1,14 +1,14 @@
 # SKU-0008. NATS wire contract for arkivering og queries
 
 Date: 2026-05-22
-Last-reviewed: 2026-05-22
+Last-reviewed: 2026-08-05
 Tier: B
 Status: Accepted
 Crates: skuffen, infrastructure, application, skuffen-integration-tests
 
 ## Related
 
-References: SKU-0004, SKU-0007
+References: SKU-0004, SKU-0007, SKU-0015
 
 ## Context
 
@@ -45,3 +45,19 @@ Dette er en direkte breaking wire-endring. Cutover bygger på eieropplysning i b
 Klienter må behandle `arkiv.arkiver` som batch-kvittering og query subjects som `NatsResponse<T>`.
 
 Latest-HEAD policy gjør lockfile-endringer til kontraktspunkter som må reviewes. `arkiv.request.journalpost.hent` returnerer syntetisk fixture-data inntil ekte repository finnes; `arkiv.request.bruker.mt_enheter` har ingen success-payload-kontrakt ennå.
+
+### Skjermingssikker kontrakt-redesign (SKU-0015)
+
+SKU-0015 endrer shapen på journalpost-kommandoene og query-responsene som denne
+kontrakten dekker, som en koordinert breaking change uten live klienter (samme
+cutover-grunnlag som over):
+
+- Journalpost-kommandoene får `Tilgjengelighet { Offentlig | Skjermet { tilgangskode,
+  tilgangshjemmel } }`, eksplisitt `Korrespondansepart` (parttype Person/Virksomhet)
+  og `Utsendingsmottaker` (`MottakerId` + full `Postadresse`).
+- Query-responsene får EGNE permissive respons-typer som kun rapporterer tilstand
+  og aldri re-validerer, slik at historiske koder alltid kan deserialiseres.
+
+R1-R10 formuleringene over står uendret; `ArkiveringKvittering`- og
+`NatsResponse<T>`-rammene beholdes. Detaljerte regler for skjerming, merking,
+gateway-utledning og audit eies av SKU-0015.

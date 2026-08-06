@@ -46,7 +46,7 @@ pub async fn from_sikri_journalpost_to_domain_journalpost(
                 .next()
                 .ok_or_else(|| anyhow!("journalstatus string har ingen chars."))?,
         )?,
-        tilgang: from_sikri_journalpost_to_domain_tilgang(sikri_journalpost.clone()),
+        tilgang: from_sikri_journalpost_to_domain_tilgang(sikri_journalpost.clone())?,
         saksbehandler: sikri_journalpost
             .saksbehandler
             .ok_or_else(|| anyhow!("Journalpost har ikke saksbehandler."))?,
@@ -86,12 +86,20 @@ pub fn journalposttype_from_char(c: char) -> Result<JournalpostType> {
 
 fn from_sikri_journalpost_to_domain_tilgang(
     sikri_journalpost: SikriJournalpostResponse,
-) -> Option<Tilgang> {
-    sikri_journalpost
-        .tilgangskode
-        .zip(sikri_journalpost.tilgangshjemmel)
-        .map(|(tilgangskode, tilgangshjemmel)| Tilgang {
+) -> Result<Option<Tilgang>> {
+    // Fail-closed: delvis tilgang (kun kode eller kun hjemmel) må aldri se
+    // uskjermet ut. Da avviser vi i stedet for å returnere None.
+    match (
+        sikri_journalpost.tilgangskode,
+        sikri_journalpost.tilgangshjemmel,
+    ) {
+        (Some(tilgangskode), Some(tilgangshjemmel)) => Ok(Some(Tilgang {
             tilgangskode,
             tilgangshjemmel,
-        })
+        })),
+        (None, None) => Ok(None),
+        (Some(_), None) | (None, Some(_)) => Err(anyhow!(
+            "Sikri journalpost har delvis tilgang (kun kode eller kun hjemmel); avviser fail-closed"
+        )),
+    }
 }

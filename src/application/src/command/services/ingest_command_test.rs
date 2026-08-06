@@ -12,11 +12,12 @@ use lib_schemas::skuffen::command::commands::{
     Command as WireCommand, CommandEnvelope as WireCommandEnvelope, CommandSequence,
 };
 use lib_schemas::skuffen::command::journalpost::{
-    JournalpostCommon, OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost,
-    OpprettUgåendeJournalpost,
+    JournalpostCommon, Korrespondansepart, OpprettInngåendeJournalpost,
+    OpprettInterntNotatJournalpost, OpprettUtgåendeJournalpost, Parttype,
 };
 use lib_schemas::skuffen::command::sak::{Arkivdel, OpprettSak};
 use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
+use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 
 use lib_schemas::skuffen::query::queries::SakKey;
 use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
@@ -229,7 +230,7 @@ async fn test_ingest_command_opprett_sak_success() {
         arkivdel: Arkivdel::Tilsynsdivisjonene,
         saksbehandler_id: "Z99999".to_string(),
         saksbehandler_enhet: "42".to_string(),
-        tilgang: None,
+        tilgjengelighet: Tilgjengelighet::Offentlig,
     });
     let envelope = WireCommandEnvelope {
         command_id,
@@ -278,13 +279,15 @@ async fn test_ingest_command_journalpost_success() {
             dokument_dato: "2023-01-01".to_string(),
             saksbehandler: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
             dokumenter: vec![],
             sak_key: SakKey::ClientReference(client_reference),
             kildesystem: None,
         },
-        avsender: "Avsender AS".to_string(),
-        mottaker: None,
+        avsender: Korrespondansepart {
+            navn: "Avsender AS".to_string(),
+            parttype: Parttype::Virksomhet,
+        },
     });
 
     let envelope = WireCommandEnvelope {
@@ -349,13 +352,15 @@ async fn test_ingest_command_registers_document_mappings() {
             dokument_dato: "2023-01-01".to_string(),
             saksbehandler: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
             dokumenter: documents.clone(),
             sak_key: SakKey::ClientReference(client_reference),
             kildesystem: None,
         },
-        avsender: "Avsender AS".to_string(),
-        mottaker: None,
+        avsender: Korrespondansepart {
+            navn: "Avsender AS".to_string(),
+            parttype: Parttype::Virksomhet,
+        },
     });
 
     let envelope = WireCommandEnvelope {
@@ -414,13 +419,15 @@ async fn test_ingest_command_idempotency_duplicate_command() {
             dokument_dato: "2023-01-01".to_string(),
             saksbehandler: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
             dokumenter: vec![],
             sak_key: SakKey::ClientReference(client_reference),
             kildesystem: None,
         },
-        avsender: "Avsender AS".to_string(),
-        mottaker: None,
+        avsender: Korrespondansepart {
+            navn: "Avsender AS".to_string(),
+            parttype: Parttype::Virksomhet,
+        },
     });
 
     let envelope = WireCommandEnvelope {
@@ -488,13 +495,15 @@ async fn test_ingest_command_allows_multiple_mappings_per_command_id() {
             dokument_dato: "2023-01-01".to_string(),
             saksbehandler: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
             dokumenter: documents.clone(),
             sak_key: SakKey::ClientReference(client_reference),
             kildesystem: None,
         },
-        avsender: "Avsender AS".to_string(),
-        mottaker: None,
+        avsender: Korrespondansepart {
+            navn: "Avsender AS".to_string(),
+            parttype: Parttype::Virksomhet,
+        },
     });
 
     let envelope = WireCommandEnvelope {
@@ -540,13 +549,15 @@ async fn test_ingest_command_mapping_failure() {
             dokument_dato: "2023-01-01".to_string(),
             saksbehandler: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
             dokumenter: vec![],
             sak_key: SakKey::ClientReference(client_reference),
             kildesystem: None,
         },
-        avsender: "Avsender AS".to_string(),
-        mottaker: None,
+        avsender: Korrespondansepart {
+            navn: "Avsender AS".to_string(),
+            parttype: Parttype::Virksomhet,
+        },
     });
 
     let envelope = WireCommandEnvelope {
@@ -592,13 +603,15 @@ async fn test_ingest_command_dispatch_failure() {
             dokument_dato: "2023-01-01".to_string(),
             saksbehandler: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
             dokumenter: vec![],
             sak_key: SakKey::ClientReference(client_reference),
             kildesystem: None,
         },
-        avsender: "Avsender AS".to_string(),
-        mottaker: None,
+        avsender: Korrespondansepart {
+            navn: "Avsender AS".to_string(),
+            parttype: Parttype::Virksomhet,
+        },
     });
 
     let envelope = WireCommandEnvelope {
@@ -641,7 +654,7 @@ async fn test_ingest_command_idempotent_duplicate_command_id() {
         arkivdel: Arkivdel::Tilsynsdivisjonene,
         saksbehandler_id: "Z99999".to_string(),
         saksbehandler_enhet: "42".to_string(),
-        tilgang: None,
+        tilgjengelighet: Tilgjengelighet::Offentlig,
     });
     let envelope = WireCommandEnvelope {
         command_id,
@@ -663,7 +676,7 @@ async fn test_ingest_command_idempotent_duplicate_command_id() {
         arkivdel: Arkivdel::Tilsynsdivisjonene,
         saksbehandler_id: "Z99999".to_string(),
         saksbehandler_enhet: "42".to_string(),
-        tilgang: None,
+        tilgjengelighet: Tilgjengelighet::Offentlig,
     });
 
     let envelope2 = WireCommandEnvelope {
@@ -696,20 +709,22 @@ async fn test_ingest_command_utgående_journalpost_success() {
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let command = WireCommand::OpprettUtgåendeJournalpost(OpprettUgåendeJournalpost {
+    let command = WireCommand::OpprettUtgåendeJournalpost(OpprettUtgåendeJournalpost {
         felles: JournalpostCommon {
             client_reference,
             tittel: "Utgående brev".to_string(),
             dokument_dato: "2023-01-02".to_string(),
             saksbehandler: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
             dokumenter: vec![],
             sak_key: SakKey::ClientReference(client_reference),
             kildesystem: None,
         },
-        avsender: None,
-        mottaker: "Mottaker AS".to_string(),
+        mottakere: vec![Korrespondansepart {
+            navn: "Mottaker AS".to_string(),
+            parttype: Parttype::Virksomhet,
+        }],
     });
 
     let envelope = WireCommandEnvelope {
@@ -756,7 +771,7 @@ async fn test_ingest_command_internt_notat_journalpost_success() {
             dokument_dato: "2023-01-03".to_string(),
             saksbehandler: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
             dokumenter: vec![],
             sak_key: SakKey::ClientReference(client_reference),
             kildesystem: None,
@@ -824,7 +839,7 @@ async fn test_ingest_command_returns_ids_preserving_order_with_idempotent_skip()
         arkivdel: Arkivdel::Tilsynsdivisjonene,
         saksbehandler_id: "Z99999".to_string(),
         saksbehandler_enhet: "42".to_string(),
-        tilgang: None,
+        tilgjengelighet: Tilgjengelighet::Offentlig,
     });
 
     let command2 = WireCommand::OpprettSak(OpprettSak {
@@ -834,7 +849,7 @@ async fn test_ingest_command_returns_ids_preserving_order_with_idempotent_skip()
         arkivdel: Arkivdel::Tilsynsdivisjonene,
         saksbehandler_id: "Z99999".to_string(),
         saksbehandler_enhet: "42".to_string(),
-        tilgang: None,
+        tilgjengelighet: Tilgjengelighet::Offentlig,
     });
 
     let command3 = WireCommand::OpprettSak(OpprettSak {
@@ -844,7 +859,7 @@ async fn test_ingest_command_returns_ids_preserving_order_with_idempotent_skip()
         arkivdel: Arkivdel::Tilsynsdivisjonene,
         saksbehandler_id: "Z99999".to_string(),
         saksbehandler_enhet: "42".to_string(),
-        tilgang: None,
+        tilgjengelighet: Tilgjengelighet::Offentlig,
     });
 
     let envelope1 = WireCommandEnvelope {

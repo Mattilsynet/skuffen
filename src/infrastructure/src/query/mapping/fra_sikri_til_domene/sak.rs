@@ -37,7 +37,7 @@ pub async fn from_sikri_sak_to_domain_sak(sikri_sak: SikriSak) -> Result<domain:
                 .next()
                 .ok_or_else(|| anyhow!("Saksstatus string har ingen characters."))?,
         )?,
-        tilgang: from_sikri_sak_to_domain_tilgang(sikri_sak.clone()),
+        tilgang: from_sikri_sak_to_domain_tilgang(sikri_sak.clone())?,
         sak_key: from_sikri_saksnummer_to_domain_sak_key(saksnummer_str).await?,
         lukket: sikri_sak.lukket,
         kildesystem: "SKUFFEN".to_string(),
@@ -61,16 +61,19 @@ fn saksstatus_from_char(c: char) -> Result<domain::model::sak::Saksstatus> {
 
 fn from_sikri_sak_to_domain_tilgang(
     sikri_sak: SikriSak,
-) -> Option<domain::model::tilgang::Tilgang> {
-    sikri_sak
-        .tilgangskode
-        .zip(sikri_sak.tilgangshjemmel)
-        .map(
-            |(tilgangskode, tilgangshjemmel)| domain::model::tilgang::Tilgang {
-                tilgangskode,
-                tilgangshjemmel,
-            },
-        )
+) -> Result<Option<domain::model::tilgang::Tilgang>> {
+    // Fail-closed: en delvis tilgang (bare kode eller bare hjemmel) må aldri
+    // tolkes som «ingen skjerming». Da avviser vi i stedet for å vise uskjermet.
+    match (sikri_sak.tilgangskode, sikri_sak.tilgangshjemmel) {
+        (Some(tilgangskode), Some(tilgangshjemmel)) => Ok(Some(domain::model::tilgang::Tilgang {
+            tilgangskode,
+            tilgangshjemmel,
+        })),
+        (None, None) => Ok(None),
+        (Some(_), None) | (None, Some(_)) => Err(anyhow!(
+            "Sikri sak har delvis tilgang (kun kode eller kun hjemmel); avviser fail-closed"
+        )),
+    }
 }
 
 async fn from_sikri_saksnummer_to_domain_sak_key(

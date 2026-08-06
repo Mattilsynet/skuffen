@@ -10,7 +10,7 @@ use crate::command::{
     OpprettSakCommand, SakKey, SettSaksansvarligCommand,
 };
 
-/// Provenance origin for a resolved sak registration.
+/// Provenance origin for a resolved sak id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SakResolutionOrigin {
     /// Sak resolved from client reference (caller-created).
@@ -20,35 +20,35 @@ pub(crate) enum SakResolutionOrigin {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedSakRegistration {
+pub(crate) struct ResolvedSakId {
     pub sak_id: SkuffenSakId,
     pub origin: SakResolutionOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedJournalpostRegistration {
+pub(crate) struct ResolvedJournalpostId {
     pub journalpost_id: SkuffenJournalpostId,
     pub sak_id: SkuffenSakId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedDokumentRegistration {
+pub(crate) struct ResolvedDokumentId {
     pub dokument_id: SkuffenDokumentId,
     pub journalpost_id: SkuffenJournalpostId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedRegistration {
-    pub sak: Option<ResolvedSakRegistration>,
-    pub journalpost: Option<ResolvedJournalpostRegistration>,
-    pub dokumenter: Vec<ResolvedDokumentRegistration>,
+pub(crate) struct ResolvedCommandIds {
+    pub sak: Option<ResolvedSakId>,
+    pub journalpost: Option<ResolvedJournalpostId>,
+    pub dokumenter: Vec<ResolvedDokumentId>,
 }
 
-impl ResolvedRegistration {
+impl ResolvedCommandIds {
     pub(crate) fn new(
-        sak: Option<ResolvedSakRegistration>,
-        journalpost: Option<ResolvedJournalpostRegistration>,
-        dokumenter: Vec<ResolvedDokumentRegistration>,
+        sak: Option<ResolvedSakId>,
+        journalpost: Option<ResolvedJournalpostId>,
+        dokumenter: Vec<ResolvedDokumentId>,
     ) -> Self {
         Self {
             sak,
@@ -104,43 +104,43 @@ pub(crate) fn domain_command_for_type(
     }
 }
 
-pub(crate) async fn resolve_registration(
+pub(crate) async fn resolve_command_ids(
     id_mapping_repo: &dyn IdMappingRepository,
     envelope: &CommandEnvelope<ApplicationCommand>,
-) -> Result<ResolvedRegistration> {
+) -> Result<ResolvedCommandIds> {
     match &envelope.payload {
-        ApplicationCommand::OpprettSak(cmd) => Ok(ResolvedRegistration::new(
-            Some(resolve_opprett_sak_registration(id_mapping_repo, cmd).await?),
+        ApplicationCommand::OpprettSak(cmd) => Ok(ResolvedCommandIds::new(
+            Some(resolve_opprett_sak_id(id_mapping_repo, cmd).await?),
             None,
             Vec::new(),
         )),
-        ApplicationCommand::AvsluttSak(cmd) => Ok(ResolvedRegistration::new(
-            Some(resolve_avslutt_sak_registration(id_mapping_repo, cmd).await?),
+        ApplicationCommand::AvsluttSak(cmd) => Ok(ResolvedCommandIds::new(
+            Some(resolve_avslutt_sak_id(id_mapping_repo, cmd).await?),
             None,
             Vec::new(),
         )),
-        ApplicationCommand::SettSaksansvarlig(cmd) => Ok(ResolvedRegistration::new(
-            Some(resolve_sett_saksansvarlig_registration(id_mapping_repo, cmd).await?),
+        ApplicationCommand::SettSaksansvarlig(cmd) => Ok(ResolvedCommandIds::new(
+            Some(resolve_sett_saksansvarlig_id(id_mapping_repo, cmd).await?),
             None,
             Vec::new(),
         )),
         ApplicationCommand::OpprettInngaaendeJournalpost(cmd) => {
-            resolve_journalpost_registration(id_mapping_repo, &cmd.felles).await
+            resolve_journalpost_ids(id_mapping_repo, &cmd.felles).await
         }
         ApplicationCommand::OpprettUtgaaendeJournalpost(cmd) => {
-            resolve_journalpost_registration(id_mapping_repo, &cmd.felles).await
+            resolve_journalpost_ids(id_mapping_repo, &cmd.felles).await
         }
         ApplicationCommand::OpprettInterntNotatJournalpost(cmd) => {
-            resolve_journalpost_registration(id_mapping_repo, &cmd.felles).await
+            resolve_journalpost_ids(id_mapping_repo, &cmd.felles).await
         }
     }
 }
 
-async fn resolve_opprett_sak_registration(
+async fn resolve_opprett_sak_id(
     id_mapping_repo: &dyn IdMappingRepository,
     command: &OpprettSakCommand,
-) -> Result<ResolvedSakRegistration> {
-    Ok(ResolvedSakRegistration {
+) -> Result<ResolvedSakId> {
+    Ok(ResolvedSakId {
         sak_id: resolve_skuffen_sak_id_for_client_reference(
             id_mapping_repo,
             command.client_reference,
@@ -150,25 +150,25 @@ async fn resolve_opprett_sak_registration(
     })
 }
 
-async fn resolve_avslutt_sak_registration(
+async fn resolve_avslutt_sak_id(
     id_mapping_repo: &dyn IdMappingRepository,
     command: &AvsluttSakCommand,
-) -> Result<ResolvedSakRegistration> {
-    resolve_sak_registration(id_mapping_repo, &command.sak_key).await
+) -> Result<ResolvedSakId> {
+    resolve_sak_id(id_mapping_repo, &command.sak_key).await
 }
 
-async fn resolve_sett_saksansvarlig_registration(
+async fn resolve_sett_saksansvarlig_id(
     id_mapping_repo: &dyn IdMappingRepository,
     command: &SettSaksansvarligCommand,
-) -> Result<ResolvedSakRegistration> {
-    resolve_sak_registration(id_mapping_repo, &command.sak_key).await
+) -> Result<ResolvedSakId> {
+    resolve_sak_id(id_mapping_repo, &command.sak_key).await
 }
 
-async fn resolve_journalpost_registration(
+async fn resolve_journalpost_ids(
     id_mapping_repo: &dyn IdMappingRepository,
     felles: &JournalpostCommon,
-) -> Result<ResolvedRegistration> {
-    let sak = resolve_sak_registration(id_mapping_repo, &felles.sak_key).await?;
+) -> Result<ResolvedCommandIds> {
+    let sak = resolve_sak_id(id_mapping_repo, &felles.sak_key).await?;
     let journalpost_id = resolve_skuffen_journalpost_id_for_client_reference(
         id_mapping_repo,
         felles.client_reference,
@@ -176,12 +176,11 @@ async fn resolve_journalpost_registration(
     .await?;
 
     let dokumenter =
-        resolve_dokument_registrationer(id_mapping_repo, journalpost_id, &felles.dokumenter)
-            .await?;
+        resolve_dokument_ids(id_mapping_repo, journalpost_id, &felles.dokumenter).await?;
 
-    Ok(ResolvedRegistration::new(
+    Ok(ResolvedCommandIds::new(
         Some(sak.clone()),
-        Some(ResolvedJournalpostRegistration {
+        Some(ResolvedJournalpostId {
             journalpost_id,
             sak_id: sak.sak_id,
         }),
@@ -189,11 +188,11 @@ async fn resolve_journalpost_registration(
     ))
 }
 
-async fn resolve_dokument_registrationer(
+async fn resolve_dokument_ids(
     id_mapping_repo: &dyn IdMappingRepository,
     journalpost_id: SkuffenJournalpostId,
     dokumenter: &[Dokument],
-) -> Result<Vec<ResolvedDokumentRegistration>> {
+) -> Result<Vec<ResolvedDokumentId>> {
     let mut resolved = Vec::with_capacity(dokumenter.len());
 
     for dokument in dokumenter {
@@ -207,7 +206,7 @@ async fn resolve_dokument_registrationer(
                 )
             })?;
 
-        resolved.push(ResolvedDokumentRegistration {
+        resolved.push(ResolvedDokumentId {
             dokument_id,
             journalpost_id,
         });
@@ -216,17 +215,17 @@ async fn resolve_dokument_registrationer(
     Ok(resolved)
 }
 
-async fn resolve_sak_registration(
+async fn resolve_sak_id(
     id_mapping_repo: &dyn IdMappingRepository,
     sak_key: &SakKey,
-) -> Result<ResolvedSakRegistration> {
+) -> Result<ResolvedSakId> {
     match sak_key {
-        SakKey::ClientReference(client_reference) => Ok(ResolvedSakRegistration {
+        SakKey::ClientReference(client_reference) => Ok(ResolvedSakId {
             sak_id: resolve_skuffen_sak_id_for_client_reference(id_mapping_repo, *client_reference)
                 .await?,
             origin: SakResolutionOrigin::ClientReference,
         }),
-        SakKey::ArkivId(saksnummer) => Ok(ResolvedSakRegistration {
+        SakKey::ArkivId(saksnummer) => Ok(ResolvedSakId {
             sak_id: id_mapping_repo
                 .hent_eller_opprett_skuffen_id_for_arkiv_id(
                     MappingEntityType::Sak,

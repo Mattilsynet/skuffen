@@ -45,12 +45,16 @@ Denne guiden beskriver trygge, vanlige bygg-, test- og kvalitetssjekker for `sku
 ## Sikri error diagnostics
 
 - Skuffen does not log Sikri response bodies for successful 2xx responses.
-- For Sikri 4xx/5xx responses, Skuffen logs the full Sikri error response body in
-  chunked GCP log entries so operators can diagnose upstream validation and code-set
-  failures. This is an explicit operational risk acceptance: error bodies may contain
-  sensitive archive details and must be protected by GCP log IAM, retention, and sink
-  controls. Skuffen still does not log request payloads, authorization headers, or
-  secrets.
+- For Sikri 4xx/5xx responses, the raw Sikri error-body is logged ONLY at `debug!`
+  level, never at `error!`/`info!`. Everywhere else Skuffen uses safe codes
+  (`safe_detail_for_http_error`, with `sikri_unknown_error` as fallback) so operators
+  can still classify upstream validation and code-set failures without exposing raw
+  bodies at default log levels.
+- Raw Sikri error-body must never reach NATS replies, public status events,
+  `command_execution.last_detail`, or `tilstand_historikk.feil_detalj`.
+- Skuffen still does not log request payloads, authorization headers, or secrets.
+- Note: the previous risk acceptance permitting full 4xx/5xx error-body logging at
+  `error!`/`info!` is withdrawn in favor of the `debug!`-only + safe-code policy above.
 
 ## Deployed test/dev workflow
 

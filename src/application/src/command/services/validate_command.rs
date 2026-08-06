@@ -117,16 +117,22 @@ impl ValidateCommandService {
             .await?;
 
         let outcome = match envelope.payload.clone() {
-            Command::OpprettSak(_) => ValidationOutcome::Ok,
-            Command::OpprettInngaaendeJournalpost(c) => {
-                self.validate_sak_ref(c.felles.sak_key).await
-            }
-            Command::OpprettUtgaaendeJournalpost(c) => {
-                self.validate_sak_ref(c.felles.sak_key).await
-            }
-            Command::OpprettInterntNotatJournalpost(c) => {
-                self.validate_sak_ref(c.felles.sak_key).await
-            }
+            Command::OpprettSak(c) => match validate_sakstittel_markup(&c) {
+                ValidationOutcome::Ok => ValidationOutcome::Ok,
+                avvist => avvist,
+            },
+            Command::OpprettInngaaendeJournalpost(c) => match validate_journalpost_lokalt(&c) {
+                ValidationOutcome::Ok => self.validate_sak_ref(c.felles.sak_key).await,
+                avvist => avvist,
+            },
+            Command::OpprettUtgaaendeJournalpost(c) => match validate_journalpost_lokalt(&c) {
+                ValidationOutcome::Ok => self.validate_sak_ref(c.felles.sak_key).await,
+                avvist => avvist,
+            },
+            Command::OpprettInterntNotatJournalpost(c) => match validate_journalpost_lokalt(&c) {
+                ValidationOutcome::Ok => self.validate_sak_ref(c.felles.sak_key).await,
+                avvist => avvist,
+            },
             Command::AvsluttSak(c) => self.validate_sak_ref(c.sak_key).await,
             Command::SettSaksansvarlig(c) => self.validate_sak_ref(c.sak_key).await,
         };
@@ -255,5 +261,76 @@ impl ValidateCommandService {
 
     async fn emit_status(&self, event: CommandLifecycleEvent) -> Result<()> {
         self.status_publisher.publish_status(event).await
+    }
+}
+
+/// Lokale (IO-frie) skjermings-invarianter for journalpost-kommandoer:
+/// tittel-markup må stemme med journalpostens tilgjengelighet, og
+/// korrespondansepart-navn må være markup-frie.
+fn validate_journalpost_lokalt(
+    command: &crate::command::OpprettJournalpostCommand,
+) -> ValidationOutcome {
+    use domain::model::skjerming_markup::{
+        navn_er_markup_fritt, sjekk_skjerming_markup, MarkupSjekk,
+    };
+
+    match sjekk_skjerming_markup(
+        &command.felles.tittel,
+        er_skjermet(&command.felles.tilgjengelighet),
+    ) {
+        MarkupSjekk::Ok => {}
+        MarkupSjekk::SkjermingKrevesMenMangler => {
+            return markup_avvist("Journalposttittel har skjermings-markup uten skjerming");
+        }
+        MarkupSjekk::UbalansertKlamme => {
+            return markup_avvist("Journalposttittel har ubalansert skjermings-markup");
+        }
+    }
+
+    let navn_ok = command
+        .korrespondanseparter
+        .iter()
+        .map(|part| part.navn.as_str())
+        .chain(
+            command
+                .utsendingsmottakere
+                .iter()
+                .map(|mottaker| mottaker.navn.as_str()),
+        )
+        .all(navn_er_markup_fritt);
+
+    if !navn_ok {
+        return markup_avvist("Korrespondansepart-navn skal ikke inneholde markup");
+    }
+
+    ValidationOutcome::Ok
+}
+
+/// Lokal skjermings-invariant for sakstittel.
+fn validate_sakstittel_markup(command: &crate::command::OpprettSakCommand) -> ValidationOutcome {
+    use domain::model::skjerming_markup::{sjekk_skjerming_markup, MarkupSjekk};
+
+    match sjekk_skjerming_markup(&command.sakstittel, er_skjermet(&command.tilgjengelighet)) {
+        MarkupSjekk::Ok => ValidationOutcome::Ok,
+        MarkupSjekk::SkjermingKrevesMenMangler => {
+            markup_avvist("Sakstittel har skjermings-markup uten skjerming")
+        }
+        MarkupSjekk::UbalansertKlamme => {
+            markup_avvist("Sakstittel har ubalansert skjermings-markup")
+        }
+    }
+}
+
+fn er_skjermet(tilgjengelighet: &crate::command::Tilgjengelighet) -> bool {
+    matches!(
+        tilgjengelighet,
+        crate::command::Tilgjengelighet::Skjermet { .. }
+    )
+}
+
+fn markup_avvist(message: &str) -> ValidationOutcome {
+    ValidationOutcome::Irrecoverable {
+        message: message.to_string(),
+        error_code: StatusErrorCode::InvalidRequest,
     }
 }

@@ -1,8 +1,9 @@
 pub mod model;
 pub use model::{
     Arkivdel, AvsluttSakCommand, Command, CommandEnvelope, Dokument, Dokumentform,
-    JournalpostCommon, OpprettJournalpostCommand, OpprettSakCommand, SakKey,
-    SettSaksansvarligCommand, Tilgang,
+    JournalpostCommon, Korrespondansepart, MottakerId, OpprettJournalpostCommand,
+    OpprettSakCommand, Parttype, Postadresse, SakKey, SettSaksansvarligCommand, Tilgjengelighet,
+    Utsendingsmottaker,
 };
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ use lib_schemas::skuffen::dokument::Dokument;
 use lib_schemas::skuffen::dokument::Dokumentform;
 use lib_schemas::skuffen::query::queries::SakKey;
 use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
+use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -1170,7 +1171,7 @@ fn make_internt_notat_command(
                 dokument_dato: "2025-01-01".to_string(),
                 saksbehandler: "Z12345".to_string(),
                 saksbehandler_enhet: "42".to_string(),
-                tilgang: None,
+                tilgjengelighet: Tilgjengelighet::Offentlig,
                 dokumenter: vec![Dokument {
                     client_reference: dokument_client_reference,
                     tittel: "Vedlegg".to_string(),
@@ -1199,7 +1200,7 @@ fn make_opprett_sak_command(
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
     })
 }

@@ -1,7 +1,8 @@
 use application::command::{
     Arkivdel, AvsluttSakCommand, Command as ApplicationCommand, CommandEnvelope, Dokument,
-    Dokumentform, JournalpostCommon, OpprettJournalpostCommand, OpprettSakCommand, SakKey,
-    SettSaksansvarligCommand, Tilgang,
+    Dokumentform, JournalpostCommon, Korrespondansepart, MottakerId, OpprettJournalpostCommand,
+    OpprettSakCommand, Parttype, Postadresse, SakKey, SettSaksansvarligCommand, Tilgjengelighet,
+    Utsendingsmottaker,
 };
 use domain::eksekvering::html_template::TemplateFelt;
 use lib_schemas::skuffen::command::commands::{
@@ -11,6 +12,9 @@ use lib_schemas::skuffen::command::journalpost as wire_journalpost;
 use lib_schemas::skuffen::command::sak as wire_sak;
 use lib_schemas::skuffen::dokument as wire_dokument;
 use lib_schemas::skuffen::query::queries as wire_query;
+use lib_schemas::skuffen::tilgang as wire_tilgang;
+use lib_schemas::typer::organisasjonsnummer::Organisasjonsnummer;
+use lib_schemas::typer::personnummer::Personnummer;
 
 pub fn map_wire_envelope(
     envelope: WireCommandEnvelope<WireCommand>,
@@ -44,23 +48,45 @@ fn map_application_command_to_wire(command: &ApplicationCommand) -> WireCommand 
             arkivdel: map_application_arkivdel(command.arkivdel),
             saksbehandler_id: command.saksbehandler_id.clone(),
             saksbehandler_enhet: command.saksbehandler_enhet.clone(),
-            tilgang: command.tilgang.clone().map(map_application_tilgang),
+            tilgjengelighet: map_application_tilgjengelighet(&command.tilgjengelighet),
         }),
         ApplicationCommand::OpprettInngaaendeJournalpost(command) => {
             WireCommand::OpprettInngåendeJournalpost(
                 wire_journalpost::OpprettInngåendeJournalpost {
                     felles: map_application_journalpost_common(&command.felles),
-                    avsender: command.avsender.clone().unwrap_or_default(),
-                    mottaker: command.mottaker.clone(),
+                    avsender: map_application_korrespondansepart(
+                        command
+                            .korrespondanseparter
+                            .first()
+                            .expect("inngående journalpost originated with an avsender"),
+                    ),
                 },
             )
         }
         ApplicationCommand::OpprettUtgaaendeJournalpost(command) => {
-            WireCommand::OpprettUtgåendeJournalpost(wire_journalpost::OpprettUgåendeJournalpost {
-                felles: map_application_journalpost_common(&command.felles),
-                avsender: command.avsender.clone(),
-                mottaker: command.mottaker.clone().unwrap_or_default(),
-            })
+            if command.med_utsending {
+                WireCommand::OpprettUtgåendeJournalpostMedUtsending(
+                    wire_journalpost::OpprettUtgåendeJournalpostMedUtsending {
+                        felles: map_application_journalpost_common(&command.felles),
+                        mottakere: command
+                            .utsendingsmottakere
+                            .iter()
+                            .map(map_application_utsendingsmottaker)
+                            .collect(),
+                    },
+                )
+            } else {
+                WireCommand::OpprettUtgåendeJournalpost(
+                    wire_journalpost::OpprettUtgåendeJournalpost {
+                        felles: map_application_journalpost_common(&command.felles),
+                        mottakere: command
+                            .korrespondanseparter
+                            .iter()
+                            .map(map_application_korrespondansepart)
+                            .collect(),
+                    },
+                )
+            }
         }
         ApplicationCommand::OpprettInterntNotatJournalpost(command) => {
             WireCommand::OpprettInterntNotatJournalpost(
@@ -91,7 +117,7 @@ fn map_application_journalpost_common(
         dokument_dato: command.dokument_dato.clone(),
         saksbehandler: command.saksbehandler.clone(),
         saksbehandler_enhet: command.saksbehandler_enhet.clone(),
-        tilgang: command.tilgang.clone().map(map_application_tilgang),
+        tilgjengelighet: map_application_tilgjengelighet(&command.tilgjengelighet),
         dokumenter: command
             .dokumenter
             .iter()
@@ -135,10 +161,64 @@ fn map_application_template_felt(felt: &TemplateFelt) -> wire_dokument::Felt {
     }
 }
 
-fn map_application_tilgang(tilgang: Tilgang) -> lib_schemas::skuffen::tilgang::Tilgang {
-    lib_schemas::skuffen::tilgang::Tilgang {
-        tilgangskode: tilgang.tilgangskode,
-        tilgangshjemmel: tilgang.tilgangshjemmel,
+fn map_application_tilgjengelighet(
+    tilgjengelighet: &Tilgjengelighet,
+) -> wire_tilgang::Tilgjengelighet {
+    match tilgjengelighet {
+        Tilgjengelighet::Offentlig => wire_tilgang::Tilgjengelighet::Offentlig,
+        Tilgjengelighet::Skjermet {
+            tilgangskode,
+            tilgangshjemmel,
+        } => wire_tilgang::Tilgjengelighet::Skjermet {
+            tilgangskode: wire_tilgang::Tilgangskode::new(tilgangskode.clone())
+                .expect("internal tilgangskode originated from valid wire command"),
+            tilgangshjemmel: wire_tilgang::Tilgangshjemmel::new(tilgangshjemmel.clone())
+                .expect("internal tilgangshjemmel originated from valid wire command"),
+        },
+    }
+}
+
+fn map_application_parttype(parttype: Parttype) -> wire_journalpost::Parttype {
+    match parttype {
+        Parttype::Person => wire_journalpost::Parttype::Person,
+        Parttype::Virksomhet => wire_journalpost::Parttype::Virksomhet,
+    }
+}
+
+fn map_application_korrespondansepart(
+    part: &Korrespondansepart,
+) -> wire_journalpost::Korrespondansepart {
+    wire_journalpost::Korrespondansepart {
+        navn: part.navn.clone(),
+        parttype: map_application_parttype(part.parttype),
+    }
+}
+
+fn map_application_utsendingsmottaker(
+    mottaker: &Utsendingsmottaker,
+) -> wire_journalpost::Utsendingsmottaker {
+    wire_journalpost::Utsendingsmottaker {
+        navn: mottaker.navn.clone(),
+        id: match &mottaker.id {
+            MottakerId::Person { fødselsnummer } => wire_journalpost::MottakerId::Person {
+                fødselsnummer: Personnummer::new(fødselsnummer.clone())
+                    .expect("internal fødselsnummer originated from valid wire command"),
+            },
+            MottakerId::Virksomhet {
+                organisasjonsnummer,
+            } => wire_journalpost::MottakerId::Virksomhet {
+                organisasjonsnummer: Organisasjonsnummer::new(organisasjonsnummer.clone())
+                    .expect("internal organisasjonsnummer originated from valid wire command"),
+            },
+        },
+        adresse: wire_journalpost::Postadresse {
+            adresse: mottaker.adresse.adresse.clone(),
+            postnummer: lib_schemas::skuffen::journalpost::Postnummer::new(
+                mottaker.adresse.postnummer.clone(),
+            )
+            .expect("internal postnummer originated from valid wire command"),
+            poststed: mottaker.adresse.poststed.clone(),
+        },
     }
 }
 
@@ -172,6 +252,9 @@ fn map_wire_command(command: WireCommand) -> ApplicationCommand {
         WireCommand::OpprettUtgåendeJournalpost(command) => {
             ApplicationCommand::OpprettUtgaaendeJournalpost(map_utgaaende_journalpost(command))
         }
+        WireCommand::OpprettUtgåendeJournalpostMedUtsending(command) => {
+            ApplicationCommand::OpprettUtgaaendeJournalpost(map_utgaaende_med_utsending(command))
+        }
         WireCommand::OpprettInterntNotatJournalpost(command) => {
             ApplicationCommand::OpprettInterntNotatJournalpost(map_internt_notat_journalpost(
                 command,
@@ -190,6 +273,54 @@ fn map_wire_command(command: WireCommand) -> ApplicationCommand {
     }
 }
 
+fn map_tilgjengelighet(tilgjengelighet: wire_tilgang::Tilgjengelighet) -> Tilgjengelighet {
+    match tilgjengelighet {
+        wire_tilgang::Tilgjengelighet::Offentlig => Tilgjengelighet::Offentlig,
+        wire_tilgang::Tilgjengelighet::Skjermet {
+            tilgangskode,
+            tilgangshjemmel,
+        } => Tilgjengelighet::Skjermet {
+            tilgangskode: tilgangskode.as_str().to_string(),
+            tilgangshjemmel: tilgangshjemmel.as_str().to_string(),
+        },
+    }
+}
+
+fn map_parttype(parttype: wire_journalpost::Parttype) -> Parttype {
+    match parttype {
+        wire_journalpost::Parttype::Person => Parttype::Person,
+        wire_journalpost::Parttype::Virksomhet => Parttype::Virksomhet,
+    }
+}
+
+fn map_korrespondansepart(part: wire_journalpost::Korrespondansepart) -> Korrespondansepart {
+    Korrespondansepart {
+        navn: part.navn,
+        parttype: map_parttype(part.parttype),
+    }
+}
+
+fn map_utsendingsmottaker(mottaker: wire_journalpost::Utsendingsmottaker) -> Utsendingsmottaker {
+    Utsendingsmottaker {
+        navn: mottaker.navn,
+        id: match mottaker.id {
+            wire_journalpost::MottakerId::Person { fødselsnummer } => MottakerId::Person {
+                fødselsnummer: fødselsnummer.as_str().to_string(),
+            },
+            wire_journalpost::MottakerId::Virksomhet {
+                organisasjonsnummer,
+            } => MottakerId::Virksomhet {
+                organisasjonsnummer: organisasjonsnummer.as_str().to_string(),
+            },
+        },
+        adresse: Postadresse {
+            adresse: mottaker.adresse.adresse,
+            postnummer: mottaker.adresse.postnummer.as_str().to_string(),
+            poststed: mottaker.adresse.poststed,
+        },
+    }
+}
+
 fn map_opprett_sak(command: wire_sak::OpprettSak) -> OpprettSakCommand {
     OpprettSakCommand {
         client_reference: command.client_reference,
@@ -198,7 +329,7 @@ fn map_opprett_sak(command: wire_sak::OpprettSak) -> OpprettSakCommand {
         arkivdel: map_arkivdel(command.arkivdel),
         saksbehandler_id: command.saksbehandler_id,
         saksbehandler_enhet: command.saksbehandler_enhet,
-        tilgang: command.tilgang.map(map_tilgang),
+        tilgjengelighet: map_tilgjengelighet(command.tilgjengelighet),
     }
 }
 
@@ -207,18 +338,39 @@ fn map_inngaende_journalpost(
 ) -> OpprettJournalpostCommand {
     OpprettJournalpostCommand {
         felles: map_journalpost_common(command.felles),
-        avsender: Some(command.avsender),
-        mottaker: command.mottaker,
+        korrespondanseparter: vec![map_korrespondansepart(command.avsender)],
+        utsendingsmottakere: Vec::new(),
+        med_utsending: false,
     }
 }
 
 fn map_utgaaende_journalpost(
-    command: wire_journalpost::OpprettUgåendeJournalpost,
+    command: wire_journalpost::OpprettUtgåendeJournalpost,
 ) -> OpprettJournalpostCommand {
     OpprettJournalpostCommand {
         felles: map_journalpost_common(command.felles),
-        avsender: command.avsender,
-        mottaker: Some(command.mottaker),
+        korrespondanseparter: command
+            .mottakere
+            .into_iter()
+            .map(map_korrespondansepart)
+            .collect(),
+        utsendingsmottakere: Vec::new(),
+        med_utsending: false,
+    }
+}
+
+fn map_utgaaende_med_utsending(
+    command: wire_journalpost::OpprettUtgåendeJournalpostMedUtsending,
+) -> OpprettJournalpostCommand {
+    OpprettJournalpostCommand {
+        felles: map_journalpost_common(command.felles),
+        korrespondanseparter: Vec::new(),
+        utsendingsmottakere: command
+            .mottakere
+            .into_iter()
+            .map(map_utsendingsmottaker)
+            .collect(),
+        med_utsending: true,
     }
 }
 
@@ -227,8 +379,9 @@ fn map_internt_notat_journalpost(
 ) -> OpprettJournalpostCommand {
     OpprettJournalpostCommand {
         felles: map_journalpost_common(command.felles),
-        avsender: None,
-        mottaker: None,
+        korrespondanseparter: Vec::new(),
+        utsendingsmottakere: Vec::new(),
+        med_utsending: false,
     }
 }
 
@@ -239,7 +392,7 @@ fn map_journalpost_common(command: wire_journalpost::JournalpostCommon) -> Journ
         dokument_dato: command.dokument_dato,
         saksbehandler: command.saksbehandler,
         saksbehandler_enhet: command.saksbehandler_enhet,
-        tilgang: command.tilgang.map(map_tilgang),
+        tilgjengelighet: map_tilgjengelighet(command.tilgjengelighet),
         dokumenter: command.dokumenter.into_iter().map(map_dokument).collect(),
         sak_key: map_sak_key(command.sak_key),
         kildesystem: command.kildesystem,
@@ -251,13 +404,6 @@ fn map_dokument(command: wire_dokument::Dokument) -> Dokument {
         client_reference: command.client_reference,
         tittel: command.tittel,
         form: map_dokumentform(command.form),
-    }
-}
-
-fn map_tilgang(tilgang: lib_schemas::skuffen::tilgang::Tilgang) -> Tilgang {
-    Tilgang {
-        tilgangskode: tilgang.tilgangskode,
-        tilgangshjemmel: tilgang.tilgangshjemmel,
     }
 }
 
@@ -305,10 +451,16 @@ fn map_arkivdel(arkivdel: wire_sak::Arkivdel) -> Arkivdel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use application::command::{
+        Korrespondansepart, MottakerId, Parttype, Postadresse, Utsendingsmottaker,
+    };
     use lib_schemas::skuffen::command::commands::Command as WireCommand;
     use lib_schemas::skuffen::command::journalpost::{
-        JournalpostCommon as WireJournalpostCommon, OpprettInngåendeJournalpost,
-        OpprettInterntNotatJournalpost, OpprettUgåendeJournalpost,
+        JournalpostCommon as WireJournalpostCommon, Korrespondansepart as WireKorrespondansepart,
+        MottakerId as WireMottakerId, OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost,
+        OpprettUtgåendeJournalpost, OpprettUtgåendeJournalpostMedUtsending,
+        Parttype as WireParttype, Postadresse as WirePostadresse,
+        Utsendingsmottaker as WireUtsendingsmottaker,
     };
     use lib_schemas::skuffen::command::sak::{
         Arkivdel as WireArkivdel, AvsluttSak, OpprettSak, SettSaksansvarlig,
@@ -316,9 +468,13 @@ mod tests {
     use lib_schemas::skuffen::dokument::{
         Dokument as WireDokument, Dokumentform as WireDokumentform, Felt,
     };
+    use lib_schemas::skuffen::journalpost::Postnummer as WirePostnummer;
     use lib_schemas::skuffen::query::queries::SakKey as WireSakKey;
     use lib_schemas::skuffen::sak::{Ordningsverdi, Saksnummer, Sakstittel};
-    use lib_schemas::skuffen::tilgang::Tilgang as WireTilgang;
+    use lib_schemas::skuffen::tilgang::{
+        Tilgangshjemmel, Tilgangskode, Tilgjengelighet as WireTilgjengelighet,
+    };
+    use lib_schemas::typer::organisasjonsnummer::Organisasjonsnummer;
     use uuid::Uuid;
 
     #[test]
@@ -331,7 +487,7 @@ mod tests {
             arkivdel: WireArkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: Some(wire_tilgang()),
+            tilgjengelighet: wire_skjermet(),
         }));
         let command_id = envelope.command_id;
         let correlation_id = envelope.correlation_id;
@@ -347,13 +503,7 @@ mod tests {
                 assert_eq!(command.arkivdel, Arkivdel::Tilsynsdivisjonene);
                 assert_eq!(command.saksbehandler_id, "Z12345");
                 assert_eq!(command.saksbehandler_enhet, "42");
-                assert_eq!(
-                    command.tilgang,
-                    Some(Tilgang {
-                        tilgangskode: "UO".to_string(),
-                        tilgangshjemmel: "offl".to_string()
-                    })
-                );
+                assert_eq!(command.tilgjengelighet, application_skjermet());
             }
             other => panic!("expected OpprettSak, got {other:?}"),
         }
@@ -376,8 +526,10 @@ mod tests {
                     },
                     dokument_ref,
                 ),
-                avsender: "Avsender".to_string(),
-                mottaker: Some("Mottaker".to_string()),
+                avsender: WireKorrespondansepart {
+                    navn: "Avsender".to_string(),
+                    parttype: WireParttype::Person,
+                },
             },
         ));
         let command_id = envelope.command_id;
@@ -394,8 +546,15 @@ mod tests {
                     SakKey::ClientReference(sak_ref),
                     dokument_ref,
                 );
-                assert_eq!(command.avsender.as_deref(), Some("Avsender"));
-                assert_eq!(command.mottaker.as_deref(), Some("Mottaker"));
+                assert_eq!(
+                    command.korrespondanseparter,
+                    vec![Korrespondansepart {
+                        navn: "Avsender".to_string(),
+                        parttype: Parttype::Person,
+                    }]
+                );
+                assert!(command.utsendingsmottakere.is_empty());
+                assert!(!command.med_utsending);
                 assert_template_document(&command.felles.dokumenter[0], mal_ref);
             }
             other => panic!("expected OpprettInngaaendeJournalpost, got {other:?}"),
@@ -409,7 +568,7 @@ mod tests {
         let mal_ref = Uuid::new_v4();
         let saksnummer = Saksnummer::new("2025/42").unwrap();
         let envelope = wire_envelope(WireCommand::OpprettUtgåendeJournalpost(
-            OpprettUgåendeJournalpost {
+            OpprettUtgåendeJournalpost {
                 felles: journalpost_common(
                     journalpost_ref,
                     WireSakKey::ArkivId(saksnummer),
@@ -419,8 +578,10 @@ mod tests {
                     },
                     dokument_ref,
                 ),
-                avsender: Some("Avsender".to_string()),
-                mottaker: "Mottaker".to_string(),
+                mottakere: vec![WireKorrespondansepart {
+                    navn: "Mottaker".to_string(),
+                    parttype: WireParttype::Virksomhet,
+                }],
             },
         ));
         let command_id = envelope.command_id;
@@ -437,9 +598,71 @@ mod tests {
                     SakKey::ArkivId("2025/42".to_string()),
                     dokument_ref,
                 );
-                assert_eq!(command.avsender.as_deref(), Some("Avsender"));
-                assert_eq!(command.mottaker.as_deref(), Some("Mottaker"));
+                assert_eq!(
+                    command.korrespondanseparter,
+                    vec![Korrespondansepart {
+                        navn: "Mottaker".to_string(),
+                        parttype: Parttype::Virksomhet,
+                    }]
+                );
+                assert!(command.utsendingsmottakere.is_empty());
+                assert!(!command.med_utsending);
                 assert_template_document(&command.felles.dokumenter[0], mal_ref);
+            }
+            other => panic!("expected OpprettUtgaaendeJournalpost, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_utgaaende_med_utsending_preserving_mottakere_and_flag() {
+        let journalpost_ref = Uuid::new_v4();
+        let sak_ref = Uuid::new_v4();
+        let dokument_ref = Uuid::new_v4();
+        let envelope = wire_envelope(WireCommand::OpprettUtgåendeJournalpostMedUtsending(
+            OpprettUtgåendeJournalpostMedUtsending {
+                felles: journalpost_common(
+                    journalpost_ref,
+                    WireSakKey::ClientReference(sak_ref),
+                    WireDokumentform::Bytes {
+                        dokument_referanse: dokument_ref,
+                        filtype: "PDF".to_string(),
+                    },
+                    dokument_ref,
+                ),
+                mottakere: vec![WireUtsendingsmottaker {
+                    navn: "Bedrift AS".to_string(),
+                    id: WireMottakerId::Virksomhet {
+                        organisasjonsnummer: Organisasjonsnummer::new("995298775").unwrap(),
+                    },
+                    adresse: WirePostadresse {
+                        adresse: "Storgata 1".to_string(),
+                        postnummer: WirePostnummer::new("0350").unwrap(),
+                        poststed: "Oslo".to_string(),
+                    },
+                }],
+            },
+        ));
+
+        let mapped = map_wire_envelope(envelope);
+
+        match mapped.payload {
+            ApplicationCommand::OpprettUtgaaendeJournalpost(command) => {
+                assert!(command.med_utsending);
+                assert!(command.korrespondanseparter.is_empty());
+                assert_eq!(
+                    command.utsendingsmottakere,
+                    vec![Utsendingsmottaker {
+                        navn: "Bedrift AS".to_string(),
+                        id: MottakerId::Virksomhet {
+                            organisasjonsnummer: "995298775".to_string(),
+                        },
+                        adresse: Postadresse {
+                            adresse: "Storgata 1".to_string(),
+                            postnummer: "0350".to_string(),
+                            poststed: "Oslo".to_string(),
+                        },
+                    }]
+                );
             }
             other => panic!("expected OpprettUtgaaendeJournalpost, got {other:?}"),
         }
@@ -478,8 +701,8 @@ mod tests {
                     SakKey::ClientReference(sak_ref),
                     dokument_ref,
                 );
-                assert_eq!(command.avsender, None);
-                assert_eq!(command.mottaker, None);
+                assert!(command.korrespondanseparter.is_empty());
+                assert!(command.utsendingsmottakere.is_empty());
                 match &command.felles.dokumenter[0].form {
                     Dokumentform::Bytes {
                         dokument_referanse,
@@ -539,6 +762,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn med_utsending_round_trips_back_to_wire_variant() {
+        let envelope = CommandEnvelope::new(
+            Uuid::new_v4(),
+            ApplicationCommand::OpprettUtgaaendeJournalpost(
+                application::command::OpprettJournalpostCommand {
+                    felles: application_journalpost_common(),
+                    korrespondanseparter: Vec::new(),
+                    utsendingsmottakere: vec![Utsendingsmottaker {
+                        navn: "Bedrift AS".to_string(),
+                        id: MottakerId::Virksomhet {
+                            organisasjonsnummer: "995298775".to_string(),
+                        },
+                        adresse: Postadresse {
+                            adresse: "Storgata 1".to_string(),
+                            postnummer: "0350".to_string(),
+                            poststed: "Oslo".to_string(),
+                        },
+                    }],
+                    med_utsending: true,
+                },
+            ),
+        );
+
+        let wire = map_application_envelope_to_wire(&envelope);
+        assert!(matches!(
+            wire.payload,
+            WireCommand::OpprettUtgåendeJournalpostMedUtsending(_)
+        ));
+    }
+
     fn wire_envelope(command: WireCommand) -> WireCommandEnvelope<WireCommand> {
         WireCommandEnvelope {
             command_id: Uuid::new_v4(),
@@ -559,7 +813,7 @@ mod tests {
             dokument_dato: "2025-01-01".to_string(),
             saksbehandler: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: Some(wire_tilgang()),
+            tilgjengelighet: wire_skjermet(),
             dokumenter: vec![WireDokument {
                 client_reference: dokument_client_reference,
                 tittel: "Dokument".to_string(),
@@ -570,8 +824,29 @@ mod tests {
         }
     }
 
-    fn wire_tilgang() -> WireTilgang {
-        WireTilgang {
+    fn application_journalpost_common() -> JournalpostCommon {
+        JournalpostCommon {
+            client_reference: Uuid::new_v4(),
+            tittel: "Journalpost".to_string(),
+            dokument_dato: "2025-01-01".to_string(),
+            saksbehandler: "Z12345".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            tilgjengelighet: application_skjermet(),
+            dokumenter: Vec::new(),
+            sak_key: SakKey::ClientReference(Uuid::new_v4()),
+            kildesystem: None,
+        }
+    }
+
+    fn wire_skjermet() -> WireTilgjengelighet {
+        WireTilgjengelighet::Skjermet {
+            tilgangskode: Tilgangskode::new("UO").unwrap(),
+            tilgangshjemmel: Tilgangshjemmel::new("offl").unwrap(),
+        }
+    }
+
+    fn application_skjermet() -> Tilgjengelighet {
+        Tilgjengelighet::Skjermet {
             tilgangskode: "UO".to_string(),
             tilgangshjemmel: "offl".to_string(),
         }
@@ -597,13 +872,7 @@ mod tests {
         assert_eq!(common.dokument_dato, "2025-01-01");
         assert_eq!(common.saksbehandler, "Z12345");
         assert_eq!(common.saksbehandler_enhet, "42");
-        assert_eq!(
-            common.tilgang,
-            Some(Tilgang {
-                tilgangskode: "UO".to_string(),
-                tilgangshjemmel: "offl".to_string()
-            })
-        );
+        assert_eq!(common.tilgjengelighet, application_skjermet());
         assert_eq!(common.sak_key, sak_key);
         assert_eq!(common.kildesystem.as_deref(), Some("test"));
         assert_eq!(common.dokumenter.len(), 1);

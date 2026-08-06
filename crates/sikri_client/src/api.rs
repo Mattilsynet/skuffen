@@ -86,7 +86,10 @@ fn log_sikri_error_response_chunks(
     let chunk_count = chunks.len();
 
     for (chunk_index, chunk) in chunks.into_iter().enumerate() {
-        error!(
+        // Rå Sikri error-body kan inneholde uforutsigbart mye data og logges
+        // derfor KUN på debug!-nivå (av i prod). Den trygge error!-linjen over
+        // bærer bare safe code, status og lengde.
+        debug!(
             target: "sikri.http",
             method,
             endpoint,
@@ -212,7 +215,8 @@ pub async fn get_sak(
 
 #[tracing::instrument(skip_all, name = "sikri.create_sak")]
 pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposterResponse> {
-    let _ = data.validate();
+    data.validate()
+        .map_err(|feil| anyhow::anyhow!("Ugyldig ElementsSak: {feil}"))?;
 
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/OpprettArkivsak", base_url());

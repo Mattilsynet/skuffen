@@ -1,6 +1,6 @@
 use crate::command::services::command_state_decision::registration_initial_status;
 use crate::command::services::execution_registration::{
-    SakResolutionOrigin, domain_command_for_type, resolve_registration,
+    SakResolutionOrigin, domain_command_for_type, resolve_command_ids,
 };
 
 use crate::command::{Command, CommandEnvelope, Dokument, Dokumentform};
@@ -68,21 +68,22 @@ impl RegistrerIEksekveringssystemService {
         &self,
         envelope: &CommandEnvelope<Command>,
     ) -> Result<(EksekveringsregistreringResultat, EksekveringStatus)> {
-        let registration = resolve_registration(self.id_mapping_repo.as_ref(), envelope).await?;
+        let command_ids = resolve_command_ids(self.id_mapping_repo.as_ref(), envelope).await?;
+        //TODO: Dette ser ut som overflødig kode. Dette er command_type fra Command structen bare.
+        //Tullemapping?
         let command_type = crate::command::status::command_metadata(&envelope.payload);
 
-        // Seed sak_tilstand for validated ArkivId before any command-specific writes.
-        // This ensures archive-validated cases have local Opprettet state with saksnummer.
-        self.seed_arkiv_id_provenance(envelope.command_id, &registration)
+        //TODO: Rename to upsert?
+        self.seed_arkiv_id_provenance(envelope.command_id, &command_ids)
             .await?;
-
-        self.opprett_entity_tilstander(envelope, &registration)
+        //TODO: Disse to har overlapp?
+        self.opprett_entity_tilstander(envelope, &command_ids)
             .await?;
 
         let (status, last_detail) = self
             .sett_initiell_eksekveringstatus(
-                registration.sak_id(),
-                registration.journalpost_id(),
+                command_ids.sak_id(), //TODO: Denne skal ikke være optional.
+                command_ids.journalpost_id(),
                 command_type,
             )
             .await?;
@@ -90,8 +91,8 @@ impl RegistrerIEksekveringssystemService {
         let ny = NyKommandoEksekvering {
             envelope: envelope.clone(),
             command_type,
-            sak_id: registration.sak_id(),
-            journalpost_id: registration.journalpost_id(),
+            sak_id: command_ids.sak_id(),
+            journalpost_id: command_ids.journalpost_id(),
             status,
             last_detail,
         };
@@ -100,15 +101,12 @@ impl RegistrerIEksekveringssystemService {
         Ok((resultat, status))
     }
 
-    /// Seeding orchestration: ensure sak_tilstand exists for ArkivId-validated cases.
-    /// Idempotent: no overwrite if row already exists.
-    /// Only seeds for SakResolutionOrigin::ArkivId; skips ClientReference and OpprettSak.
     async fn seed_arkiv_id_provenance(
         &self,
         command_id: uuid::Uuid,
-        registration: &super::execution_registration::ResolvedRegistration,
+        command_ids: &super::execution_registration::ResolvedCommandIds,
     ) -> Result<()> {
-        if let Some(sak_reg) = registration.sak.as_ref()
+        if let Some(sak_reg) = command_ids.sak.as_ref()
             && let SakResolutionOrigin::ArkivId { saksnummer } = &sak_reg.origin
         {
             self.entity_tilstand_repo
@@ -121,12 +119,13 @@ impl RegistrerIEksekveringssystemService {
     async fn opprett_entity_tilstander(
         &self,
         envelope: &CommandEnvelope<Command>,
-        registration: &super::execution_registration::ResolvedRegistration,
+        command_ids: &super::execution_registration::ResolvedCommandIds,
     ) -> Result<()> {
         match &envelope.payload {
             Command::OpprettSak(_) => {
-                let sak_id = registration
+                let sak_id = command_ids
                     .sak_id()
+                    //TODO: En god struct skal gjøre at vi ikke trenger en slik sjekk.
                     .ok_or_else(|| anyhow::anyhow!("Mangler sak_id for OpprettSak"))?;
                 self.entity_tilstand_repo
                     .opprett_sak_tilstand(sak_id, envelope.command_id)
@@ -135,30 +134,33 @@ impl RegistrerIEksekveringssystemService {
             Command::OpprettInngaaendeJournalpost(_) => {
                 self.opprett_journalpost_tilstander(
                     envelope,
-                    registration,
+                    command_ids,
                     JournalpostType::Inngaende,
+                    false,
                 )
                 .await?;
             }
-            Command::OpprettUtgaaendeJournalpost(_) => {
+            Command::OpprettUtgaaendeJournalpost(cmd) => {
                 self.opprett_journalpost_tilstander(
                     envelope,
-                    registration,
+                    command_ids,
                     JournalpostType::Utgaaende,
+                    cmd.med_utsending,
                 )
                 .await?;
             }
             Command::OpprettInterntNotatJournalpost(_) => {
                 self.opprett_journalpost_tilstander(
                     envelope,
-                    registration,
+                    command_ids,
                     JournalpostType::InterntNotat,
+                    false,
                 )
                 .await?;
             }
             Command::AvsluttSak(_) => {}
             Command::SettSaksansvarlig(cmd) => {
-                let sak_id = registration
+                let sak_id = command_ids
                     .sak_id()
                     .ok_or_else(|| anyhow::anyhow!("Mangler sak_id for SettSaksansvarlig"))?;
                 self.entity_tilstand_repo
@@ -176,13 +178,14 @@ impl RegistrerIEksekveringssystemService {
     async fn opprett_journalpost_tilstander(
         &self,
         envelope: &CommandEnvelope<Command>,
-        registration: &super::execution_registration::ResolvedRegistration,
+        command_ids: &super::execution_registration::ResolvedCommandIds,
         journalposttype: JournalpostType,
+        med_utsending: bool,
     ) -> Result<()> {
-        let sak_id = registration
+        let sak_id = command_ids
             .sak_id()
             .ok_or_else(|| anyhow::anyhow!("Mangler sak_id for journalpost-kommando"))?;
-        let jp_id = registration
+        let jp_id = command_ids
             .journalpost_id()
             .ok_or_else(|| anyhow::anyhow!("Mangler journalpost_id for journalpost-kommando"))?;
 
@@ -191,13 +194,13 @@ impl RegistrerIEksekveringssystemService {
                 jp_id,
                 sak_id,
                 journalposttype,
-                false,
+                med_utsending,
                 envelope.command_id,
             )
             .await?;
 
         let dokumenter = dokumenter_for_envelope(envelope);
-        for (index, dok) in registration.dokumenter.iter().enumerate() {
+        for (index, dok) in command_ids.dokumenter.iter().enumerate() {
             let schema_dokument = dokumenter.get(index).ok_or_else(|| {
                 anyhow::anyhow!("Mangler dokumentform for dokument {}", dok.dokument_id.0)
             })?;
@@ -227,6 +230,7 @@ impl RegistrerIEksekveringssystemService {
         Ok(())
     }
 
+    //TODO: Må sak og journalpost_id være optional her? Kan vi gjøre det på en bedre måte?
     async fn sett_initiell_eksekveringstatus(
         &self,
         sak_id: Option<SkuffenSakId>,
@@ -237,7 +241,7 @@ impl RegistrerIEksekveringssystemService {
             return Err(anyhow::anyhow!("Mangler sak_id"));
         };
 
-        // OpprettSak: always Klar (we just created tilstand row as IkkeRealisert → Opprettet)
+        // OpprettSak: alltid Klar
         if command_type == CommandTypeCode::OpprettSak {
             return Ok((EksekveringStatus::Klar, None));
         }

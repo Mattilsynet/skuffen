@@ -847,13 +847,14 @@ mod tests {
     use domain::eksekvering::tilstand::{DomainViolation, DomainViolation::*};
     use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
     use lib_schemas::skuffen::command::journalpost::{
-        JournalpostCommon, OpprettInngåendeJournalpost, OpprettInterntNotatJournalpost,
-        OpprettUgåendeJournalpost,
+        JournalpostCommon, Korrespondansepart, OpprettInngåendeJournalpost,
+        OpprettInterntNotatJournalpost, OpprettUtgåendeJournalpost, Parttype,
     };
     use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettSaksansvarlig};
     use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
     use lib_schemas::skuffen::query::queries::SakKey;
     use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
+    use lib_schemas::skuffen::tilgang::Tilgjengelighet;
     use serde_json::{Value, json};
     use uuid::Uuid;
 
@@ -892,7 +893,7 @@ mod tests {
             dokument_dato: "2026-01-01".to_string(),
             saksbehandler: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
             dokumenter: vec![dokument()],
             sak_key: sak_key(),
             kildesystem: None,
@@ -919,7 +920,7 @@ mod tests {
                     saksbehandler_id: "Z12345".to_string(),
                     saksbehandler_enhet: "42".to_string(),
                     ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
-                    tilgang: None,
+                    tilgjengelighet: Tilgjengelighet::Offentlig,
                 }),
             ),
             json!({
@@ -933,7 +934,7 @@ mod tests {
                         "saksbehandler_id": "Z12345",
                         "saksbehandler_enhet": "42",
                         "ordningsverdi": "123",
-                        "tilgang": null
+                        "tilgjengelighet": "Offentlig"
                     }
                 }
             }),
@@ -988,8 +989,10 @@ mod tests {
                 fixed_uuid(200),
                 Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
                     felles: journalpost_common(fixed_uuid(2)),
-                    avsender: "Avsender".to_string(),
-                    mottaker: None,
+                    avsender: Korrespondansepart {
+                        navn: "Avsender".to_string(),
+                        parttype: Parttype::Virksomhet,
+                    },
                 }),
             ),
             json!({
@@ -1012,12 +1015,12 @@ mod tests {
                                 }
                             }
                         }],
+                        "tilgjengelighet": "Offentlig",
                         "sak_key": {
                             "type": "clientReference",
                             "value": "123e4567-e89b-12d3-a456-426614170001"
                         },
-                        "avsender": "Avsender",
-                        "mottaker": null
+                        "avsender": { "navn": "Avsender", "parttype": "Virksomhet" }
                     }
                 }
             }),
@@ -1026,10 +1029,12 @@ mod tests {
         assert_persisted_payload_json(
             envelope(
                 fixed_uuid(201),
-                Command::OpprettUtgåendeJournalpost(OpprettUgåendeJournalpost {
+                Command::OpprettUtgåendeJournalpost(OpprettUtgåendeJournalpost {
                     felles: journalpost_common(fixed_uuid(3)),
-                    avsender: Some("Avsender".to_string()),
-                    mottaker: "Mottaker".to_string(),
+                    mottakere: vec![Korrespondansepart {
+                        navn: "Mottaker".to_string(),
+                        parttype: Parttype::Virksomhet,
+                    }],
                 }),
             ),
             json!({
@@ -1052,12 +1057,12 @@ mod tests {
                                 }
                             }
                         }],
+                        "tilgjengelighet": "Offentlig",
                         "sak_key": {
                             "type": "clientReference",
                             "value": "123e4567-e89b-12d3-a456-426614170001"
                         },
-                        "avsender": "Avsender",
-                        "mottaker": "Mottaker"
+                        "mottakere": [{ "navn": "Mottaker", "parttype": "Virksomhet" }]
                     }
                 }
             }),
@@ -1090,6 +1095,7 @@ mod tests {
                                 }
                             }
                         }],
+                        "tilgjengelighet": "Offentlig",
                         "sak_key": {
                             "type": "clientReference",
                             "value": "123e4567-e89b-12d3-a456-426614170001"

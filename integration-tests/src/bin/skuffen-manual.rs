@@ -18,7 +18,7 @@ use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettS
 use lib_schemas::skuffen::dokument::{Dokument as DtoDokument, Dokumentform, Felt};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1};
-use lib_schemas::skuffen::tilgang::Tilgang;
+use lib_schemas::skuffen::tilgang::{Tilgangshjemmel, Tilgangskode, Tilgjengelighet};
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -236,8 +236,8 @@ async fn ready(config: &ConnectionConfig) -> Result<()> {
 async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
     let saksbehandler_id = required_env("SIKRI_SAKSBEHANDLER_ID")?;
     let saksbehandler_enhet = required_env("SIKRI_SAKSBEHANDLER_ENHET")?;
-    let skjerming_tilgang = manual_skjerming_tilgang();
-    print_skjerming_tilgang_warning(&skjerming_tilgang);
+    let skjerming_tilgjengelighet = manual_skjerming_tilgjengelighet();
+    print_skjerming_tilgjengelighet_warning(&skjerming_tilgjengelighet);
     let attachments = manual_attachments()?;
 
     let sak_client_reference = Uuid::new_v4();
@@ -272,7 +272,7 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
     let shielded_dokument_path = resource_path(JOURNALPOST_PDF)?;
     let shielded_dokument = DtoDokument {
         client_reference: shielded_dokument_client_reference,
-        tittel: "Skjermet journalpost hoveddokument".to_string(),
+        tittel: "[Skjermet journalpost hoveddokument tittel fra Skuffen Test.]".to_string(),
         form: Dokumentform::Bytes {
             filtype: "PDF".to_string(),
             dokument_referanse: shielded_dokument_referanse,
@@ -332,7 +332,7 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
                 saksbehandler_id: saksbehandler_id.clone(),
                 saksbehandler_enhet: saksbehandler_enhet.clone(),
                 ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
-                tilgang: None,
+                tilgjengelighet: Tilgjengelighet::Offentlig,
             }),
         },
         CommandEnvelope {
@@ -348,7 +348,7 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
                 saksbehandler_id: saksbehandler_id.clone(),
                 saksbehandler_enhet: saksbehandler_enhet.clone(),
                 ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
-                tilgang: Some(skjerming_tilgang.clone()),
+                tilgjengelighet: skjerming_tilgjengelighet.clone(),
             }),
         },
         CommandEnvelope {
@@ -361,7 +361,7 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
                     dokument_dato: "2025-01-01".to_string(),
                     saksbehandler: saksbehandler_id.clone(),
                     saksbehandler_enhet: saksbehandler_enhet.clone(),
-                    tilgang: Some(skjerming_tilgang.clone()),
+                    tilgjengelighet: skjerming_tilgjengelighet.clone(),
                     dokumenter: vec![shielded_dokument.clone()],
                     sak_key: DtoSakKey::ClientReference(shielded_sak_client_reference),
                     kildesystem: None,
@@ -394,7 +394,7 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
                     dokument_dato: "2025-01-01".to_string(),
                     saksbehandler: saksbehandler_id.clone(),
                     saksbehandler_enhet: saksbehandler_enhet.clone(),
-                    tilgang: None,
+                    tilgjengelighet: Tilgjengelighet::Offentlig,
                     dokumenter: dokumenter
                         .iter()
                         .map(|(dokument, ..)| dokument.clone())
@@ -414,7 +414,7 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
                     dokument_dato: "2025-01-01".to_string(),
                     saksbehandler: saksbehandler_id.clone(),
                     saksbehandler_enhet: saksbehandler_enhet.clone(),
-                    tilgang: None,
+                    tilgjengelighet: Tilgjengelighet::Offentlig,
                     dokumenter: vec![DtoDokument {
                         client_reference: template_dokument_client_reference,
                         tittel: "HTML-template notat".to_string(),
@@ -525,20 +525,28 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
     Ok(())
 }
 
-fn manual_skjerming_tilgang() -> Tilgang {
+fn manual_skjerming_tilgjengelighet() -> Tilgjengelighet {
     // Disse defaultverdiene må finnes i target Sikri-kodeverk for
     // TILGANGSKODE/TILGANGSHJEMMEL før sekvensen kjøres mot et miljø.
-    Tilgang {
-        tilgangskode: "UO".to_string(),
-        tilgangshjemmel: "Offl. § 23 tredje ledd".to_string(),
+    Tilgjengelighet::Skjermet {
+        tilgangskode: Tilgangskode::new("UO").expect("gyldig tilgangskode"),
+        tilgangshjemmel: Tilgangshjemmel::new("Offl. § 23 tredje ledd")
+            .expect("gyldig tilgangshjemmel"),
     }
 }
 
-fn print_skjerming_tilgang_warning(tilgang: &Tilgang) {
-    eprintln!(
-        "Shielded title coverage uses synthetic [|Ola Norrmann|] titles with environment-specific default tilgangskode={} and tilgangshjemmel={}. These values are not validated by this tool; confirm they exist in the target Sikri code sets before running against real archive data.",
-        tilgang.tilgangskode, tilgang.tilgangshjemmel
-    );
+fn print_skjerming_tilgjengelighet_warning(tilgjengelighet: &Tilgjengelighet) {
+    if let Tilgjengelighet::Skjermet {
+        tilgangskode,
+        tilgangshjemmel,
+    } = tilgjengelighet
+    {
+        eprintln!(
+            "Shielded title coverage uses synthetic [|Ola Norrmann|] titles with environment-specific default tilgangskode={} and tilgangshjemmel={}. These values are not validated by this tool; confirm they exist in the target Sikri code sets before running against real archive data.",
+            tilgangskode.as_str(),
+            tilgangshjemmel.as_str()
+        );
+    }
 }
 
 fn redact_url_userinfo(url: &str) -> String {

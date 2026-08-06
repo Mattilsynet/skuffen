@@ -17,6 +17,7 @@ impl EksekverKommandoService {
             .await
             .map_err(|err| self.map_arkiv_feil(err))?;
 
+        //TODO: Denne skal bruke skuffen id, ikke client reference.
         if let Some(client_ref) = extract_sak_client_reference(envelope) {
             self.id_mapping
                 .oppdater_arkiv_id_for_client_reference(client_ref, saksnummer.clone())

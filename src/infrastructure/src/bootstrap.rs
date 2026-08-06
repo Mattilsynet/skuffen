@@ -38,6 +38,7 @@ use crate::nats::setup::setup_nats;
 use crate::query::adapter::fake_journalpost_repository::FakeJournalpostRepository;
 use crate::query::adapter::fake_sak_repository::FakeSakRepository;
 use crate::query::adapter::hent_sak::SikriRepository;
+use crate::query::adapter::not_implemented_journalpost_repository::NotImplementedJournalpostRepository;
 use crate::query::mapping::lookup::key_mapping_queries;
 use crate::query::nats::listener::{
     BRUKER_MT_ENHETER_SUBJECT, BrukerMtEnheterNotImplementedUseCase, HENT_JOURNALPOST_SUBJECT,
@@ -58,7 +59,7 @@ pub struct RuntimeDeps {
 pub async fn prepare_runtime() -> anyhow::Result<RuntimeDeps> {
     let nats = setup_nats().await?;
     let health_check_handle = health_check().await?;
-    let use_fake_sikri = use_fake_sikri();
+    let use_fake_sikri = use_fake_sikri()?;
 
     let db_pool = crate::database::setup::setup_database().await?;
     crate::database::setup::run_migrations(&db_pool).await?;
@@ -87,9 +88,13 @@ pub fn build_query_listener(nats: NatsClient, use_fake_sikri: bool) -> QueryList
     } else {
         HentSakService::new(Box::new(SikriRepository))
     };
-    //TODO: Ikke implementert endepunkt enda.
-    let hent_journalpost_uc =
-        HentJournalpostService::new(Box::new(FakeJournalpostRepository::new()));
+    // Fake journalpost-data skal aldri nå ekte klienter. Inntil ekte backing
+    // finnes returnerer produksjonsadapteren en tydelig feil (SKU-0008 R7).
+    let hent_journalpost_uc = if use_fake_sikri {
+        HentJournalpostService::new(Box::new(FakeJournalpostRepository::new()))
+    } else {
+        HentJournalpostService::new(Box::new(NotImplementedJournalpostRepository::new()))
+    };
     let hent_sak_replier = NatsReplier::new(nats.clone(), HENT_SAK_SUBJECT, Box::new(hent_sak_uc));
     let hent_journalpost_replier = NatsReplier::new(
         nats.clone(),
@@ -208,9 +213,32 @@ pub fn build_eksekvering_components(
     Ok((eksekvering_listener, eksekvering_worker))
 }
 
-fn use_fake_sikri() -> bool {
-    std::env::var("SKUFFEN_FAKE_SIKRI")
+fn use_fake_sikri() -> anyhow::Result<bool> {
+    let requested = std::env::var("SKUFFEN_FAKE_SIKRI")
         .map(|value| value == "1")
+        .unwrap_or(false);
+
+    // Fake Sikri/arkiv skal ALDRI kunne aktiveres utenfor eksplisitt godkjente
+    // ikke-prod-miljøer. Feilkonfig i prod skal stoppe oppstart, ikke gi falske
+    // OK-svar mot ekte klienter.
+    if requested && !fake_adaptere_tillatt() {
+        anyhow::bail!("SKUFFEN_FAKE_SIKRI=1 er kun tillatt når APP_ENV er local, dev eller test");
+    }
+
+    Ok(requested)
+}
+
+/// Fake-adaptere er kun tillatt i eksplisitt ikke-prod-miljøer.
+fn fake_adaptere_tillatt() -> bool {
+    fake_adaptere_tillatt_for(std::env::var("APP_ENV").ok().as_deref())
+}
+
+fn fake_adaptere_tillatt_for(app_env: Option<&str>) -> bool {
+    app_env
+        .map(|value| {
+            let env = value.trim().to_ascii_lowercase();
+            matches!(env.as_str(), "local" | "dev" | "test")
+        })
         .unwrap_or(false)
 }
 
@@ -311,5 +339,24 @@ struct ReadyUseCase;
 impl UseCase<String, String> for ReadyUseCase {
     async fn handle(&self, _req: String) -> Result<String, anyhow::Error> {
         Ok("ready".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fake_adaptere_tillatt_kun_i_ikke_prod_miljoer() {
+        assert!(fake_adaptere_tillatt_for(Some("local")));
+        assert!(fake_adaptere_tillatt_for(Some("dev")));
+        assert!(fake_adaptere_tillatt_for(Some("test")));
+        assert!(fake_adaptere_tillatt_for(Some("TEST")));
+        assert!(fake_adaptere_tillatt_for(Some("  dev  ")));
+
+        assert!(!fake_adaptere_tillatt_for(Some("prod")));
+        assert!(!fake_adaptere_tillatt_for(Some("production")));
+        assert!(!fake_adaptere_tillatt_for(Some("")));
+        assert!(!fake_adaptere_tillatt_for(None));
     }
 }

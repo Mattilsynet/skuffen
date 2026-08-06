@@ -17,6 +17,7 @@ use lib_schemas::skuffen::command::journalpost::{
 };
 use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
 use lib_schemas::skuffen::query::queries::SakKey;
+use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 use uuid::Uuid;
 
 use crate::command::ports::command_execution_port::{
@@ -1233,7 +1234,7 @@ async fn sikri_feil_publiserer_kun_stabil_safe_detail() {
             arkivdel: lib_schemas::skuffen::command::sak::Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
     };
 
@@ -1304,7 +1305,7 @@ async fn ukjent_sikri_feil_publiserer_generisk_upstream_safe_detail() {
             arkivdel: lib_schemas::skuffen::command::sak::Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
     };
 
@@ -1482,7 +1483,7 @@ fn make_internt_notat_command(
                 dokument_dato: "2025-01-01".to_string(),
                 saksbehandler: "Z12345".to_string(),
                 saksbehandler_enhet: "42".to_string(),
-                tilgang: None,
+                tilgjengelighet: Tilgjengelighet::Offentlig,
                 dokumenter: vec![Dokument {
                     client_reference: Uuid::new_v4(),
                     tittel: "Vedlegg".to_string(),

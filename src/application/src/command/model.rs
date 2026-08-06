@@ -40,13 +40,16 @@ pub struct OpprettSakCommand {
     pub arkivdel: Arkivdel,
     pub saksbehandler_id: String,
     pub saksbehandler_enhet: String,
-    pub tilgang: Option<Tilgang>,
+    pub tilgjengelighet: Tilgjengelighet,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Tilgang {
-    pub tilgangskode: String,
-    pub tilgangshjemmel: String,
+pub enum Tilgjengelighet {
+    Offentlig,
+    Skjermet {
+        tilgangskode: String,
+        tilgangshjemmel: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,11 +58,44 @@ pub enum Arkivdel {
     Hovedkontoret,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Parttype {
+    Person,
+    Virksomhet,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Korrespondansepart {
+    pub navn: String,
+    pub parttype: Parttype,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MottakerId {
+    Person { fødselsnummer: String },
+    Virksomhet { organisasjonsnummer: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Postadresse {
+    pub adresse: String,
+    pub postnummer: String,
+    pub poststed: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Utsendingsmottaker {
+    pub navn: String,
+    pub id: MottakerId,
+    pub adresse: Postadresse,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpprettJournalpostCommand {
     pub felles: JournalpostCommon,
-    pub avsender: Option<String>,
-    pub mottaker: Option<String>,
+    pub korrespondanseparter: Vec<Korrespondansepart>,
+    pub utsendingsmottakere: Vec<Utsendingsmottaker>,
+    pub med_utsending: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +105,7 @@ pub struct JournalpostCommon {
     pub dokument_dato: String,
     pub saksbehandler: String,
     pub saksbehandler_enhet: String,
-    pub tilgang: Option<Tilgang>,
+    pub tilgjengelighet: Tilgjengelighet,
     pub dokumenter: Vec<Dokument>,
     pub sak_key: SakKey,
     pub kildesystem: Option<String>,
@@ -157,6 +193,9 @@ pub mod test_support {
             WireCommand::OpprettUtgåendeJournalpost(command) => {
                 Command::OpprettUtgaaendeJournalpost(map_utgaaende_journalpost(command))
             }
+            WireCommand::OpprettUtgåendeJournalpostMedUtsending(command) => {
+                Command::OpprettUtgaaendeJournalpost(map_utgaaende_med_utsending(command))
+            }
             WireCommand::OpprettInterntNotatJournalpost(command) => {
                 Command::OpprettInterntNotatJournalpost(map_internt_notat_journalpost(command))
             }
@@ -173,6 +212,58 @@ pub mod test_support {
         }
     }
 
+    fn map_tilgjengelighet(
+        tilgjengelighet: lib_schemas::skuffen::tilgang::Tilgjengelighet,
+    ) -> Tilgjengelighet {
+        match tilgjengelighet {
+            lib_schemas::skuffen::tilgang::Tilgjengelighet::Offentlig => Tilgjengelighet::Offentlig,
+            lib_schemas::skuffen::tilgang::Tilgjengelighet::Skjermet {
+                tilgangskode,
+                tilgangshjemmel,
+            } => Tilgjengelighet::Skjermet {
+                tilgangskode: tilgangskode.as_str().to_string(),
+                tilgangshjemmel: tilgangshjemmel.as_str().to_string(),
+            },
+        }
+    }
+
+    fn map_parttype(parttype: wire_journalpost::Parttype) -> Parttype {
+        match parttype {
+            wire_journalpost::Parttype::Person => Parttype::Person,
+            wire_journalpost::Parttype::Virksomhet => Parttype::Virksomhet,
+        }
+    }
+
+    fn map_korrespondansepart(part: wire_journalpost::Korrespondansepart) -> Korrespondansepart {
+        Korrespondansepart {
+            navn: part.navn,
+            parttype: map_parttype(part.parttype),
+        }
+    }
+
+    fn map_utsendingsmottaker(
+        mottaker: wire_journalpost::Utsendingsmottaker,
+    ) -> Utsendingsmottaker {
+        Utsendingsmottaker {
+            navn: mottaker.navn,
+            id: match mottaker.id {
+                wire_journalpost::MottakerId::Person { fødselsnummer } => MottakerId::Person {
+                    fødselsnummer: fødselsnummer.as_str().to_string(),
+                },
+                wire_journalpost::MottakerId::Virksomhet {
+                    organisasjonsnummer,
+                } => MottakerId::Virksomhet {
+                    organisasjonsnummer: organisasjonsnummer.as_str().to_string(),
+                },
+            },
+            adresse: Postadresse {
+                adresse: mottaker.adresse.adresse,
+                postnummer: mottaker.adresse.postnummer.as_str().to_string(),
+                poststed: mottaker.adresse.poststed,
+            },
+        }
+    }
+
     fn map_opprett_sak(command: wire_sak::OpprettSak) -> OpprettSakCommand {
         OpprettSakCommand {
             client_reference: command.client_reference,
@@ -184,10 +275,7 @@ pub mod test_support {
             },
             saksbehandler_id: command.saksbehandler_id,
             saksbehandler_enhet: command.saksbehandler_enhet,
-            tilgang: command.tilgang.map(|tilgang| Tilgang {
-                tilgangskode: tilgang.tilgangskode,
-                tilgangshjemmel: tilgang.tilgangshjemmel,
-            }),
+            tilgjengelighet: map_tilgjengelighet(command.tilgjengelighet),
         }
     }
 
@@ -196,18 +284,39 @@ pub mod test_support {
     ) -> OpprettJournalpostCommand {
         OpprettJournalpostCommand {
             felles: map_journalpost_common(command.felles),
-            avsender: Some(command.avsender),
-            mottaker: command.mottaker,
+            korrespondanseparter: vec![map_korrespondansepart(command.avsender)],
+            utsendingsmottakere: Vec::new(),
+            med_utsending: false,
         }
     }
 
     fn map_utgaaende_journalpost(
-        command: wire_journalpost::OpprettUgåendeJournalpost,
+        command: wire_journalpost::OpprettUtgåendeJournalpost,
     ) -> OpprettJournalpostCommand {
         OpprettJournalpostCommand {
             felles: map_journalpost_common(command.felles),
-            avsender: command.avsender,
-            mottaker: Some(command.mottaker),
+            korrespondanseparter: command
+                .mottakere
+                .into_iter()
+                .map(map_korrespondansepart)
+                .collect(),
+            utsendingsmottakere: Vec::new(),
+            med_utsending: false,
+        }
+    }
+
+    fn map_utgaaende_med_utsending(
+        command: wire_journalpost::OpprettUtgåendeJournalpostMedUtsending,
+    ) -> OpprettJournalpostCommand {
+        OpprettJournalpostCommand {
+            felles: map_journalpost_common(command.felles),
+            korrespondanseparter: Vec::new(),
+            utsendingsmottakere: command
+                .mottakere
+                .into_iter()
+                .map(map_utsendingsmottaker)
+                .collect(),
+            med_utsending: true,
         }
     }
 
@@ -216,8 +325,9 @@ pub mod test_support {
     ) -> OpprettJournalpostCommand {
         OpprettJournalpostCommand {
             felles: map_journalpost_common(command.felles),
-            avsender: None,
-            mottaker: None,
+            korrespondanseparter: Vec::new(),
+            utsendingsmottakere: Vec::new(),
+            med_utsending: false,
         }
     }
 
@@ -228,10 +338,7 @@ pub mod test_support {
             dokument_dato: command.dokument_dato,
             saksbehandler: command.saksbehandler,
             saksbehandler_enhet: command.saksbehandler_enhet,
-            tilgang: command.tilgang.map(|tilgang| Tilgang {
-                tilgangskode: tilgang.tilgangskode,
-                tilgangshjemmel: tilgang.tilgangshjemmel,
-            }),
+            tilgjengelighet: map_tilgjengelighet(command.tilgjengelighet),
             dokumenter: command
                 .dokumenter
                 .into_iter()

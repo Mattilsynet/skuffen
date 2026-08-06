@@ -1,9 +1,9 @@
 use anyhow::Result;
 use lib_schemas::skuffen::journalpost::{JournalpostId, JournalpostType, Journalpoststatus};
 use lib_schemas::skuffen::query::responses::JournalpostResponse;
-use lib_schemas::skuffen::tilgang::Tilgang;
 
 use crate::query::mapping::fra_domene_til_dto::dokument::from_domain_dokument_to_dto;
+use crate::query::mapping::fra_domene_til_dto::tilgang::from_domain_tilgang_to_tilgjengelighet;
 
 pub fn from_domain_journalpost_to_dto(
     domain_journalpost: domain::model::journalpost::Journalpost,
@@ -13,9 +13,12 @@ pub fn from_domain_journalpost_to_dto(
         dokument_dato: domain_journalpost.dokument_dato,
         journalposttype: from_domain_journalposttype_to_dto(domain_journalpost.journalposttype),
         journalstatus: from_domain_journalpoststatus_to_dto(domain_journalpost.journalstatus),
-        tilgang: from_domain_tilgang_to_dto(domain_journalpost.tilgang),
+        tilgjengelighet: from_domain_tilgang_to_tilgjengelighet(domain_journalpost.tilgang),
         saksbehandler: Some(domain_journalpost.saksbehandler),
         saksbehandler_enhet: None,
+        // Domenets read-modell bærer ennå ikke avsender/mottaker; feltet
+        // rapporteres derfor som fraværende (None), ikke tom liste.
+        korrespondanseparter: None,
         dokumenter: domain_journalpost
             .dokumenter
             .iter()
@@ -52,13 +55,4 @@ fn from_domain_journalpoststatus_to_dto(
             Journalpoststatus::Journalført
         }
     }
-}
-
-fn from_domain_tilgang_to_dto(
-    domain_tilgang: Option<domain::model::tilgang::Tilgang>,
-) -> Option<Tilgang> {
-    domain_tilgang.map(|t| Tilgang {
-        tilgangskode: t.tilgangskode,
-        tilgangshjemmel: t.tilgangshjemmel,
-    })
 }

@@ -482,8 +482,8 @@ fn planlegg_sett_saksansvarlig(sak_id: SkuffenSakId, sak: &SakMedBarn) -> Comman
         return CommandStateDecision::Blocked(BlockedReason::SaksnummerMangler);
     }
 
-    // No desired saksansvarlig set -> nothing to do (Done)
     let Some(oensket) = &sak.oensket_saksansvarlig else {
+        // Ingen forespurt saksansvarlig (SKU-0003 R1/R5): ingenting å gjøre.
         return CommandStateDecision::Done;
     };
 
@@ -1088,6 +1088,18 @@ mod tests {
         sak.saksnummer = Some("2025/1".to_string());
         sak.oensket_saksansvarlig = Some(saksansvarlig.clone());
         sak.naavaerende_saksansvarlig = Some(saksansvarlig);
+
+        let command = Command::SettSaksansvarlig { sak_id: sak.sak_id };
+        let decision = super::planlegg_neste_handling(&command, &sak);
+        assert!(matches!(decision, CommandStateDecision::Done));
+    }
+
+    #[test]
+    fn sett_saksansvarlig_uten_oensket_gir_done() {
+        let mut sak = enkel_sak(SakTilstand::Opprettet);
+        sak.saksnummer = Some("2025/1".to_string());
+        sak.oensket_saksansvarlig = None;
+        sak.naavaerende_saksansvarlig = None;
 
         let command = Command::SettSaksansvarlig { sak_id: sak.sak_id };
         let decision = super::planlegg_neste_handling(&command, &sak);

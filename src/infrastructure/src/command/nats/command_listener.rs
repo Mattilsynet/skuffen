@@ -177,6 +177,10 @@ impl CommandListener {
                     self.validate_media_references(&command.felles.dokumenter, &mut missing)
                         .await?;
                 }
+                Command::OpprettUtgåendeJournalpostMedUtsending(command) => {
+                    self.validate_media_references(&command.felles.dokumenter, &mut missing)
+                        .await?;
+                }
                 Command::OpprettInterntNotatJournalpost(command) => {
                     self.validate_media_references(&command.felles.dokumenter, &mut missing)
                         .await?;

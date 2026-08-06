@@ -3,7 +3,8 @@ use application::command::ports::eksekvering_port::{
     ArkivGateway, OpprettJournalpostResultat, Utsendingsvalg,
 };
 use application::command::{
-    Arkivdel, Command, CommandEnvelope, Dokument, Dokumentform, OpprettJournalpostCommand,
+    Arkivdel, Command, CommandEnvelope, Dokument, Dokumentform, Korrespondansepart, MottakerId,
+    OpprettJournalpostCommand, Parttype, Tilgjengelighet, Utsendingsmottaker,
 };
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -47,13 +48,16 @@ impl ArkivGateway for SikriArkivGateway {
             saksbehandler_id: data.saksbehandler_id.clone(),
             saksbehandler_enhet: data.saksbehandler_enhet.clone(),
             ordningsverdi: data.ordningsverdi.clone(),
-            tilgang: data
-                .tilgang
-                .as_ref()
-                .map(|t| sikri_client::domain::ny_sak::Tilgang {
-                    tilgangskode: t.tilgangskode.clone(),
-                    tilgangshjemmel: t.tilgangshjemmel.clone(),
+            tilgang: match &data.tilgjengelighet {
+                Tilgjengelighet::Skjermet {
+                    tilgangskode,
+                    tilgangshjemmel,
+                } => Some(sikri_client::domain::ny_sak::Tilgang {
+                    tilgangskode: tilgangskode.clone(),
+                    tilgangshjemmel: tilgangshjemmel.clone(),
                 }),
+                Tilgjengelighet::Offentlig => None,
+            },
             virksomhetsmappe_id: None,
         };
 
@@ -145,41 +149,36 @@ impl SikriArkivGateway {
         let dokumenter = self
             .map_dokumenter(&data.felles.dokumenter, journalpost)
             .await?;
-        Ok(ElementsJournalpost {
+        let avsender = data.korrespondanseparter.first().ok_or_else(|| {
+            anyhow::anyhow!(
+                "arkivmapping_avsender_mangler client_reference={} sikri_recoverability=irrecoverable",
+                data.felles.client_reference
+            )
+        })?;
+        let skjerming = skjerming_fra_tilgjengelighet(
+            &data.felles.tilgjengelighet,
+            data.felles.client_reference,
+        )?;
+
+        let elements = ElementsJournalpost {
             tittel: Some(data.felles.tittel.clone()),
             journalposttype: Some("I".to_string()),
             journalstatus: Some("J".to_string()),
             avskriv_direkte: Some(true),
             avskrivningsmaate: Some("TE".to_string()),
-            tilgangskode: data.felles.tilgang.as_ref().map(|t| t.tilgangskode.clone()),
-            tilgangshjemmel: data
-                .felles
-                .tilgang
-                .as_ref()
-                .map(|t| t.tilgangshjemmel.clone()),
+            tilgangskode: skjerming.tilgangskode(),
+            tilgangshjemmel: skjerming.tilgangshjemmel(),
             saksbehandler: Some(data.felles.saksbehandler.clone()),
             saksbehandler_enhet: Some(data.felles.saksbehandler_enhet.clone()),
-            avsendere_mottakere: Some(vec![ElementsAvsenderMottaker {
-                er_mottaker: Some(false),
-                navn: Some(data.avsender.clone().unwrap_or_default()),
-                forsendelsesmetode: None,
-                kopi: None,
-                unntatt_offentlighet: None,
-                person: None,
-                til_saksbehandler: None,
-                til_saksbehandler_enhet: None,
-                id: None,
-                organisasjonsnummer: None,
-                epost: None,
-                telefon: None,
-                postadresse: None,
-                postnummer: None,
-                poststed: None,
-                utlandsadresse: None,
-            }]),
+            avsendere_mottakere: Some(vec![korrespondansepart_avsender_mottaker(
+                avsender, false, &skjerming,
+            )?]),
             dokumenter: Some(dokumenter),
             dokument_dato: Some(data.felles.dokument_dato.clone()),
-        })
+        };
+
+        verifiser_skjerming(&elements, &skjerming, data.felles.client_reference)?;
+        Ok(elements)
     }
 
     async fn opprett_utgaaende(
@@ -196,42 +195,49 @@ impl SikriArkivGateway {
             Some(Utsendingsvalg::UtenUtsending) => Some("DIG".to_string()),
             None => None,
         };
+        let skjerming = skjerming_fra_tilgjengelighet(
+            &data.felles.tilgjengelighet,
+            data.felles.client_reference,
+        )?;
 
-        Ok(ElementsJournalpost {
+        let mut avsendere_mottakere: Vec<ElementsAvsenderMottaker> = Vec::new();
+        for mottaker in &data.korrespondanseparter {
+            let mut am = korrespondansepart_avsender_mottaker(mottaker, true, &skjerming)?;
+            am.forsendelsesmetode = forsendelsesmetode.clone();
+            avsendere_mottakere.push(am);
+        }
+        for mottaker in &data.utsendingsmottakere {
+            avsendere_mottakere.push(utsendingsmottaker_avsender_mottaker(
+                mottaker,
+                &skjerming,
+                data.felles.client_reference,
+            )?);
+        }
+
+        if avsendere_mottakere.is_empty() {
+            return Err(anyhow::anyhow!(
+                "arkivmapping_mottaker_mangler client_reference={} sikri_recoverability=irrecoverable",
+                data.felles.client_reference
+            ));
+        }
+
+        let elements = ElementsJournalpost {
             tittel: Some(data.felles.tittel.clone()),
             journalposttype: Some("U".to_string()),
             journalstatus: Some("R".to_string()),
             avskriv_direkte: None,
             avskrivningsmaate: None,
-            tilgangskode: data.felles.tilgang.as_ref().map(|t| t.tilgangskode.clone()),
-            tilgangshjemmel: data
-                .felles
-                .tilgang
-                .as_ref()
-                .map(|t| t.tilgangshjemmel.clone()),
+            tilgangskode: skjerming.tilgangskode(),
+            tilgangshjemmel: skjerming.tilgangshjemmel(),
             saksbehandler: Some(data.felles.saksbehandler.clone()),
             saksbehandler_enhet: Some(data.felles.saksbehandler_enhet.clone()),
-            avsendere_mottakere: Some(vec![ElementsAvsenderMottaker {
-                er_mottaker: Some(true),
-                navn: Some(data.mottaker.clone().unwrap_or_default()),
-                forsendelsesmetode,
-                kopi: None,
-                unntatt_offentlighet: None,
-                person: None,
-                til_saksbehandler: None,
-                til_saksbehandler_enhet: None,
-                id: None,
-                organisasjonsnummer: None,
-                epost: None,
-                telefon: None,
-                postadresse: None,
-                postnummer: None,
-                poststed: None,
-                utlandsadresse: None,
-            }]),
+            avsendere_mottakere: Some(avsendere_mottakere),
             dokumenter: Some(dokumenter),
             dokument_dato: Some(data.felles.dokument_dato.clone()),
-        })
+        };
+
+        verifiser_skjerming(&elements, &skjerming, data.felles.client_reference)?;
+        Ok(elements)
     }
 
     async fn opprett_internt_notat(
@@ -242,24 +248,28 @@ impl SikriArkivGateway {
         let dokumenter = self
             .map_dokumenter(&data.felles.dokumenter, journalpost)
             .await?;
-        Ok(ElementsJournalpost {
+        let skjerming = skjerming_fra_tilgjengelighet(
+            &data.felles.tilgjengelighet,
+            data.felles.client_reference,
+        )?;
+
+        let elements = ElementsJournalpost {
             tittel: Some(data.felles.tittel.clone()),
             journalposttype: Some("X".to_string()),
             journalstatus: Some("J".to_string()),
             avskriv_direkte: None,
             avskrivningsmaate: None,
-            tilgangskode: data.felles.tilgang.as_ref().map(|t| t.tilgangskode.clone()),
-            tilgangshjemmel: data
-                .felles
-                .tilgang
-                .as_ref()
-                .map(|t| t.tilgangshjemmel.clone()),
+            tilgangskode: skjerming.tilgangskode(),
+            tilgangshjemmel: skjerming.tilgangshjemmel(),
             saksbehandler: Some(data.felles.saksbehandler.clone()),
             saksbehandler_enhet: Some(data.felles.saksbehandler_enhet.clone()),
             avsendere_mottakere: None,
             dokumenter: Some(dokumenter),
             dokument_dato: Some(data.felles.dokument_dato.clone()),
-        })
+        };
+
+        verifiser_skjerming(&elements, &skjerming, data.felles.client_reference)?;
+        Ok(elements)
     }
 
     async fn map_dokumenter(
@@ -331,6 +341,177 @@ impl SikriArkivGateway {
     }
 }
 
+enum Skjerming {
+    Offentlig,
+    Skjermet {
+        tilgangskode: String,
+        tilgangshjemmel: String,
+    },
+}
+
+impl Skjerming {
+    fn er_skjermet(&self) -> bool {
+        matches!(self, Skjerming::Skjermet { .. })
+    }
+
+    fn tilgangskode(&self) -> Option<String> {
+        match self {
+            Skjerming::Skjermet { tilgangskode, .. } => Some(tilgangskode.clone()),
+            Skjerming::Offentlig => None,
+        }
+    }
+
+    fn tilgangshjemmel(&self) -> Option<String> {
+        match self {
+            Skjerming::Skjermet {
+                tilgangshjemmel, ..
+            } => Some(tilgangshjemmel.clone()),
+            Skjerming::Offentlig => None,
+        }
+    }
+}
+
+fn skjerming_fra_tilgjengelighet(
+    tilgjengelighet: &Tilgjengelighet,
+    client_reference: uuid::Uuid,
+) -> Result<Skjerming, anyhow::Error> {
+    match tilgjengelighet {
+        Tilgjengelighet::Offentlig => Ok(Skjerming::Offentlig),
+        Tilgjengelighet::Skjermet {
+            tilgangskode,
+            tilgangshjemmel,
+        } => {
+            if tilgangskode.trim().is_empty() || tilgangshjemmel.trim().is_empty() {
+                return Err(anyhow::anyhow!(
+                    "arkivmapping_skjerming_ufullstendig client_reference={client_reference} sikri_recoverability=irrecoverable"
+                ));
+            }
+            Ok(Skjerming::Skjermet {
+                tilgangskode: tilgangskode.clone(),
+                tilgangshjemmel: tilgangshjemmel.clone(),
+            })
+        }
+    }
+}
+
+fn unntatt_offentlighet(skjerming: &Skjerming) -> Option<bool> {
+    Some(skjerming.er_skjermet())
+}
+
+fn person_flagg(parttype: Parttype) -> bool {
+    match parttype {
+        Parttype::Person => true,
+        Parttype::Virksomhet => false,
+    }
+}
+
+fn korrespondansepart_avsender_mottaker(
+    part: &Korrespondansepart,
+    er_mottaker: bool,
+    skjerming: &Skjerming,
+) -> Result<ElementsAvsenderMottaker, anyhow::Error> {
+    Ok(ElementsAvsenderMottaker {
+        er_mottaker: Some(er_mottaker),
+        navn: Some(part.navn.clone()),
+        forsendelsesmetode: None,
+        kopi: None,
+        unntatt_offentlighet: unntatt_offentlighet(skjerming),
+        person: Some(person_flagg(part.parttype)),
+        til_saksbehandler: None,
+        til_saksbehandler_enhet: None,
+        id: None,
+        organisasjonsnummer: None,
+        epost: None,
+        telefon: None,
+        postadresse: None,
+        postnummer: None,
+        poststed: None,
+        utlandsadresse: None,
+    })
+}
+
+fn utsendingsmottaker_avsender_mottaker(
+    mottaker: &Utsendingsmottaker,
+    skjerming: &Skjerming,
+    client_reference: uuid::Uuid,
+) -> Result<ElementsAvsenderMottaker, anyhow::Error> {
+    if mottaker.adresse.adresse.trim().is_empty()
+        || mottaker.adresse.postnummer.trim().is_empty()
+        || mottaker.adresse.poststed.trim().is_empty()
+    {
+        return Err(anyhow::anyhow!(
+            "arkivmapping_postadresse_mangler client_reference={client_reference} sikri_recoverability=irrecoverable"
+        ));
+    }
+
+    // Sikri gjenbruker organisasjonsnummer-feltet for både orgnr og fnr;
+    // person-flagget skiller dem. Fnr skal derfor ikke droppes.
+    let (person, organisasjonsnummer) = match &mottaker.id {
+        MottakerId::Person { fødselsnummer } => (Some(true), Some(fødselsnummer.clone())),
+        MottakerId::Virksomhet {
+            organisasjonsnummer,
+        } => (Some(false), Some(organisasjonsnummer.clone())),
+    };
+
+    Ok(ElementsAvsenderMottaker {
+        er_mottaker: Some(true),
+        navn: Some(mottaker.navn.clone()),
+        forsendelsesmetode: Some("GENERELL".to_string()),
+        kopi: None,
+        unntatt_offentlighet: unntatt_offentlighet(skjerming),
+        person,
+        til_saksbehandler: None,
+        til_saksbehandler_enhet: None,
+        id: None,
+        organisasjonsnummer,
+        epost: None,
+        telefon: None,
+        postadresse: Some(mottaker.adresse.adresse.clone()),
+        postnummer: Some(mottaker.adresse.postnummer.clone()),
+        poststed: Some(mottaker.adresse.poststed.clone()),
+        utlandsadresse: None,
+    })
+}
+
+fn verifiser_skjerming(
+    journalpost: &ElementsJournalpost,
+    skjerming: &Skjerming,
+    client_reference: uuid::Uuid,
+) -> Result<(), anyhow::Error> {
+    if skjerming.er_skjermet() {
+        let kode_satt = journalpost
+            .tilgangskode
+            .as_ref()
+            .is_some_and(|k| !k.trim().is_empty());
+        let hjemmel_satt = journalpost
+            .tilgangshjemmel
+            .as_ref()
+            .is_some_and(|h| !h.trim().is_empty());
+        // Internt notat har ingen avsender/mottaker; da er party-kravet
+        // trivielt oppfylt. Når parter finnes, må alle være unntatt offentlighet.
+        let alle_unntatt = journalpost
+            .avsendere_mottakere
+            .as_ref()
+            .is_none_or(|parter| {
+                parter
+                    .iter()
+                    .all(|part| part.unntatt_offentlighet == Some(true))
+            });
+
+        if !(kode_satt && hjemmel_satt && alle_unntatt) {
+            return Err(anyhow::anyhow!(
+                "arkivmapping_skjerming_postcondition_brutt client_reference={client_reference} sikri_recoverability=irrecoverable"
+            ));
+        }
+    }
+
+    tracing::info!(
+        client_reference = %client_reference,
+        shielded = skjerming.er_skjermet(),
+        "arkivmapping_skjerming_verifisert"
+    );
+    Ok(())
+}
 fn hoveddokument_referanse(
     dokument: &Dokument,
     journalpost: &JournalpostMedDokumenter,
@@ -393,11 +574,11 @@ fn bytes_form(dokument: &Dokument) -> Result<(uuid::Uuid, &str), anyhow::Error> 
 
 #[cfg(test)]
 mod tests {
-    use super::{SikriArkivGateway, hoveddokument_referanse};
+    use super::{SikriArkivGateway, Skjerming, hoveddokument_referanse, verifiser_skjerming};
     use crate::command::media::{MediaFile, MediaMetadata, MediaStore};
     use application::command::{
         Command, CommandEnvelope, Dokument, Dokumentform, JournalpostCommon,
-        OpprettJournalpostCommand, SakKey,
+        OpprettJournalpostCommand, SakKey, Tilgjengelighet,
     };
     use async_trait::async_trait;
     use domain::eksekvering::html_template::TemplateFelt;
@@ -406,6 +587,8 @@ mod tests {
         DokumentKildeTilstand, DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter,
         JournalpostTilstand, JournalpostType,
     };
+    use sikri_client::dto::elements_avsender_mottaker::ElementsAvsenderMottaker;
+    use sikri_client::dto::elements_journalpost::ElementsJournalpost;
     use std::collections::HashMap;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -651,13 +834,14 @@ mod tests {
                     dokument_dato: "2025-01-01".to_string(),
                     saksbehandler: "Z12345".to_string(),
                     saksbehandler_enhet: "1234".to_string(),
-                    tilgang: None,
+                    tilgjengelighet: Tilgjengelighet::Offentlig,
                     dokumenter,
                     sak_key: SakKey::ClientReference(Uuid::new_v4()),
                     kildesystem: None,
                 },
-                avsender: None,
-                mottaker: None,
+                korrespondanseparter: Vec::new(),
+                utsendingsmottakere: Vec::new(),
+                med_utsending: false,
             }),
         }
     }
@@ -702,5 +886,70 @@ mod tests {
             } => filtype,
             Dokumentform::HtmlTemplate { .. } => panic!("expected bytes document"),
         }
+    }
+
+    fn skjermet_journalpost(
+        avsendere_mottakere: Option<Vec<ElementsAvsenderMottaker>>,
+    ) -> ElementsJournalpost {
+        ElementsJournalpost {
+            tittel: Some("Tittel".to_string()),
+            journalposttype: Some("X".to_string()),
+            journalstatus: Some("J".to_string()),
+            avskriv_direkte: None,
+            avskrivningsmaate: None,
+            tilgangskode: Some("UO".to_string()),
+            tilgangshjemmel: Some("Offl. § 13".to_string()),
+            saksbehandler: Some("Z00000".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
+            avsendere_mottakere,
+            dokumenter: None,
+            dokument_dato: Some("2026-01-01".to_string()),
+        }
+    }
+
+    #[test]
+    fn skjermet_internt_notat_uten_parter_passerer_postcondition() {
+        let journalpost = skjermet_journalpost(None);
+        let skjerming = Skjerming::Skjermet {
+            tilgangskode: "UO".to_string(),
+            tilgangshjemmel: "Offl. § 13".to_string(),
+        };
+
+        verifiser_skjerming(&journalpost, &skjerming, uuid::Uuid::nil())
+            .expect("skjermet internt notat uten parter skal passere");
+    }
+
+    #[test]
+    fn skjermet_med_uskjermet_part_feiler() {
+        let part = ElementsAvsenderMottaker {
+            forsendelsesmetode: None,
+            er_mottaker: Some(true),
+            kopi: None,
+            unntatt_offentlighet: Some(false),
+            person: Some(false),
+            til_saksbehandler: None,
+            til_saksbehandler_enhet: None,
+            id: None,
+            navn: Some("Acme AS".to_string()),
+            organisasjonsnummer: Some("995298775".to_string()),
+            epost: None,
+            telefon: None,
+            postadresse: None,
+            postnummer: None,
+            poststed: None,
+            utlandsadresse: None,
+        };
+        let journalpost = skjermet_journalpost(Some(vec![part]));
+        let skjerming = Skjerming::Skjermet {
+            tilgangskode: "UO".to_string(),
+            tilgangshjemmel: "Offl. § 13".to_string(),
+        };
+
+        let err = verifiser_skjerming(&journalpost, &skjerming, uuid::Uuid::nil())
+            .expect_err("uskjermet part på skjermet journalpost skal feile");
+        assert!(
+            err.to_string()
+                .contains("arkivmapping_skjerming_postcondition_brutt")
+        );
     }
 }

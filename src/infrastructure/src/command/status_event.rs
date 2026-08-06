@@ -44,10 +44,12 @@ pub fn to_public_status_event(event: &CommandLifecycleEvent) -> SkuffenStatusEve
         status: status_for(event.stage_status),
         terminal: event.terminal,
         error_code: event.error_code.map(error_code_for),
-        message: event
-            .outward_message
-            .clone()
-            .unwrap_or_else(|| event.message.clone()),
+        // Public status skal aldri bære intern/vilkårlig tekst. Bruk klientens
+        // eksplisitte outward_message, ellers den statiske stage::status-koden
+        // som regenereres her — aldri det interne `message`/`detail`-feltet.
+        message: event.outward_message.clone().unwrap_or_else(|| {
+            domain::eksekvering::typer::status_message(event.stage, event.stage_status)
+        }),
         attempt: event.attempt,
         saksnummer: event
             .context
@@ -236,20 +238,13 @@ mod tests {
 
     #[test]
     fn does_not_expose_internal_detail_without_outward_message() {
-        let event = CommandLifecycleEvent::new(
-            CommandLifecycleMetadata::new(
-                Uuid::new_v4(),
-                CommandTypeCode::OpprettInterntNotatJournalpost,
-            ),
-            None,
-            CommandStatus::Error,
-            CommandStage::Utfores,
-            CommandStageStatus::Error,
-            Some(StatusErrorCode::ProcessingFailed),
-            Some("Sikri responded with internal archive detail".to_string()),
-            CommandLifecycleContext::default(),
-            Some(3),
-        );
+        // Selv om det interne `message`-feltet forurenses med Sikri-detalj,
+        // skal public status regenerere den statiske stage::status-koden.
+        let mut event = lifecycle_event(CommandStage::Utfores, CommandStageStatus::Error);
+        event.message = "Sikri responded with internal archive detail".to_string();
+        event.outward_message = None;
+        event.detail = Some("Sikri responded with internal archive detail".to_string());
+        event.error_code = Some(StatusErrorCode::ProcessingFailed);
 
         let outward = to_public_status_event(&event);
 

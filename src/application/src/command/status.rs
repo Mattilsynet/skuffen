@@ -298,7 +298,7 @@ pub fn utfores_error_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::command::{Arkivdel, OpprettSakCommand};
+    use crate::command::{Arkivdel, OpprettSakCommand, Tilgjengelighet};
     use uuid::Uuid;
 
     fn make_test_envelope() -> CommandEnvelope<Command> {
@@ -312,7 +312,7 @@ mod tests {
                 saksbehandler_id: "Z12345".to_string(),
                 saksbehandler_enhet: "42".to_string(),
                 ordningsverdi: "123".to_string(),
-                tilgang: None,
+                tilgjengelighet: Tilgjengelighet::Offentlig,
             }),
         }
     }
