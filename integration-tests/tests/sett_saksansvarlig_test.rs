@@ -12,6 +12,7 @@ use lib_schemas::skuffen::command::sak::{Arkivdel, OpprettSak, SettSaksansvarlig
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
 use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1, SkuffenStatusPhase};
+use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 
 use support::{CommandScenario, extract_saksnummer, send_command_batch, wait_for_status_events};
 
@@ -37,7 +38,7 @@ async fn sett_saksansvarlig_happy_path() -> Result<()> {
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
     };
 
@@ -100,7 +101,7 @@ async fn sett_saksansvarlig_med_client_reference() -> Result<()> {
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
     };
 
@@ -195,7 +196,7 @@ async fn sett_saksansvarlig_sak_i_eksekvering() -> Result<()> {
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
     };
 

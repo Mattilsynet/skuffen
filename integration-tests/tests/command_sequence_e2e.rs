@@ -7,6 +7,7 @@ use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
 use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1, SkuffenStatusPhase};
+use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 
 use support::{
     CommandScenario, extract_saksnummer, hent_bruker_mt_enheter_via_nats,
@@ -69,7 +70,7 @@ async fn command_sequence_inngaende_journalpost_flow() -> Result<()> {
             saksbehandler_id: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
     };
     send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
@@ -122,7 +123,7 @@ async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
             saksbehandler_id: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
     };
     send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
@@ -174,7 +175,7 @@ async fn query_hent_sak_via_nats_uses_id_mapping() -> Result<()> {
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
     };
     send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
@@ -244,7 +245,7 @@ async fn avslutt_sak_uten_journalposter_er_tillatt() -> Result<()> {
                 saksbehandler_id: "Z12345".to_string(),
                 saksbehandler_enhet: "42".to_string(),
                 ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
-                tilgang: None,
+                tilgjengelighet: Tilgjengelighet::Offentlig,
             }),
         },
         CommandEnvelope {
@@ -287,7 +288,7 @@ async fn avslutt_sak_med_arkiv_id_fullfoerer_gjennom_hele_flyten() -> Result<()>
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
-            tilgang: None,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
     };
     send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
@@ -362,4 +363,182 @@ fn assert_happy_path_stages(
             "Missing terminal Execution+Ok event for command {command_id}"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn skjermet_sak_med_skjermet_internt_notat_happy_path() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let scenario = CommandScenario::new();
+    publish_media(&env.nats_url, scenario.dokument_referanse).await?;
+
+    let opprett_sak = scenario.opprett_sak_med_tilgjengelighet(
+        "Z12345",
+        "42",
+        format!("Skjermet sak {}", Uuid::new_v4()),
+        CommandScenario::skjermet(),
+    );
+    let internt_notat = scenario.opprett_skjermet_internt_notat(
+        "Z12345",
+        "42",
+        DtoSakKey::ClientReference(scenario.sak_client_reference),
+        "[|Ola Norrmann|] - Skjermet",
+    );
+
+    let commands = vec![opprett_sak, internt_notat];
+    send_command_batch(&env.nats_url, &commands).await?;
+    let events = wait_for_status_events(
+        &env.nats_url,
+        commands.iter().map(|c| c.command_id),
+        Duration::from_secs(30),
+    )
+    .await?;
+    assert_happy_path_stages(&events, commands.iter().map(|c| c.command_id));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn internt_notat_med_ugyldig_markup_avvises_i_validering() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let scenario = CommandScenario::new();
+    publish_media(&env.nats_url, scenario.dokument_referanse).await?;
+
+    let opprett_sak = scenario.opprett_sak_med_tilgjengelighet(
+        "Z12345",
+        "42",
+        format!("Markup avvisning {}", Uuid::new_v4()),
+        Tilgjengelighet::Offentlig,
+    );
+    send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
+    let sak_events = wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id],
+        Duration::from_secs(20),
+    )
+    .await?;
+    extract_saksnummer(&sak_events, opprett_sak.command_id)
+        .expect("OpprettSak should return saksnummer");
+
+    let internt_notat = scenario.opprett_internt_notat_med_ugyldig_markup(
+        "Z12345",
+        "42",
+        DtoSakKey::ClientReference(scenario.sak_client_reference),
+        "Notat med [skjermet] uten skjerming",
+    );
+    send_command_batch(&env.nats_url, std::slice::from_ref(&internt_notat)).await?;
+    let events = wait_for_status_events(
+        &env.nats_url,
+        [internt_notat.command_id],
+        Duration::from_secs(20),
+    )
+    .await?;
+    assert_validate_error(&events, internt_notat.command_id);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn utgaaende_med_utsending_flow() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let scenario = CommandScenario::new();
+    publish_media(&env.nats_url, scenario.dokument_referanse).await?;
+
+    let opprett_sak = scenario.opprett_sak_med_tilgjengelighet(
+        "Z99999",
+        "42",
+        format!("Utgaaende utsending {}", Uuid::new_v4()),
+        Tilgjengelighet::Offentlig,
+    );
+    send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
+    let sak_events = wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id],
+        Duration::from_secs(20),
+    )
+    .await?;
+    let saksnummer = extract_saksnummer(&sak_events, opprett_sak.command_id)
+        .expect("OpprettSak should return saksnummer");
+
+    let commands = vec![scenario.opprett_utgaaende_med_utsending(
+        "Z99999",
+        "42",
+        DtoSakKey::ArkivId(DtoSaksnummer::new(&saksnummer)?),
+        "Utgaaende med utsending",
+    )];
+    send_command_batch(&env.nats_url, &commands).await?;
+    let events = wait_for_status_events(
+        &env.nats_url,
+        commands.iter().map(|c| c.command_id),
+        Duration::from_secs(20),
+    )
+    .await?;
+    assert_happy_path_stages(&events, commands.iter().map(|c| c.command_id));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn utgaaende_med_flere_mottakere_flow() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let scenario = CommandScenario::new();
+    publish_media(&env.nats_url, scenario.dokument_referanse).await?;
+
+    let opprett_sak = scenario.opprett_sak_med_tilgjengelighet(
+        "Z99999",
+        "42",
+        format!("Utgaaende flere mottakere {}", Uuid::new_v4()),
+        Tilgjengelighet::Offentlig,
+    );
+    send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
+    let sak_events = wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id],
+        Duration::from_secs(20),
+    )
+    .await?;
+    let saksnummer = extract_saksnummer(&sak_events, opprett_sak.command_id)
+        .expect("OpprettSak should return saksnummer");
+
+    let commands = vec![scenario.opprett_utgaaende_flere_mottakere(
+        "Z99999",
+        "42",
+        DtoSakKey::ArkivId(DtoSaksnummer::new(&saksnummer)?),
+        "Utgaaende flere mottakere",
+    )];
+    send_command_batch(&env.nats_url, &commands).await?;
+    let events = wait_for_status_events(
+        &env.nats_url,
+        commands.iter().map(|c| c.command_id),
+        Duration::from_secs(20),
+    )
+    .await?;
+    assert_happy_path_stages(&events, commands.iter().map(|c| c.command_id));
+
+    Ok(())
+}
+
+fn assert_validate_error(events: &[SkuffenStatusEventV1], command_id: Uuid) {
+    let command_events: Vec<&SkuffenStatusEventV1> = events
+        .iter()
+        .filter(|event| event.command_id == command_id)
+        .collect();
+
+    assert!(
+        command_events
+            .iter()
+            .any(|event| event.phase == SkuffenStatusPhase::Validate
+                && event.status == SkuffenStatus::Error),
+        "Expected Validate+Error event for command {command_id}, got {command_events:?}"
+    );
+    assert!(
+        !command_events
+            .iter()
+            .any(|event| event.phase == SkuffenStatusPhase::Execution
+                && event.status == SkuffenStatus::Ok),
+        "Rejected command {command_id} must not reach Execution+Ok"
+    );
 }
