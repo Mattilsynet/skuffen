@@ -225,7 +225,7 @@ async fn test_ingest_command_opprett_sak_success() {
     let command_id = Uuid::new_v4();
     let command = WireCommand::OpprettSak(OpprettSak {
         client_reference: Uuid::new_v4(),
-        sakstittel: Sakstittel("Test Sak".to_string()),
+        sakstittel: Sakstittel::try_from("Test Sak".to_string()).unwrap(),
         ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
         arkivdel: Arkivdel::Tilsynsdivisjonene,
         saksbehandler_id: "Z99999".to_string(),
@@ -649,7 +649,7 @@ async fn test_ingest_command_idempotent_duplicate_command_id() {
 
     let command = WireCommand::OpprettSak(OpprettSak {
         client_reference,
-        sakstittel: Sakstittel("Test Sak".to_string()),
+        sakstittel: Sakstittel::try_from("Test Sak".to_string()).unwrap(),
         ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
         arkivdel: Arkivdel::Tilsynsdivisjonene,
         saksbehandler_id: "Z99999".to_string(),
@@ -671,7 +671,7 @@ async fn test_ingest_command_idempotent_duplicate_command_id() {
 
     let command2 = WireCommand::OpprettSak(OpprettSak {
         client_reference,
-        sakstittel: Sakstittel("Test Sak 2".to_string()),
+        sakstittel: Sakstittel::try_from("Test Sak 2".to_string()).unwrap(),
         ordningsverdi: Ordningsverdi::new("456".to_string()).unwrap(),
         arkivdel: Arkivdel::Tilsynsdivisjonene,
         saksbehandler_id: "Z99999".to_string(),
@@ -834,7 +834,7 @@ async fn test_ingest_command_returns_ids_preserving_order_with_idempotent_skip()
 
     let command1 = WireCommand::OpprettSak(OpprettSak {
         client_reference: Uuid::new_v4(),
-        sakstittel: Sakstittel("Test Sak 1".to_string()),
+        sakstittel: Sakstittel::try_from("Test Sak 1".to_string()).unwrap(),
         ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
         arkivdel: Arkivdel::Tilsynsdivisjonene,
         saksbehandler_id: "Z99999".to_string(),
@@ -844,7 +844,7 @@ async fn test_ingest_command_returns_ids_preserving_order_with_idempotent_skip()
 
     let command2 = WireCommand::OpprettSak(OpprettSak {
         client_reference: Uuid::new_v4(),
-        sakstittel: Sakstittel("Test Sak 2".to_string()),
+        sakstittel: Sakstittel::try_from("Test Sak 2".to_string()).unwrap(),
         ordningsverdi: Ordningsverdi::new("456".to_string()).unwrap(),
         arkivdel: Arkivdel::Tilsynsdivisjonene,
         saksbehandler_id: "Z99999".to_string(),
@@ -854,7 +854,7 @@ async fn test_ingest_command_returns_ids_preserving_order_with_idempotent_skip()
 
     let command3 = WireCommand::OpprettSak(OpprettSak {
         client_reference: Uuid::new_v4(),
-        sakstittel: Sakstittel("Test Sak 3".to_string()),
+        sakstittel: Sakstittel::try_from("Test Sak 3".to_string()).unwrap(),
         ordningsverdi: Ordningsverdi::new("789".to_string()).unwrap(),
         arkivdel: Arkivdel::Tilsynsdivisjonene,
         saksbehandler_id: "Z99999".to_string(),

@@ -62,10 +62,11 @@ async fn command_sequence_inngaende_journalpost_flow() -> Result<()> {
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
             client_reference: scenario.sak_client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Inngaende test {}",
                 Uuid::new_v4()
-            )),
+            ))
+            .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
@@ -115,10 +116,11 @@ async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
             client_reference: scenario.sak_client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Utgaaende test {}",
                 Uuid::new_v4()
-            )),
+            ))
+            .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
@@ -167,10 +169,11 @@ async fn query_hent_sak_via_nats_uses_id_mapping() -> Result<()> {
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
             client_reference: scenario.sak_client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Query test {}",
                 Uuid::new_v4()
-            )),
+            ))
+            .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
@@ -237,10 +240,11 @@ async fn avslutt_sak_uten_journalposter_er_tillatt() -> Result<()> {
             correlation_id: Some(Uuid::new_v4()),
             payload: Command::OpprettSak(OpprettSak {
                 client_reference: sak_client_reference,
-                sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+                sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                     "Skuffen E2E avslutt uten journalposter {}",
                     Uuid::new_v4()
-                )),
+                ))
+                .unwrap(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
                 saksbehandler_id: "Z12345".to_string(),
                 saksbehandler_enhet: "42".to_string(),
@@ -280,10 +284,11 @@ async fn avslutt_sak_med_arkiv_id_fullfoerer_gjennom_hele_flyten() -> Result<()>
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
             client_reference: sak_client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Avslutt med arkiv_id {}",
                 Uuid::new_v4()
-            )),
+            ))
+            .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),

@@ -1228,7 +1228,8 @@ async fn sikri_feil_publiserer_kun_stabil_safe_detail() {
         correlation_id: Some(Uuid::new_v4()),
         payload: WireCommand::OpprettSak(lib_schemas::skuffen::command::sak::OpprettSak {
             client_reference: sak_client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel("Test sak".to_string()),
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from("Test sak".to_string())
+                .unwrap(),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())
                 .unwrap(),
             arkivdel: lib_schemas::skuffen::command::sak::Arkivdel::Tilsynsdivisjonene,
@@ -1299,7 +1300,8 @@ async fn ukjent_sikri_feil_publiserer_generisk_upstream_safe_detail() {
         correlation_id: Some(Uuid::new_v4()),
         payload: WireCommand::OpprettSak(lib_schemas::skuffen::command::sak::OpprettSak {
             client_reference: sak_client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel("Test sak".to_string()),
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from("Test sak".to_string())
+                .unwrap(),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())
                 .unwrap(),
             arkivdel: lib_schemas::skuffen::command::sak::Arkivdel::Tilsynsdivisjonene,

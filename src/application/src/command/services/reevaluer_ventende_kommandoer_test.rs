@@ -1195,7 +1195,7 @@ fn make_opprett_sak_command(
         correlation_id: Some(Uuid::new_v4()),
         payload: WireCommand::OpprettSak(OpprettSak {
             client_reference: sak_client_reference,
-            sakstittel: Sakstittel("Test sak".to_string()),
+            sakstittel: Sakstittel::try_from("Test sak".to_string()).unwrap(),
             ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),

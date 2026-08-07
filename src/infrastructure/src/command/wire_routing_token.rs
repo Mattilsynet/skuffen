@@ -84,7 +84,7 @@ mod tests {
                 fixed_uuid(100),
                 Command::OpprettSak(OpprettSak {
                     client_reference: fixed_uuid(1),
-                    sakstittel: Sakstittel("Test sak".to_string()),
+                    sakstittel: Sakstittel::try_from("Test sak".to_string()).unwrap(),
                     arkivdel: Arkivdel::Tilsynsdivisjonene,
                     saksbehandler_id: "Z12345".to_string(),
                     saksbehandler_enhet: "42".to_string(),

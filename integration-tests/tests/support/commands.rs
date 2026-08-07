@@ -59,7 +59,8 @@ impl CommandScenario {
                 correlation_id: Some(Uuid::new_v4()),
                 payload: Command::OpprettSak(OpprettSak {
                     client_reference: self.sak_client_reference,
-                    sakstittel: lib_schemas::skuffen::sak::Sakstittel(sakstittel),
+                    sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(sakstittel)
+                        .unwrap(),
                     arkivdel: Arkivdel::Tilsynsdivisjonene,
                     saksbehandler_id: saksbehandler_id.to_string(),
                     saksbehandler_enhet: saksbehandler_enhet.to_string(),
@@ -111,7 +112,7 @@ impl CommandScenario {
             correlation_id: Some(Uuid::new_v4()),
             payload: Command::OpprettSak(OpprettSak {
                 client_reference: self.sak_client_reference,
-                sakstittel: lib_schemas::skuffen::sak::Sakstittel(sakstittel),
+                sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(sakstittel).unwrap(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
                 saksbehandler_id: saksbehandler_id.to_string(),
                 saksbehandler_enhet: saksbehandler_enhet.to_string(),

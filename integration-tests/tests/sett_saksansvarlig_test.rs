@@ -30,10 +30,11 @@ async fn sett_saksansvarlig_happy_path() -> Result<()> {
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
             client_reference: scenario.sak_client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "SettSaksansvarlig test {}",
                 Uuid::new_v4()
-            )),
+            ))
+            .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
@@ -93,10 +94,11 @@ async fn sett_saksansvarlig_med_client_reference() -> Result<()> {
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
             client_reference: scenario.sak_client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "SettSaksansvarlig client ref test {}",
                 Uuid::new_v4()
-            )),
+            ))
+            .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
@@ -188,10 +190,11 @@ async fn sett_saksansvarlig_sak_i_eksekvering() -> Result<()> {
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
             client_reference: scenario.sak_client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "SettSaksansvarlig state test {}",
                 Uuid::new_v4()
-            )),
+            ))
+            .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),

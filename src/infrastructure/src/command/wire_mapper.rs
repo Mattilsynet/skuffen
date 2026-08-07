@@ -41,7 +41,9 @@ fn map_application_command_to_wire(command: &ApplicationCommand) -> anyhow::Resu
         ApplicationCommand::OpprettSak(command) => {
             Ok(WireCommand::OpprettSak(wire_sak::OpprettSak {
                 client_reference: command.client_reference,
-                sakstittel: lib_schemas::skuffen::sak::Sakstittel(command.sakstittel.clone()),
+                sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(
+                    command.sakstittel.clone(),
+                )?,
                 ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new(
                     command.ordningsverdi.get().to_string(),
                 )?,
@@ -343,7 +345,7 @@ fn map_utsendingsmottaker(mottaker: wire_journalpost::Utsendingsmottaker) -> Uts
 fn map_opprett_sak(command: wire_sak::OpprettSak) -> OpprettSakCommand {
     OpprettSakCommand {
         client_reference: command.client_reference,
-        sakstittel: command.sakstittel.0,
+        sakstittel: command.sakstittel.as_str().to_string(),
         ordningsverdi: domain::model::sak::Ordningsverdi::new(
             command.ordningsverdi.as_str().to_string(),
         )
@@ -495,7 +497,7 @@ mod tests {
         let client_reference = Uuid::new_v4();
         let envelope = wire_envelope(WireCommand::OpprettSak(OpprettSak {
             client_reference,
-            sakstittel: Sakstittel("Test sak".to_string()),
+            sakstittel: Sakstittel::try_from("Test sak".to_string()).unwrap(),
             ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
             arkivdel: WireArkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),

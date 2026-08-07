@@ -324,10 +324,11 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
             correlation_id,
             payload: Command::OpprettSak(OpprettSak {
                 client_reference: sak_client_reference,
-                sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+                sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                     "Skuffen manual test {}",
                     Uuid::new_v4()
-                )),
+                ))
+                .unwrap(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
                 saksbehandler_id: saksbehandler_id.clone(),
                 saksbehandler_enhet: saksbehandler_enhet.clone(),
@@ -340,10 +341,11 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
             correlation_id,
             payload: Command::OpprettSak(OpprettSak {
                 client_reference: shielded_sak_client_reference,
-                sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+                sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                     "[|Ola Norrmann|] - Skuffen manual test {}",
                     Uuid::new_v4()
-                )),
+                ))
+                .unwrap(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
                 saksbehandler_id: saksbehandler_id.clone(),
                 saksbehandler_enhet: saksbehandler_enhet.clone(),

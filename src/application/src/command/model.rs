@@ -310,7 +310,7 @@ pub mod test_support {
     fn map_opprett_sak(command: wire_sak::OpprettSak) -> OpprettSakCommand {
         OpprettSakCommand {
             client_reference: command.client_reference,
-            sakstittel: command.sakstittel.0,
+            sakstittel: command.sakstittel.as_str().to_string(),
             ordningsverdi: domain::model::sak::Ordningsverdi::new(
                 command.ordningsverdi.as_str().to_string(),
             )
