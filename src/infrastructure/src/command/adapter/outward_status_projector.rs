@@ -107,25 +107,25 @@ impl CommandOutwardStatusProjector for IdMappingOutwardStatusProjector {
             Command::OpprettInngaaendeJournalpost(cmd)
             | Command::OpprettUtgaaendeJournalpost(cmd)
             | Command::OpprettInterntNotatJournalpost(cmd) => {
-                if let SakKey::ClientReference(client_reference) = &cmd.felles.sak_key {
+                if let SakKey::ClientReference(client_reference) = &cmd.felles().sak_key {
                     context.sak_client_reference = Some(client_reference.to_string());
                 }
-                context.saksnummer = self.resolve_saksnummer(&cmd.felles.sak_key).await?;
+                context.saksnummer = self.resolve_saksnummer(&cmd.felles().sak_key).await?;
                 context.journalpost_client_reference =
-                    Some(cmd.felles.client_reference.to_string());
+                    Some(cmd.felles().client_reference.to_string());
                 context.journalpost_id = self
                     .resolve_arkiv_id_from_client_reference(
                         MappingEntityType::Journalpost,
-                        cmd.felles.client_reference,
+                        cmd.felles().client_reference,
                     )
                     .await?;
                 context.dokument_client_references = cmd
-                    .felles
+                    .felles()
                     .dokumenter
                     .iter()
                     .map(|dokument| dokument.client_reference.to_string())
                     .collect();
-                context.dokument_ids = self.resolve_dokument_ids(&cmd.felles.dokumenter).await?;
+                context.dokument_ids = self.resolve_dokument_ids(&cmd.felles().dokumenter).await?;
             }
             Command::AvsluttSak(cmd) => {
                 if let SakKey::ClientReference(client_reference) = &cmd.sak_key {

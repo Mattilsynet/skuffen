@@ -153,13 +153,13 @@ impl IngestCommandService {
                 context.sak_client_reference = Some(command.client_reference.to_string());
             }
             Command::OpprettInngaaendeJournalpost(command) => {
-                self.populate_journalpost_context(&mut context, &command.felles)
+                self.populate_journalpost_context(&mut context, command.felles())
             }
             Command::OpprettUtgaaendeJournalpost(command) => {
-                self.populate_journalpost_context(&mut context, &command.felles)
+                self.populate_journalpost_context(&mut context, command.felles())
             }
             Command::OpprettInterntNotatJournalpost(command) => {
-                self.populate_journalpost_context(&mut context, &command.felles)
+                self.populate_journalpost_context(&mut context, command.felles())
             }
             Command::AvsluttSak(command) => match &command.sak_key {
                 SakKey::ArkivId(saksnummer) => {
@@ -213,9 +213,9 @@ impl IngestCommandService {
     fn extract_client_reference(&self, command: &Command) -> Option<Uuid> {
         match command {
             Command::OpprettSak(c) => Some(c.client_reference),
-            Command::OpprettInngaaendeJournalpost(c) => Some(c.felles.client_reference),
-            Command::OpprettUtgaaendeJournalpost(c) => Some(c.felles.client_reference),
-            Command::OpprettInterntNotatJournalpost(c) => Some(c.felles.client_reference),
+            Command::OpprettInngaaendeJournalpost(c) => Some(c.felles().client_reference),
+            Command::OpprettUtgaaendeJournalpost(c) => Some(c.felles().client_reference),
+            Command::OpprettInterntNotatJournalpost(c) => Some(c.felles().client_reference),
             Command::AvsluttSak(_) => None, // No new client reference
             Command::SettSaksansvarlig(_) => None, // No new client reference
         }
@@ -223,18 +223,18 @@ impl IngestCommandService {
 
     fn extract_documents<'a>(&self, command: &'a Command) -> Option<&'a Vec<Dokument>> {
         match command {
-            Command::OpprettInngaaendeJournalpost(c) => Some(&c.felles.dokumenter),
-            Command::OpprettUtgaaendeJournalpost(c) => Some(&c.felles.dokumenter),
-            Command::OpprettInterntNotatJournalpost(c) => Some(&c.felles.dokumenter),
+            Command::OpprettInngaaendeJournalpost(c) => Some(&c.felles().dokumenter),
+            Command::OpprettUtgaaendeJournalpost(c) => Some(&c.felles().dokumenter),
+            Command::OpprettInterntNotatJournalpost(c) => Some(&c.felles().dokumenter),
             Command::OpprettSak(_) | Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => None,
         }
     }
 
     fn extract_arkiv_id(&self, command: &Command) -> Option<String> {
         let sak_key = match command {
-            Command::OpprettInngaaendeJournalpost(c) => Some(&c.felles.sak_key),
-            Command::OpprettUtgaaendeJournalpost(c) => Some(&c.felles.sak_key),
-            Command::OpprettInterntNotatJournalpost(c) => Some(&c.felles.sak_key),
+            Command::OpprettInngaaendeJournalpost(c) => Some(&c.felles().sak_key),
+            Command::OpprettUtgaaendeJournalpost(c) => Some(&c.felles().sak_key),
+            Command::OpprettInterntNotatJournalpost(c) => Some(&c.felles().sak_key),
             Command::AvsluttSak(c) => Some(&c.sak_key),
             Command::SettSaksansvarlig(c) => Some(&c.sak_key),
             Command::OpprettSak(_) => None,

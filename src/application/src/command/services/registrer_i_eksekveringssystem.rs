@@ -145,7 +145,7 @@ impl RegistrerIEksekveringssystemService {
                     envelope,
                     command_ids,
                     JournalpostType::Utgaaende,
-                    cmd.med_utsending,
+                    cmd.med_utsending(),
                 )
                 .await?;
             }
@@ -298,9 +298,9 @@ impl RegistrerIEksekveringssystemService {
 
 fn dokumenter_for_envelope(envelope: &CommandEnvelope<Command>) -> &[Dokument] {
     match &envelope.payload {
-        Command::OpprettInngaaendeJournalpost(cmd) => &cmd.felles.dokumenter,
-        Command::OpprettUtgaaendeJournalpost(cmd) => &cmd.felles.dokumenter,
-        Command::OpprettInterntNotatJournalpost(cmd) => &cmd.felles.dokumenter,
+        Command::OpprettInngaaendeJournalpost(cmd) => &cmd.felles().dokumenter,
+        Command::OpprettUtgaaendeJournalpost(cmd) => &cmd.felles().dokumenter,
+        Command::OpprettInterntNotatJournalpost(cmd) => &cmd.felles().dokumenter,
         _ => &[],
     }
 }

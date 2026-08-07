@@ -147,37 +147,37 @@ impl SikriArkivGateway {
         journalpost: &JournalpostMedDokumenter,
     ) -> Result<ElementsJournalpost, anyhow::Error> {
         let dokumenter = self
-            .map_dokumenter(&data.felles.dokumenter, journalpost)
+            .map_dokumenter(&data.felles().dokumenter, journalpost)
             .await?;
-        let avsender = data.korrespondanseparter.first().ok_or_else(|| {
-            anyhow::anyhow!(
-                "arkivmapping_avsender_mangler client_reference={} sikri_recoverability=irrecoverable",
-                data.felles.client_reference
-            )
-        })?;
+        let OpprettJournalpostCommand::Inngaende { avsender, .. } = data else {
+            return Err(anyhow::anyhow!(
+                "arkivmapping_feil_variant client_reference={} sikri_recoverability=irrecoverable",
+                data.felles().client_reference
+            ));
+        };
         let skjerming = skjerming_fra_tilgjengelighet(
-            &data.felles.tilgjengelighet,
-            data.felles.client_reference,
+            &data.felles().tilgjengelighet,
+            data.felles().client_reference,
         )?;
 
         let elements = ElementsJournalpost {
-            tittel: Some(data.felles.tittel.clone()),
+            tittel: Some(data.felles().tittel.clone()),
             journalposttype: Some("I".to_string()),
             journalstatus: Some("J".to_string()),
             avskriv_direkte: Some(true),
             avskrivningsmaate: Some("TE".to_string()),
             tilgangskode: skjerming.tilgangskode(),
             tilgangshjemmel: skjerming.tilgangshjemmel(),
-            saksbehandler: Some(data.felles.saksbehandler.clone()),
-            saksbehandler_enhet: Some(data.felles.saksbehandler_enhet.clone()),
+            saksbehandler: Some(data.felles().saksbehandler.clone()),
+            saksbehandler_enhet: Some(data.felles().saksbehandler_enhet.clone()),
             avsendere_mottakere: Some(vec![korrespondansepart_avsender_mottaker(
                 avsender, false, &skjerming,
             )?]),
             dokumenter: Some(dokumenter),
-            dokument_dato: Some(data.felles.dokument_dato.clone()),
+            dokument_dato: Some(data.felles().dokument_dato.clone()),
         };
 
-        verifiser_skjerming(&elements, &skjerming, data.felles.client_reference)?;
+        verifiser_skjerming(&elements, &skjerming, data.felles().client_reference)?;
         Ok(elements)
     }
 
@@ -188,7 +188,7 @@ impl SikriArkivGateway {
         utsending: Option<Utsendingsvalg>,
     ) -> Result<ElementsJournalpost, anyhow::Error> {
         let dokumenter = self
-            .map_dokumenter(&data.felles.dokumenter, journalpost)
+            .map_dokumenter(&data.felles().dokumenter, journalpost)
             .await?;
         let forsendelsesmetode = match utsending {
             Some(Utsendingsvalg::MedUtsending) => Some("GENERELL".to_string()),
@@ -196,47 +196,59 @@ impl SikriArkivGateway {
             None => None,
         };
         let skjerming = skjerming_fra_tilgjengelighet(
-            &data.felles.tilgjengelighet,
-            data.felles.client_reference,
+            &data.felles().tilgjengelighet,
+            data.felles().client_reference,
         )?;
 
         let mut avsendere_mottakere: Vec<ElementsAvsenderMottaker> = Vec::new();
-        for mottaker in &data.korrespondanseparter {
-            let mut am = korrespondansepart_avsender_mottaker(mottaker, true, &skjerming)?;
-            am.forsendelsesmetode = forsendelsesmetode.clone();
-            avsendere_mottakere.push(am);
-        }
-        for mottaker in &data.utsendingsmottakere {
-            avsendere_mottakere.push(utsendingsmottaker_avsender_mottaker(
-                mottaker,
-                &skjerming,
-                data.felles.client_reference,
-            )?);
+        match data {
+            OpprettJournalpostCommand::Utgaaende { mottakere, .. } => {
+                for mottaker in mottakere {
+                    let mut am = korrespondansepart_avsender_mottaker(mottaker, true, &skjerming)?;
+                    am.forsendelsesmetode = forsendelsesmetode.clone();
+                    avsendere_mottakere.push(am);
+                }
+            }
+            OpprettJournalpostCommand::UtgaaendeMedUtsending { mottakere, .. } => {
+                for mottaker in mottakere {
+                    avsendere_mottakere.push(utsendingsmottaker_avsender_mottaker(
+                        mottaker,
+                        &skjerming,
+                        data.felles().client_reference,
+                    )?);
+                }
+            }
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "arkivmapping_feil_variant client_reference={} sikri_recoverability=irrecoverable",
+                    data.felles().client_reference
+                ));
+            }
         }
 
         if avsendere_mottakere.is_empty() {
             return Err(anyhow::anyhow!(
                 "arkivmapping_mottaker_mangler client_reference={} sikri_recoverability=irrecoverable",
-                data.felles.client_reference
+                data.felles().client_reference
             ));
         }
 
         let elements = ElementsJournalpost {
-            tittel: Some(data.felles.tittel.clone()),
+            tittel: Some(data.felles().tittel.clone()),
             journalposttype: Some("U".to_string()),
             journalstatus: Some("R".to_string()),
             avskriv_direkte: None,
             avskrivningsmaate: None,
             tilgangskode: skjerming.tilgangskode(),
             tilgangshjemmel: skjerming.tilgangshjemmel(),
-            saksbehandler: Some(data.felles.saksbehandler.clone()),
-            saksbehandler_enhet: Some(data.felles.saksbehandler_enhet.clone()),
+            saksbehandler: Some(data.felles().saksbehandler.clone()),
+            saksbehandler_enhet: Some(data.felles().saksbehandler_enhet.clone()),
             avsendere_mottakere: Some(avsendere_mottakere),
             dokumenter: Some(dokumenter),
-            dokument_dato: Some(data.felles.dokument_dato.clone()),
+            dokument_dato: Some(data.felles().dokument_dato.clone()),
         };
 
-        verifiser_skjerming(&elements, &skjerming, data.felles.client_reference)?;
+        verifiser_skjerming(&elements, &skjerming, data.felles().client_reference)?;
         Ok(elements)
     }
 
@@ -246,29 +258,29 @@ impl SikriArkivGateway {
         journalpost: &JournalpostMedDokumenter,
     ) -> Result<ElementsJournalpost, anyhow::Error> {
         let dokumenter = self
-            .map_dokumenter(&data.felles.dokumenter, journalpost)
+            .map_dokumenter(&data.felles().dokumenter, journalpost)
             .await?;
         let skjerming = skjerming_fra_tilgjengelighet(
-            &data.felles.tilgjengelighet,
-            data.felles.client_reference,
+            &data.felles().tilgjengelighet,
+            data.felles().client_reference,
         )?;
 
         let elements = ElementsJournalpost {
-            tittel: Some(data.felles.tittel.clone()),
+            tittel: Some(data.felles().tittel.clone()),
             journalposttype: Some("X".to_string()),
             journalstatus: Some("J".to_string()),
             avskriv_direkte: None,
             avskrivningsmaate: None,
             tilgangskode: skjerming.tilgangskode(),
             tilgangshjemmel: skjerming.tilgangshjemmel(),
-            saksbehandler: Some(data.felles.saksbehandler.clone()),
-            saksbehandler_enhet: Some(data.felles.saksbehandler_enhet.clone()),
+            saksbehandler: Some(data.felles().saksbehandler.clone()),
+            saksbehandler_enhet: Some(data.felles().saksbehandler_enhet.clone()),
             avsendere_mottakere: None,
             dokumenter: Some(dokumenter),
-            dokument_dato: Some(data.felles.dokument_dato.clone()),
+            dokument_dato: Some(data.felles().dokument_dato.clone()),
         };
 
-        verifiser_skjerming(&elements, &skjerming, data.felles.client_reference)?;
+        verifiser_skjerming(&elements, &skjerming, data.felles().client_reference)?;
         Ok(elements)
     }
 
@@ -326,9 +338,9 @@ impl SikriArkivGateway {
         dokument_id: uuid::Uuid,
     ) -> Result<&Dokument, anyhow::Error> {
         let dokumenter = match &command.payload {
-            Command::OpprettInngaaendeJournalpost(data) => &data.felles.dokumenter,
-            Command::OpprettUtgaaendeJournalpost(data) => &data.felles.dokumenter,
-            Command::OpprettInterntNotatJournalpost(data) => &data.felles.dokumenter,
+            Command::OpprettInngaaendeJournalpost(data) => &data.felles().dokumenter,
+            Command::OpprettUtgaaendeJournalpost(data) => &data.felles().dokumenter,
+            Command::OpprettInterntNotatJournalpost(data) => &data.felles().dokumenter,
             _ => return Err(anyhow::anyhow!("Ugyldig kommando for dokumentmapping")),
         };
 
@@ -825,22 +837,21 @@ mod tests {
         CommandEnvelope {
             command_id: Uuid::new_v4(),
             correlation_id: Some(Uuid::new_v4()),
-            payload: Command::OpprettInterntNotatJournalpost(OpprettJournalpostCommand {
-                felles: JournalpostCommon {
-                    client_reference: Uuid::new_v4(),
-                    tittel: "Internt notat".to_string(),
-                    dokument_dato: "2025-01-01".to_string(),
-                    saksbehandler: "Z12345".to_string(),
-                    saksbehandler_enhet: "1234".to_string(),
-                    tilgjengelighet: Tilgjengelighet::Offentlig,
-                    dokumenter,
-                    sak_key: SakKey::ClientReference(Uuid::new_v4()),
-                    kildesystem: None,
+            payload: Command::OpprettInterntNotatJournalpost(
+                OpprettJournalpostCommand::InterntNotat {
+                    felles: JournalpostCommon {
+                        client_reference: Uuid::new_v4(),
+                        tittel: "Internt notat".to_string(),
+                        dokument_dato: "2025-01-01".to_string(),
+                        saksbehandler: "Z12345".to_string(),
+                        saksbehandler_enhet: "1234".to_string(),
+                        tilgjengelighet: Tilgjengelighet::Offentlig,
+                        dokumenter,
+                        sak_key: SakKey::ClientReference(Uuid::new_v4()),
+                        kildesystem: None,
+                    },
                 },
-                korrespondanseparter: Vec::new(),
-                utsendingsmottakere: Vec::new(),
-                med_utsending: false,
-            }),
+            ),
         }
     }
 

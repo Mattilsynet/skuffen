@@ -52,47 +52,49 @@ fn map_application_command_to_wire(command: &ApplicationCommand) -> anyhow::Resu
             }))
         }
         ApplicationCommand::OpprettInngaaendeJournalpost(command) => {
-            let avsender = command
-                .korrespondanseparter
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("inngående journalpost mangler avsender"))?;
+            let OpprettJournalpostCommand::Inngaende { felles, avsender } = command else {
+                anyhow::bail!("OpprettInngaaendeJournalpost bærer feil journalpost-variant");
+            };
             Ok(WireCommand::OpprettInngåendeJournalpost(
                 wire_journalpost::OpprettInngåendeJournalpost {
-                    felles: map_application_journalpost_common(&command.felles)?,
+                    felles: map_application_journalpost_common(felles)?,
                     avsender: map_application_korrespondansepart(avsender),
                 },
             ))
         }
-        ApplicationCommand::OpprettUtgaaendeJournalpost(command) => {
-            if command.med_utsending {
-                let mottakere = command
-                    .utsendingsmottakere
-                    .iter()
-                    .map(map_application_utsendingsmottaker)
-                    .collect::<anyhow::Result<Vec<_>>>()?;
-                Ok(WireCommand::OpprettUtgåendeJournalpostMedUtsending(
-                    wire_journalpost::OpprettUtgåendeJournalpostMedUtsending {
-                        felles: map_application_journalpost_common(&command.felles)?,
-                        mottakere,
-                    },
-                ))
-            } else {
+        ApplicationCommand::OpprettUtgaaendeJournalpost(command) => match command {
+            OpprettJournalpostCommand::Utgaaende { felles, mottakere } => {
                 Ok(WireCommand::OpprettUtgåendeJournalpost(
                     wire_journalpost::OpprettUtgåendeJournalpost {
-                        felles: map_application_journalpost_common(&command.felles)?,
-                        mottakere: command
-                            .korrespondanseparter
+                        felles: map_application_journalpost_common(felles)?,
+                        mottakere: mottakere
                             .iter()
                             .map(map_application_korrespondansepart)
                             .collect(),
                     },
                 ))
             }
-        }
+            OpprettJournalpostCommand::UtgaaendeMedUtsending { felles, mottakere } => {
+                let mottakere = mottakere
+                    .iter()
+                    .map(map_application_utsendingsmottaker)
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                Ok(WireCommand::OpprettUtgåendeJournalpostMedUtsending(
+                    wire_journalpost::OpprettUtgåendeJournalpostMedUtsending {
+                        felles: map_application_journalpost_common(felles)?,
+                        mottakere,
+                    },
+                ))
+            }
+            _ => anyhow::bail!("OpprettUtgaaendeJournalpost bærer feil journalpost-variant"),
+        },
         ApplicationCommand::OpprettInterntNotatJournalpost(command) => {
+            let OpprettJournalpostCommand::InterntNotat { felles } = command else {
+                anyhow::bail!("OpprettInterntNotatJournalpost bærer feil journalpost-variant");
+            };
             Ok(WireCommand::OpprettInterntNotatJournalpost(
                 wire_journalpost::OpprettInterntNotatJournalpost {
-                    felles: map_application_journalpost_common(&command.felles)?,
+                    felles: map_application_journalpost_common(felles)?,
                 },
             ))
         }
@@ -356,52 +358,43 @@ fn map_opprett_sak(command: wire_sak::OpprettSak) -> OpprettSakCommand {
 fn map_inngaende_journalpost(
     command: wire_journalpost::OpprettInngåendeJournalpost,
 ) -> OpprettJournalpostCommand {
-    OpprettJournalpostCommand {
+    OpprettJournalpostCommand::Inngaende {
         felles: map_journalpost_common(command.felles),
-        korrespondanseparter: vec![map_korrespondansepart(command.avsender)],
-        utsendingsmottakere: Vec::new(),
-        med_utsending: false,
+        avsender: map_korrespondansepart(command.avsender),
     }
 }
 
 fn map_utgaaende_journalpost(
     command: wire_journalpost::OpprettUtgåendeJournalpost,
 ) -> OpprettJournalpostCommand {
-    OpprettJournalpostCommand {
+    OpprettJournalpostCommand::Utgaaende {
         felles: map_journalpost_common(command.felles),
-        korrespondanseparter: command
+        mottakere: command
             .mottakere
             .into_iter()
             .map(map_korrespondansepart)
             .collect(),
-        utsendingsmottakere: Vec::new(),
-        med_utsending: false,
     }
 }
 
 fn map_utgaaende_med_utsending(
     command: wire_journalpost::OpprettUtgåendeJournalpostMedUtsending,
 ) -> OpprettJournalpostCommand {
-    OpprettJournalpostCommand {
+    OpprettJournalpostCommand::UtgaaendeMedUtsending {
         felles: map_journalpost_common(command.felles),
-        korrespondanseparter: Vec::new(),
-        utsendingsmottakere: command
+        mottakere: command
             .mottakere
             .into_iter()
             .map(map_utsendingsmottaker)
             .collect(),
-        med_utsending: true,
     }
 }
 
 fn map_internt_notat_journalpost(
     command: wire_journalpost::OpprettInterntNotatJournalpost,
 ) -> OpprettJournalpostCommand {
-    OpprettJournalpostCommand {
+    OpprettJournalpostCommand::InterntNotat {
         felles: map_journalpost_common(command.felles),
-        korrespondanseparter: Vec::new(),
-        utsendingsmottakere: Vec::new(),
-        med_utsending: false,
     }
 }
 
@@ -559,23 +552,23 @@ mod tests {
 
         assert_metadata(&mapped, command_id, correlation_id);
         match mapped.payload {
-            ApplicationCommand::OpprettInngaaendeJournalpost(command) => {
+            ApplicationCommand::OpprettInngaaendeJournalpost(
+                OpprettJournalpostCommand::Inngaende { felles, avsender },
+            ) => {
                 assert_journalpost_common(
-                    &command.felles,
+                    &felles,
                     journalpost_ref,
                     SakKey::ClientReference(sak_ref),
                     dokument_ref,
                 );
                 assert_eq!(
-                    command.korrespondanseparter,
-                    vec![Korrespondansepart {
+                    avsender,
+                    Korrespondansepart {
                         navn: "Avsender".to_string(),
                         parttype: Parttype::Person,
-                    }]
+                    }
                 );
-                assert!(command.utsendingsmottakere.is_empty());
-                assert!(!command.med_utsending);
-                assert_template_document(&command.felles.dokumenter[0], mal_ref);
+                assert_template_document(&felles.dokumenter[0], mal_ref);
             }
             other => panic!("expected OpprettInngaaendeJournalpost, got {other:?}"),
         }
@@ -611,23 +604,23 @@ mod tests {
 
         assert_metadata(&mapped, command_id, correlation_id);
         match mapped.payload {
-            ApplicationCommand::OpprettUtgaaendeJournalpost(command) => {
+            ApplicationCommand::OpprettUtgaaendeJournalpost(
+                OpprettJournalpostCommand::Utgaaende { felles, mottakere },
+            ) => {
                 assert_journalpost_common(
-                    &command.felles,
+                    &felles,
                     journalpost_ref,
                     SakKey::ArkivId("2025/42".to_string()),
                     dokument_ref,
                 );
                 assert_eq!(
-                    command.korrespondanseparter,
+                    mottakere,
                     vec![Korrespondansepart {
                         navn: "Mottaker".to_string(),
                         parttype: Parttype::Virksomhet,
                     }]
                 );
-                assert!(command.utsendingsmottakere.is_empty());
-                assert!(!command.med_utsending);
-                assert_template_document(&command.felles.dokumenter[0], mal_ref);
+                assert_template_document(&felles.dokumenter[0], mal_ref);
             }
             other => panic!("expected OpprettUtgaaendeJournalpost, got {other:?}"),
         }
@@ -666,11 +659,11 @@ mod tests {
         let mapped = map_wire_envelope(envelope);
 
         match mapped.payload {
-            ApplicationCommand::OpprettUtgaaendeJournalpost(command) => {
-                assert!(command.med_utsending);
-                assert!(command.korrespondanseparter.is_empty());
+            ApplicationCommand::OpprettUtgaaendeJournalpost(
+                OpprettJournalpostCommand::UtgaaendeMedUtsending { mottakere, .. },
+            ) => {
                 assert_eq!(
-                    command.utsendingsmottakere,
+                    mottakere,
                     vec![Utsendingsmottaker {
                         navn: "Bedrift AS".to_string(),
                         id: MottakerId::Virksomhet {
@@ -717,16 +710,16 @@ mod tests {
 
         assert_metadata(&mapped, command_id, correlation_id);
         match mapped.payload {
-            ApplicationCommand::OpprettInterntNotatJournalpost(command) => {
+            ApplicationCommand::OpprettInterntNotatJournalpost(
+                OpprettJournalpostCommand::InterntNotat { felles },
+            ) => {
                 assert_journalpost_common(
-                    &command.felles,
+                    &felles,
                     journalpost_ref,
                     SakKey::ClientReference(sak_ref),
                     dokument_ref,
                 );
-                assert!(command.korrespondanseparter.is_empty());
-                assert!(command.utsendingsmottakere.is_empty());
-                match &command.felles.dokumenter[0].form {
+                match &felles.dokumenter[0].form {
                     Dokumentform::Bytes {
                         dokument_referanse,
                         filtype,
@@ -790,10 +783,9 @@ mod tests {
         let envelope = CommandEnvelope::new(
             Uuid::new_v4(),
             ApplicationCommand::OpprettUtgaaendeJournalpost(
-                application::command::OpprettJournalpostCommand {
+                application::command::OpprettJournalpostCommand::UtgaaendeMedUtsending {
                     felles: application_journalpost_common(),
-                    korrespondanseparter: Vec::new(),
-                    utsendingsmottakere: vec![Utsendingsmottaker {
+                    mottakere: vec![Utsendingsmottaker {
                         navn: "Bedrift AS".to_string(),
                         id: MottakerId::Virksomhet {
                             organisasjonsnummer:
@@ -807,7 +799,6 @@ mod tests {
                             poststed: "Oslo".to_string(),
                         },
                     }],
-                    med_utsending: true,
                 },
             ),
         );

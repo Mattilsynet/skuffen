@@ -565,9 +565,9 @@ fn extract_sak_key(
 ) -> Result<SakKey, anyhow::Error> {
     match &envelope.payload {
         ApplicationCommand::OpprettSak(cmd) => Ok(SakKey::ClientReference(cmd.client_reference)),
-        ApplicationCommand::OpprettInngaaendeJournalpost(cmd) => Ok(cmd.felles.sak_key.clone()),
-        ApplicationCommand::OpprettUtgaaendeJournalpost(cmd) => Ok(cmd.felles.sak_key.clone()),
-        ApplicationCommand::OpprettInterntNotatJournalpost(cmd) => Ok(cmd.felles.sak_key.clone()),
+        ApplicationCommand::OpprettInngaaendeJournalpost(cmd) => Ok(cmd.felles().sak_key.clone()),
+        ApplicationCommand::OpprettUtgaaendeJournalpost(cmd) => Ok(cmd.felles().sak_key.clone()),
+        ApplicationCommand::OpprettInterntNotatJournalpost(cmd) => Ok(cmd.felles().sak_key.clone()),
         ApplicationCommand::AvsluttSak(cmd) => Ok(cmd.sak_key.clone()),
         ApplicationCommand::SettSaksansvarlig(cmd) => Ok(cmd.sak_key.clone()),
     }
@@ -584,10 +584,12 @@ fn extract_journalpost_client_reference(
     envelope: &CommandEnvelope<ApplicationCommand>,
 ) -> Option<Uuid> {
     match &envelope.payload {
-        ApplicationCommand::OpprettInngaaendeJournalpost(cmd) => Some(cmd.felles.client_reference),
-        ApplicationCommand::OpprettUtgaaendeJournalpost(cmd) => Some(cmd.felles.client_reference),
+        ApplicationCommand::OpprettInngaaendeJournalpost(cmd) => {
+            Some(cmd.felles().client_reference)
+        }
+        ApplicationCommand::OpprettUtgaaendeJournalpost(cmd) => Some(cmd.felles().client_reference),
         ApplicationCommand::OpprettInterntNotatJournalpost(cmd) => {
-            Some(cmd.felles.client_reference)
+            Some(cmd.felles().client_reference)
         }
         _ => None,
     }
@@ -596,19 +598,19 @@ fn extract_journalpost_client_reference(
 fn extract_dokument_client_references(envelope: &CommandEnvelope<ApplicationCommand>) -> Vec<Uuid> {
     match &envelope.payload {
         ApplicationCommand::OpprettInngaaendeJournalpost(cmd) => cmd
-            .felles
+            .felles()
             .dokumenter
             .iter()
             .map(|d| d.client_reference)
             .collect(),
         ApplicationCommand::OpprettUtgaaendeJournalpost(cmd) => cmd
-            .felles
+            .felles()
             .dokumenter
             .iter()
             .map(|d| d.client_reference)
             .collect(),
         ApplicationCommand::OpprettInterntNotatJournalpost(cmd) => cmd
-            .felles
+            .felles()
             .dokumenter
             .iter()
             .map(|d| d.client_reference)

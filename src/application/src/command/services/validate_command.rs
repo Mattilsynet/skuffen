@@ -122,15 +122,15 @@ impl ValidateCommandService {
                 avvist => avvist,
             },
             Command::OpprettInngaaendeJournalpost(c) => match validate_journalpost_lokalt(&c) {
-                ValidationOutcome::Ok => self.validate_sak_ref(c.felles.sak_key).await,
+                ValidationOutcome::Ok => self.validate_sak_ref(c.felles().sak_key.clone()).await,
                 avvist => avvist,
             },
             Command::OpprettUtgaaendeJournalpost(c) => match validate_journalpost_lokalt(&c) {
-                ValidationOutcome::Ok => self.validate_sak_ref(c.felles.sak_key).await,
+                ValidationOutcome::Ok => self.validate_sak_ref(c.felles().sak_key.clone()).await,
                 avvist => avvist,
             },
             Command::OpprettInterntNotatJournalpost(c) => match validate_journalpost_lokalt(&c) {
-                ValidationOutcome::Ok => self.validate_sak_ref(c.felles.sak_key).await,
+                ValidationOutcome::Ok => self.validate_sak_ref(c.felles().sak_key.clone()).await,
                 avvist => avvist,
             },
             Command::AvsluttSak(c) => self.validate_sak_ref(c.sak_key).await,
@@ -271,13 +271,11 @@ fn validate_journalpost_lokalt(
     command: &crate::command::OpprettJournalpostCommand,
 ) -> ValidationOutcome {
     use domain::model::skjerming_markup::{
-        navn_er_markup_fritt, sjekk_skjerming_markup, MarkupSjekk,
+        MarkupSjekk, navn_er_markup_fritt, sjekk_skjerming_markup,
     };
 
-    match sjekk_skjerming_markup(
-        &command.felles.tittel,
-        er_skjermet(&command.felles.tilgjengelighet),
-    ) {
+    let felles = command.felles();
+    match sjekk_skjerming_markup(&felles.tittel, er_skjermet(&felles.tilgjengelighet)) {
         MarkupSjekk::Ok => {}
         MarkupSjekk::SkjermingKrevesMenMangler => {
             return markup_avvist("Journalposttittel har skjermings-markup uten skjerming");
@@ -287,17 +285,19 @@ fn validate_journalpost_lokalt(
         }
     }
 
-    let navn_ok = command
-        .korrespondanseparter
-        .iter()
-        .map(|part| part.navn.as_str())
-        .chain(
-            command
-                .utsendingsmottakere
-                .iter()
-                .map(|mottaker| mottaker.navn.as_str()),
-        )
-        .all(navn_er_markup_fritt);
+    use crate::command::OpprettJournalpostCommand;
+    let navn: Vec<&str> = match command {
+        OpprettJournalpostCommand::Inngaende { avsender, .. } => vec![avsender.navn.as_str()],
+        OpprettJournalpostCommand::Utgaaende { mottakere, .. } => {
+            mottakere.iter().map(|part| part.navn.as_str()).collect()
+        }
+        OpprettJournalpostCommand::UtgaaendeMedUtsending { mottakere, .. } => mottakere
+            .iter()
+            .map(|mottaker| mottaker.navn.as_str())
+            .collect(),
+        OpprettJournalpostCommand::InterntNotat { .. } => Vec::new(),
+    };
+    let navn_ok = navn.into_iter().all(navn_er_markup_fritt);
 
     if !navn_ok {
         return markup_avvist("Korrespondansepart-navn skal ikke inneholde markup");
@@ -308,7 +308,7 @@ fn validate_journalpost_lokalt(
 
 /// Lokal skjermings-invariant for sakstittel.
 fn validate_sakstittel_markup(command: &crate::command::OpprettSakCommand) -> ValidationOutcome {
-    use domain::model::skjerming_markup::{sjekk_skjerming_markup, MarkupSjekk};
+    use domain::model::skjerming_markup::{MarkupSjekk, sjekk_skjerming_markup};
 
     match sjekk_skjerming_markup(&command.sakstittel, er_skjermet(&command.tilgjengelighet)) {
         MarkupSjekk::Ok => ValidationOutcome::Ok,

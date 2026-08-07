@@ -25,7 +25,7 @@ impl Command {
             Self::OpprettInngaaendeJournalpost(command)
             | Self::OpprettUtgaaendeJournalpost(command)
             | Self::OpprettInterntNotatJournalpost(command) => {
-                Some(command.felles.client_reference)
+                Some(command.felles().client_reference)
             }
             Self::AvsluttSak(_) | Self::SettSaksansvarlig(_) => None,
         }
@@ -95,11 +95,37 @@ pub struct Utsendingsmottaker {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpprettJournalpostCommand {
-    pub felles: JournalpostCommon,
-    pub korrespondanseparter: Vec<Korrespondansepart>,
-    pub utsendingsmottakere: Vec<Utsendingsmottaker>,
-    pub med_utsending: bool,
+pub enum OpprettJournalpostCommand {
+    Inngaende {
+        felles: JournalpostCommon,
+        avsender: Korrespondansepart,
+    },
+    Utgaaende {
+        felles: JournalpostCommon,
+        mottakere: Vec<Korrespondansepart>,
+    },
+    UtgaaendeMedUtsending {
+        felles: JournalpostCommon,
+        mottakere: Vec<Utsendingsmottaker>,
+    },
+    InterntNotat {
+        felles: JournalpostCommon,
+    },
+}
+
+impl OpprettJournalpostCommand {
+    pub fn felles(&self) -> &JournalpostCommon {
+        match self {
+            Self::Inngaende { felles, .. }
+            | Self::Utgaaende { felles, .. }
+            | Self::UtgaaendeMedUtsending { felles, .. }
+            | Self::InterntNotat { felles } => felles,
+        }
+    }
+
+    pub fn med_utsending(&self) -> bool {
+        matches!(self, Self::UtgaaendeMedUtsending { .. })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,52 +328,43 @@ pub mod test_support {
     fn map_inngaende_journalpost(
         command: wire_journalpost::OpprettInngåendeJournalpost,
     ) -> OpprettJournalpostCommand {
-        OpprettJournalpostCommand {
+        OpprettJournalpostCommand::Inngaende {
             felles: map_journalpost_common(command.felles),
-            korrespondanseparter: vec![map_korrespondansepart(command.avsender)],
-            utsendingsmottakere: Vec::new(),
-            med_utsending: false,
+            avsender: map_korrespondansepart(command.avsender),
         }
     }
 
     fn map_utgaaende_journalpost(
         command: wire_journalpost::OpprettUtgåendeJournalpost,
     ) -> OpprettJournalpostCommand {
-        OpprettJournalpostCommand {
+        OpprettJournalpostCommand::Utgaaende {
             felles: map_journalpost_common(command.felles),
-            korrespondanseparter: command
+            mottakere: command
                 .mottakere
                 .into_iter()
                 .map(map_korrespondansepart)
                 .collect(),
-            utsendingsmottakere: Vec::new(),
-            med_utsending: false,
         }
     }
 
     fn map_utgaaende_med_utsending(
         command: wire_journalpost::OpprettUtgåendeJournalpostMedUtsending,
     ) -> OpprettJournalpostCommand {
-        OpprettJournalpostCommand {
+        OpprettJournalpostCommand::UtgaaendeMedUtsending {
             felles: map_journalpost_common(command.felles),
-            korrespondanseparter: Vec::new(),
-            utsendingsmottakere: command
+            mottakere: command
                 .mottakere
                 .into_iter()
                 .map(map_utsendingsmottaker)
                 .collect(),
-            med_utsending: true,
         }
     }
 
     fn map_internt_notat_journalpost(
         command: wire_journalpost::OpprettInterntNotatJournalpost,
     ) -> OpprettJournalpostCommand {
-        OpprettJournalpostCommand {
+        OpprettJournalpostCommand::InterntNotat {
             felles: map_journalpost_common(command.felles),
-            korrespondanseparter: Vec::new(),
-            utsendingsmottakere: Vec::new(),
-            med_utsending: false,
         }
     }
 

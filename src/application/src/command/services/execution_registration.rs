@@ -125,13 +125,13 @@ pub(crate) async fn resolve_command_ids(
             Vec::new(),
         )),
         ApplicationCommand::OpprettInngaaendeJournalpost(cmd) => {
-            resolve_journalpost_ids(id_mapping_repo, &cmd.felles).await
+            resolve_journalpost_ids(id_mapping_repo, cmd.felles()).await
         }
         ApplicationCommand::OpprettUtgaaendeJournalpost(cmd) => {
-            resolve_journalpost_ids(id_mapping_repo, &cmd.felles).await
+            resolve_journalpost_ids(id_mapping_repo, cmd.felles()).await
         }
         ApplicationCommand::OpprettInterntNotatJournalpost(cmd) => {
-            resolve_journalpost_ids(id_mapping_repo, &cmd.felles).await
+            resolve_journalpost_ids(id_mapping_repo, cmd.felles()).await
         }
     }
 }
