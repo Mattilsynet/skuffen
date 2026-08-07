@@ -36,7 +36,7 @@ impl Command {
 pub struct OpprettSakCommand {
     pub client_reference: Uuid,
     pub sakstittel: String,
-    pub ordningsverdi: String,
+    pub ordningsverdi: domain::model::sak::Ordningsverdi,
     pub arkivdel: Arkivdel,
     pub saksbehandler_id: String,
     pub saksbehandler_enhet: String,
@@ -47,8 +47,8 @@ pub struct OpprettSakCommand {
 pub enum Tilgjengelighet {
     Offentlig,
     Skjermet {
-        tilgangskode: String,
-        tilgangshjemmel: String,
+        tilgangskode: domain::model::tilgang::Tilgangskode,
+        tilgangshjemmel: domain::model::tilgang::Tilgangshjemmel,
     },
 }
 
@@ -72,14 +72,18 @@ pub struct Korrespondansepart {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MottakerId {
-    Person { fødselsnummer: String },
-    Virksomhet { organisasjonsnummer: String },
+    Person {
+        fødselsnummer: domain::model::identifikator::Fødselsnummer,
+    },
+    Virksomhet {
+        organisasjonsnummer: domain::model::identifikator::Organisasjonsnummer,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Postadresse {
     pub adresse: String,
-    pub postnummer: String,
+    pub postnummer: domain::model::identifikator::Postnummer,
     pub poststed: String,
 }
 
@@ -221,8 +225,12 @@ pub mod test_support {
                 tilgangskode,
                 tilgangshjemmel,
             } => Tilgjengelighet::Skjermet {
-                tilgangskode: tilgangskode.as_str().to_string(),
-                tilgangshjemmel: tilgangshjemmel.as_str().to_string(),
+                tilgangskode: domain::model::tilgang::Tilgangskode::new(tilgangskode.as_str())
+                    .expect("wire tilgangskode er allerede validert"),
+                tilgangshjemmel: domain::model::tilgang::Tilgangshjemmel::new(
+                    tilgangshjemmel.as_str(),
+                )
+                .expect("wire tilgangshjemmel er allerede validert"),
             },
         }
     }
@@ -248,17 +256,26 @@ pub mod test_support {
             navn: mottaker.navn,
             id: match mottaker.id {
                 wire_journalpost::MottakerId::Person { fødselsnummer } => MottakerId::Person {
-                    fødselsnummer: fødselsnummer.as_str().to_string(),
+                    fødselsnummer: domain::model::identifikator::Fødselsnummer::new(
+                        fødselsnummer.as_str(),
+                    )
+                    .expect("wire fødselsnummer er allerede validert"),
                 },
                 wire_journalpost::MottakerId::Virksomhet {
                     organisasjonsnummer,
                 } => MottakerId::Virksomhet {
-                    organisasjonsnummer: organisasjonsnummer.as_str().to_string(),
+                    organisasjonsnummer: domain::model::identifikator::Organisasjonsnummer::new(
+                        organisasjonsnummer.as_str(),
+                    )
+                    .expect("wire organisasjonsnummer er allerede validert"),
                 },
             },
             adresse: Postadresse {
                 adresse: mottaker.adresse.adresse,
-                postnummer: mottaker.adresse.postnummer.as_str().to_string(),
+                postnummer: domain::model::identifikator::Postnummer::new(
+                    mottaker.adresse.postnummer.as_str(),
+                )
+                .expect("wire postnummer er allerede validert"),
                 poststed: mottaker.adresse.poststed,
             },
         }
@@ -268,7 +285,10 @@ pub mod test_support {
         OpprettSakCommand {
             client_reference: command.client_reference,
             sakstittel: command.sakstittel.0,
-            ordningsverdi: command.ordningsverdi.as_str().to_string(),
+            ordningsverdi: domain::model::sak::Ordningsverdi::new(
+                command.ordningsverdi.as_str().to_string(),
+            )
+            .expect("wire ordningsverdi er allerede validert"),
             arkivdel: match command.arkivdel {
                 wire_sak::Arkivdel::Tilsynsdivisjonene => Arkivdel::Tilsynsdivisjonene,
                 wire_sak::Arkivdel::Hovedkontoret => Arkivdel::Hovedkontoret,

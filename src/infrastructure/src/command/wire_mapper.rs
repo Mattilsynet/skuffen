@@ -28,104 +28,107 @@ pub fn map_wire_envelope(
 
 pub fn map_application_envelope_to_wire(
     envelope: &CommandEnvelope<ApplicationCommand>,
-) -> WireCommandEnvelope<WireCommand> {
-    WireCommandEnvelope {
+) -> anyhow::Result<WireCommandEnvelope<WireCommand>> {
+    Ok(WireCommandEnvelope {
         command_id: envelope.command_id,
         correlation_id: envelope.correlation_id,
-        payload: map_application_command_to_wire(&envelope.payload),
-    }
+        payload: map_application_command_to_wire(&envelope.payload)?,
+    })
 }
 
-fn map_application_command_to_wire(command: &ApplicationCommand) -> WireCommand {
+fn map_application_command_to_wire(command: &ApplicationCommand) -> anyhow::Result<WireCommand> {
     match command {
-        ApplicationCommand::OpprettSak(command) => WireCommand::OpprettSak(wire_sak::OpprettSak {
-            client_reference: command.client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel(command.sakstittel.clone()),
-            ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new(
-                command.ordningsverdi.clone(),
-            )
-            .expect("internal ordningsverdi originated from valid wire command"),
-            arkivdel: map_application_arkivdel(command.arkivdel),
-            saksbehandler_id: command.saksbehandler_id.clone(),
-            saksbehandler_enhet: command.saksbehandler_enhet.clone(),
-            tilgjengelighet: map_application_tilgjengelighet(&command.tilgjengelighet),
-        }),
+        ApplicationCommand::OpprettSak(command) => {
+            Ok(WireCommand::OpprettSak(wire_sak::OpprettSak {
+                client_reference: command.client_reference,
+                sakstittel: lib_schemas::skuffen::sak::Sakstittel(command.sakstittel.clone()),
+                ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new(
+                    command.ordningsverdi.get().to_string(),
+                )?,
+                arkivdel: map_application_arkivdel(command.arkivdel),
+                saksbehandler_id: command.saksbehandler_id.clone(),
+                saksbehandler_enhet: command.saksbehandler_enhet.clone(),
+                tilgjengelighet: map_application_tilgjengelighet(&command.tilgjengelighet)?,
+            }))
+        }
         ApplicationCommand::OpprettInngaaendeJournalpost(command) => {
-            WireCommand::OpprettInngåendeJournalpost(
+            let avsender = command
+                .korrespondanseparter
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("inngående journalpost mangler avsender"))?;
+            Ok(WireCommand::OpprettInngåendeJournalpost(
                 wire_journalpost::OpprettInngåendeJournalpost {
-                    felles: map_application_journalpost_common(&command.felles),
-                    avsender: map_application_korrespondansepart(
-                        command
-                            .korrespondanseparter
-                            .first()
-                            .expect("inngående journalpost originated with an avsender"),
-                    ),
+                    felles: map_application_journalpost_common(&command.felles)?,
+                    avsender: map_application_korrespondansepart(avsender),
                 },
-            )
+            ))
         }
         ApplicationCommand::OpprettUtgaaendeJournalpost(command) => {
             if command.med_utsending {
-                WireCommand::OpprettUtgåendeJournalpostMedUtsending(
+                let mottakere = command
+                    .utsendingsmottakere
+                    .iter()
+                    .map(map_application_utsendingsmottaker)
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                Ok(WireCommand::OpprettUtgåendeJournalpostMedUtsending(
                     wire_journalpost::OpprettUtgåendeJournalpostMedUtsending {
-                        felles: map_application_journalpost_common(&command.felles),
-                        mottakere: command
-                            .utsendingsmottakere
-                            .iter()
-                            .map(map_application_utsendingsmottaker)
-                            .collect(),
+                        felles: map_application_journalpost_common(&command.felles)?,
+                        mottakere,
                     },
-                )
+                ))
             } else {
-                WireCommand::OpprettUtgåendeJournalpost(
+                Ok(WireCommand::OpprettUtgåendeJournalpost(
                     wire_journalpost::OpprettUtgåendeJournalpost {
-                        felles: map_application_journalpost_common(&command.felles),
+                        felles: map_application_journalpost_common(&command.felles)?,
                         mottakere: command
                             .korrespondanseparter
                             .iter()
                             .map(map_application_korrespondansepart)
                             .collect(),
                     },
-                )
+                ))
             }
         }
         ApplicationCommand::OpprettInterntNotatJournalpost(command) => {
-            WireCommand::OpprettInterntNotatJournalpost(
+            Ok(WireCommand::OpprettInterntNotatJournalpost(
                 wire_journalpost::OpprettInterntNotatJournalpost {
-                    felles: map_application_journalpost_common(&command.felles),
+                    felles: map_application_journalpost_common(&command.felles)?,
                 },
-            )
+            ))
         }
-        ApplicationCommand::AvsluttSak(command) => WireCommand::AvsluttSak(wire_sak::AvsluttSak {
-            sak_key: map_application_sak_key(&command.sak_key),
-        }),
-        ApplicationCommand::SettSaksansvarlig(command) => {
-            WireCommand::SettSaksansvarlig(wire_sak::SettSaksansvarlig {
-                sak_key: map_application_sak_key(&command.sak_key),
+        ApplicationCommand::AvsluttSak(command) => {
+            Ok(WireCommand::AvsluttSak(wire_sak::AvsluttSak {
+                sak_key: map_application_sak_key(&command.sak_key)?,
+            }))
+        }
+        ApplicationCommand::SettSaksansvarlig(command) => Ok(WireCommand::SettSaksansvarlig(
+            wire_sak::SettSaksansvarlig {
+                sak_key: map_application_sak_key(&command.sak_key)?,
                 saksbehandler_id: command.saksbehandler_id.clone(),
                 saksbehandler_enhet: command.saksbehandler_enhet.clone(),
-            })
-        }
+            },
+        )),
     }
 }
 
 fn map_application_journalpost_common(
     command: &JournalpostCommon,
-) -> wire_journalpost::JournalpostCommon {
-    wire_journalpost::JournalpostCommon {
+) -> anyhow::Result<wire_journalpost::JournalpostCommon> {
+    Ok(wire_journalpost::JournalpostCommon {
         client_reference: command.client_reference,
         tittel: command.tittel.clone(),
         dokument_dato: command.dokument_dato.clone(),
         saksbehandler: command.saksbehandler.clone(),
         saksbehandler_enhet: command.saksbehandler_enhet.clone(),
-        tilgjengelighet: map_application_tilgjengelighet(&command.tilgjengelighet),
+        tilgjengelighet: map_application_tilgjengelighet(&command.tilgjengelighet)?,
         dokumenter: command
             .dokumenter
             .iter()
             .map(map_application_dokument)
             .collect(),
-        sak_key: map_application_sak_key(&command.sak_key),
+        sak_key: map_application_sak_key(&command.sak_key)?,
         kildesystem: command.kildesystem.clone(),
-    }
+    })
 }
 
 fn map_application_dokument(command: &Dokument) -> wire_dokument::Dokument {
@@ -163,18 +166,16 @@ fn map_application_template_felt(felt: &TemplateFelt) -> wire_dokument::Felt {
 
 fn map_application_tilgjengelighet(
     tilgjengelighet: &Tilgjengelighet,
-) -> wire_tilgang::Tilgjengelighet {
+) -> anyhow::Result<wire_tilgang::Tilgjengelighet> {
     match tilgjengelighet {
-        Tilgjengelighet::Offentlig => wire_tilgang::Tilgjengelighet::Offentlig,
+        Tilgjengelighet::Offentlig => Ok(wire_tilgang::Tilgjengelighet::Offentlig),
         Tilgjengelighet::Skjermet {
             tilgangskode,
             tilgangshjemmel,
-        } => wire_tilgang::Tilgjengelighet::Skjermet {
-            tilgangskode: wire_tilgang::Tilgangskode::new(tilgangskode.clone())
-                .expect("internal tilgangskode originated from valid wire command"),
-            tilgangshjemmel: wire_tilgang::Tilgangshjemmel::new(tilgangshjemmel.clone())
-                .expect("internal tilgangshjemmel originated from valid wire command"),
-        },
+        } => Ok(wire_tilgang::Tilgjengelighet::Skjermet {
+            tilgangskode: wire_tilgang::Tilgangskode::new(tilgangskode.as_str())?,
+            tilgangshjemmel: wire_tilgang::Tilgangshjemmel::new(tilgangshjemmel.as_str())?,
+        }),
     }
 }
 
@@ -196,41 +197,46 @@ fn map_application_korrespondansepart(
 
 fn map_application_utsendingsmottaker(
     mottaker: &Utsendingsmottaker,
-) -> wire_journalpost::Utsendingsmottaker {
-    wire_journalpost::Utsendingsmottaker {
-        navn: mottaker.navn.clone(),
-        id: match &mottaker.id {
-            MottakerId::Person { fødselsnummer } => wire_journalpost::MottakerId::Person {
-                fødselsnummer: Personnummer::new(fødselsnummer.clone())
-                    .expect("internal fødselsnummer originated from valid wire command"),
-            },
-            MottakerId::Virksomhet {
-                organisasjonsnummer,
-            } => wire_journalpost::MottakerId::Virksomhet {
-                organisasjonsnummer: Organisasjonsnummer::new(organisasjonsnummer.clone())
-                    .expect("internal organisasjonsnummer originated from valid wire command"),
-            },
+) -> anyhow::Result<wire_journalpost::Utsendingsmottaker> {
+    let id = match &mottaker.id {
+        MottakerId::Person { fødselsnummer } => wire_journalpost::MottakerId::Person {
+            fødselsnummer: Personnummer::new(fødselsnummer.as_str()).map_err(|e| {
+                anyhow::anyhow!("intern fødselsnummer kunne ikke konverteres til wire: {e}")
+            })?,
         },
+        MottakerId::Virksomhet {
+            organisasjonsnummer,
+        } => wire_journalpost::MottakerId::Virksomhet {
+            organisasjonsnummer: Organisasjonsnummer::new(organisasjonsnummer.as_str()).map_err(
+                |e| {
+                    anyhow::anyhow!(
+                        "intern organisasjonsnummer kunne ikke konverteres til wire: {e}"
+                    )
+                },
+            )?,
+        },
+    };
+    Ok(wire_journalpost::Utsendingsmottaker {
+        navn: mottaker.navn.clone(),
+        id,
         adresse: wire_journalpost::Postadresse {
             adresse: mottaker.adresse.adresse.clone(),
             postnummer: lib_schemas::skuffen::journalpost::Postnummer::new(
-                mottaker.adresse.postnummer.clone(),
-            )
-            .expect("internal postnummer originated from valid wire command"),
+                mottaker.adresse.postnummer.as_str(),
+            )?,
             poststed: mottaker.adresse.poststed.clone(),
         },
-    }
+    })
 }
 
-fn map_application_sak_key(sak_key: &SakKey) -> wire_query::SakKey {
+fn map_application_sak_key(sak_key: &SakKey) -> anyhow::Result<wire_query::SakKey> {
     match sak_key {
         SakKey::ClientReference(client_reference) => {
-            wire_query::SakKey::ClientReference(*client_reference)
+            Ok(wire_query::SakKey::ClientReference(*client_reference))
         }
-        SakKey::ArkivId(saksnummer) => wire_query::SakKey::ArkivId(
-            lib_schemas::skuffen::sak::Saksnummer::new(saksnummer.clone())
-                .expect("internal saksnummer originated from valid wire command"),
-        ),
+        SakKey::ArkivId(saksnummer) => Ok(wire_query::SakKey::ArkivId(
+            lib_schemas::skuffen::sak::Saksnummer::new(saksnummer.clone())?,
+        )),
     }
 }
 
@@ -280,8 +286,10 @@ fn map_tilgjengelighet(tilgjengelighet: wire_tilgang::Tilgjengelighet) -> Tilgje
             tilgangskode,
             tilgangshjemmel,
         } => Tilgjengelighet::Skjermet {
-            tilgangskode: tilgangskode.as_str().to_string(),
-            tilgangshjemmel: tilgangshjemmel.as_str().to_string(),
+            tilgangskode: domain::model::tilgang::Tilgangskode::new(tilgangskode.as_str())
+                .expect("wire tilgangskode er validert av serde"),
+            tilgangshjemmel: domain::model::tilgang::Tilgangshjemmel::new(tilgangshjemmel.as_str())
+                .expect("wire tilgangshjemmel er validert av serde"),
         },
     }
 }
@@ -305,17 +313,26 @@ fn map_utsendingsmottaker(mottaker: wire_journalpost::Utsendingsmottaker) -> Uts
         navn: mottaker.navn,
         id: match mottaker.id {
             wire_journalpost::MottakerId::Person { fødselsnummer } => MottakerId::Person {
-                fødselsnummer: fødselsnummer.as_str().to_string(),
+                fødselsnummer: domain::model::identifikator::Fødselsnummer::new(
+                    fødselsnummer.as_str(),
+                )
+                .expect("wire fødselsnummer er validert av serde"),
             },
             wire_journalpost::MottakerId::Virksomhet {
                 organisasjonsnummer,
             } => MottakerId::Virksomhet {
-                organisasjonsnummer: organisasjonsnummer.as_str().to_string(),
+                organisasjonsnummer: domain::model::identifikator::Organisasjonsnummer::new(
+                    organisasjonsnummer.as_str(),
+                )
+                .expect("wire organisasjonsnummer er validert av serde"),
             },
         },
         adresse: Postadresse {
             adresse: mottaker.adresse.adresse,
-            postnummer: mottaker.adresse.postnummer.as_str().to_string(),
+            postnummer: domain::model::identifikator::Postnummer::new(
+                mottaker.adresse.postnummer.as_str(),
+            )
+            .expect("wire postnummer er validert av serde"),
             poststed: mottaker.adresse.poststed,
         },
     }
@@ -325,7 +342,10 @@ fn map_opprett_sak(command: wire_sak::OpprettSak) -> OpprettSakCommand {
     OpprettSakCommand {
         client_reference: command.client_reference,
         sakstittel: command.sakstittel.0,
-        ordningsverdi: command.ordningsverdi.as_str().to_string(),
+        ordningsverdi: domain::model::sak::Ordningsverdi::new(
+            command.ordningsverdi.as_str().to_string(),
+        )
+        .expect("wire ordningsverdi er validert av serde"),
         arkivdel: map_arkivdel(command.arkivdel),
         saksbehandler_id: command.saksbehandler_id,
         saksbehandler_enhet: command.saksbehandler_enhet,
@@ -499,7 +519,7 @@ mod tests {
             ApplicationCommand::OpprettSak(command) => {
                 assert_eq!(command.client_reference, client_reference);
                 assert_eq!(command.sakstittel, "Test sak");
-                assert_eq!(command.ordningsverdi, "123");
+                assert_eq!(command.ordningsverdi.get(), "123");
                 assert_eq!(command.arkivdel, Arkivdel::Tilsynsdivisjonene);
                 assert_eq!(command.saksbehandler_id, "Z12345");
                 assert_eq!(command.saksbehandler_enhet, "42");
@@ -654,11 +674,14 @@ mod tests {
                     vec![Utsendingsmottaker {
                         navn: "Bedrift AS".to_string(),
                         id: MottakerId::Virksomhet {
-                            organisasjonsnummer: "995298775".to_string(),
+                            organisasjonsnummer:
+                                domain::model::identifikator::Organisasjonsnummer::new("995298775")
+                                    .unwrap(),
                         },
                         adresse: Postadresse {
                             adresse: "Storgata 1".to_string(),
-                            postnummer: "0350".to_string(),
+                            postnummer: domain::model::identifikator::Postnummer::new("0350")
+                                .unwrap(),
                             poststed: "Oslo".to_string(),
                         },
                     }]
@@ -773,11 +796,14 @@ mod tests {
                     utsendingsmottakere: vec![Utsendingsmottaker {
                         navn: "Bedrift AS".to_string(),
                         id: MottakerId::Virksomhet {
-                            organisasjonsnummer: "995298775".to_string(),
+                            organisasjonsnummer:
+                                domain::model::identifikator::Organisasjonsnummer::new("995298775")
+                                    .unwrap(),
                         },
                         adresse: Postadresse {
                             adresse: "Storgata 1".to_string(),
-                            postnummer: "0350".to_string(),
+                            postnummer: domain::model::identifikator::Postnummer::new("0350")
+                                .unwrap(),
                             poststed: "Oslo".to_string(),
                         },
                     }],
@@ -786,7 +812,7 @@ mod tests {
             ),
         );
 
-        let wire = map_application_envelope_to_wire(&envelope);
+        let wire = map_application_envelope_to_wire(&envelope).unwrap();
         assert!(matches!(
             wire.payload,
             WireCommand::OpprettUtgåendeJournalpostMedUtsending(_)
@@ -847,8 +873,8 @@ mod tests {
 
     fn application_skjermet() -> Tilgjengelighet {
         Tilgjengelighet::Skjermet {
-            tilgangskode: "UO".to_string(),
-            tilgangshjemmel: "offl".to_string(),
+            tilgangskode: domain::model::tilgang::Tilgangskode::new("UO").unwrap(),
+            tilgangshjemmel: domain::model::tilgang::Tilgangshjemmel::new("offl").unwrap(),
         }
     }
 
@@ -890,6 +916,54 @@ mod tests {
                 assert_eq!(felter, &[TemplateFelt::Saksnummer]);
             }
             other => panic!("expected template document, got {other:?}"),
+        }
+    }
+
+    // Domenet og wire-kontrakten dupliserer bevisst valideringsreglene
+    // (SKU-0013: domain importerer ikke lib_schemas). Denne testen sikrer at
+    // de ikke drifter fra hverandre, slik at en verdi aldri er gyldig i ett lag
+    // men avvist i det andre.
+    #[test]
+    fn fnr_validering_er_identisk_i_domene_og_wire() {
+        let cases = [
+            "01010101006",   // gyldig
+            "995298775",     // for kort (9)
+            "01010101007",   // feil kontrollsiffer
+            "tull",          // ikke-numerisk
+            "",              // tom
+            "0101010100600", // for lang
+        ];
+        for c in cases {
+            let domene = domain::model::identifikator::Fødselsnummer::new(c).is_ok();
+            let wire = lib_schemas::typer::personnummer::Personnummer::new(c).is_ok();
+            assert_eq!(domene, wire, "fnr-paritet avvik for '{c}'");
+        }
+    }
+
+    #[test]
+    fn orgnr_validering_er_identisk_i_domene_og_wire() {
+        let cases = [
+            "995298775",
+            "995298776",
+            "01010101006",
+            "tull",
+            "",
+            "12345678",
+        ];
+        for c in cases {
+            let domene = domain::model::identifikator::Organisasjonsnummer::new(c).is_ok();
+            let wire = lib_schemas::typer::organisasjonsnummer::Organisasjonsnummer::new(c).is_ok();
+            assert_eq!(domene, wire, "orgnr-paritet avvik for '{c}'");
+        }
+    }
+
+    #[test]
+    fn postnummer_validering_er_identisk_i_domene_og_wire() {
+        let cases = ["0350", "035", "03500", "abcd", ""];
+        for c in cases {
+            let domene = domain::model::identifikator::Postnummer::new(c).is_ok();
+            let wire = lib_schemas::skuffen::journalpost::Postnummer::new(c).is_ok();
+            assert_eq!(domene, wire, "postnummer-paritet avvik for '{c}'");
         }
     }
 }

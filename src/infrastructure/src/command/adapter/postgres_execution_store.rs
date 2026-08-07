@@ -57,7 +57,7 @@ impl CommandExecutionRepository for PostgresExecutionStore {
     ) -> Result<EksekveringsregistreringResultat, anyhow::Error> {
         let mut tx = self.pool.begin().await?;
 
-        let wire_envelope = map_application_envelope_to_wire(&ny.envelope);
+        let wire_envelope = map_application_envelope_to_wire(&ny.envelope)?;
         let payload = serde_json::to_value(&wire_envelope)?;
         let result = sqlx::query(
             r#"

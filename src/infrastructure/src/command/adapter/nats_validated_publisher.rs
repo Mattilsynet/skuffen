@@ -35,7 +35,7 @@ impl ValidatedCommandDispatcher for NatsValidatedCommandDispatcher {
         &self,
         command: &CommandEnvelope<Command>,
     ) -> Result<(), anyhow::Error> {
-        let wire_envelope = map_application_envelope_to_wire(command);
+        let wire_envelope = map_application_envelope_to_wire(command)?;
         let subject = command_subject(
             CommandStreamStage::Ready,
             &wire_envelope.payload,

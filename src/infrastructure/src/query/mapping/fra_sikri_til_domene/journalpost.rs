@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 
 use domain::model::journalpost::{JournalpostType, Journalpoststatus};
-use domain::model::tilgang::Tilgang;
+use domain::model::tilgang::{Tilgang, Tilgangshjemmel, Tilgangskode};
 use sikri_client::domain::journalpost_response::JournalpostRespons as SikriJournalpostResponse;
 
 use crate::query::mapping::fra_sikri_til_domene::dokument::from_sikri_dokument_to_domain_dokument;
@@ -94,8 +94,8 @@ fn from_sikri_journalpost_to_domain_tilgang(
         sikri_journalpost.tilgangshjemmel,
     ) {
         (Some(tilgangskode), Some(tilgangshjemmel)) => Ok(Some(Tilgang {
-            tilgangskode,
-            tilgangshjemmel,
+            tilgangskode: Tilgangskode::new(tilgangskode)?,
+            tilgangshjemmel: Tilgangshjemmel::new(tilgangshjemmel)?,
         })),
         (None, None) => Ok(None),
         (Some(_), None) | (None, Some(_)) => Err(anyhow!(

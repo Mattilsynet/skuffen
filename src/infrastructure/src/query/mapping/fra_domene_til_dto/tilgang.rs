@@ -5,8 +5,8 @@ pub fn from_domain_tilgang_to_tilgjengelighet(
 ) -> TilgjengelighetResponse {
     match tilgang {
         Some(t) => TilgjengelighetResponse::Skjermet {
-            tilgangskode: t.tilgangskode,
-            tilgangshjemmel: t.tilgangshjemmel,
+            tilgangskode: t.tilgangskode.as_str().to_string(),
+            tilgangshjemmel: t.tilgangshjemmel.as_str().to_string(),
         },
         None => TilgjengelighetResponse::Offentlig,
     }
@@ -21,8 +21,8 @@ mod tests {
     #[test]
     fn skjermet_speiles_uten_maskering() {
         let tilgang = domain::model::tilgang::Tilgang {
-            tilgangskode: "UO".to_string(),
-            tilgangshjemmel: "Offl. § 13".to_string(),
+            tilgangskode: domain::model::tilgang::Tilgangskode::new("UO").unwrap(),
+            tilgangshjemmel: domain::model::tilgang::Tilgangshjemmel::new("Offl. § 13").unwrap(),
         };
         let respons = from_domain_tilgang_to_tilgjengelighet(Some(tilgang));
         assert_eq!(

@@ -32,7 +32,7 @@ impl EksekveringKvitteringPublisher for NatsDonePublisher {
         )
     )]
     async fn publiser_done(&self, command: &CommandEnvelope<Command>) -> Result<(), anyhow::Error> {
-        let wire_envelope = map_application_envelope_to_wire(command);
+        let wire_envelope = map_application_envelope_to_wire(command)?;
         let subject = command_subject(
             CommandStreamStage::Done,
             &wire_envelope.payload,

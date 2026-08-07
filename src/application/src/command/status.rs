@@ -311,7 +311,7 @@ mod tests {
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
                 saksbehandler_id: "Z12345".to_string(),
                 saksbehandler_enhet: "42".to_string(),
-                ordningsverdi: "123".to_string(),
+                ordningsverdi: domain::model::sak::Ordningsverdi::new("123".to_string()).unwrap(),
                 tilgjengelighet: Tilgjengelighet::Offentlig,
             }),
         }

@@ -47,14 +47,14 @@ impl ArkivGateway for SikriArkivGateway {
             },
             saksbehandler_id: data.saksbehandler_id.clone(),
             saksbehandler_enhet: data.saksbehandler_enhet.clone(),
-            ordningsverdi: data.ordningsverdi.clone(),
+            ordningsverdi: data.ordningsverdi.get().to_string(),
             tilgang: match &data.tilgjengelighet {
                 Tilgjengelighet::Skjermet {
                     tilgangskode,
                     tilgangshjemmel,
                 } => Some(sikri_client::domain::ny_sak::Tilgang {
-                    tilgangskode: tilgangskode.clone(),
-                    tilgangshjemmel: tilgangshjemmel.clone(),
+                    tilgangskode: tilgangskode.as_str().to_string(),
+                    tilgangshjemmel: tilgangshjemmel.as_str().to_string(),
                 }),
                 Tilgjengelighet::Offentlig => None,
             },
@@ -373,7 +373,7 @@ impl Skjerming {
 
 fn skjerming_fra_tilgjengelighet(
     tilgjengelighet: &Tilgjengelighet,
-    client_reference: uuid::Uuid,
+    _client_reference: uuid::Uuid,
 ) -> Result<Skjerming, anyhow::Error> {
     match tilgjengelighet {
         Tilgjengelighet::Offentlig => Ok(Skjerming::Offentlig),
@@ -381,14 +381,11 @@ fn skjerming_fra_tilgjengelighet(
             tilgangskode,
             tilgangshjemmel,
         } => {
-            if tilgangskode.trim().is_empty() || tilgangshjemmel.trim().is_empty() {
-                return Err(anyhow::anyhow!(
-                    "arkivmapping_skjerming_ufullstendig client_reference={client_reference} sikri_recoverability=irrecoverable"
-                ));
-            }
+            // tilgangskode/tilgangshjemmel er validerte newtypes (non-empty),
+            // så vi kan stole på verdiene her.
             Ok(Skjerming::Skjermet {
-                tilgangskode: tilgangskode.clone(),
-                tilgangshjemmel: tilgangshjemmel.clone(),
+                tilgangskode: tilgangskode.as_str().to_string(),
+                tilgangshjemmel: tilgangshjemmel.as_str().to_string(),
             })
         }
     }
@@ -435,10 +432,9 @@ fn utsendingsmottaker_avsender_mottaker(
     skjerming: &Skjerming,
     client_reference: uuid::Uuid,
 ) -> Result<ElementsAvsenderMottaker, anyhow::Error> {
-    if mottaker.adresse.adresse.trim().is_empty()
-        || mottaker.adresse.postnummer.trim().is_empty()
-        || mottaker.adresse.poststed.trim().is_empty()
-    {
+    // postnummer er en validert Postnummer-newtype (4 siffer), så kun de rå
+    // String-feltene må sjekkes for tomhet her.
+    if mottaker.adresse.adresse.trim().is_empty() || mottaker.adresse.poststed.trim().is_empty() {
         return Err(anyhow::anyhow!(
             "arkivmapping_postadresse_mangler client_reference={client_reference} sikri_recoverability=irrecoverable"
         ));
@@ -447,10 +443,12 @@ fn utsendingsmottaker_avsender_mottaker(
     // Sikri gjenbruker organisasjonsnummer-feltet for både orgnr og fnr;
     // person-flagget skiller dem. Fnr skal derfor ikke droppes.
     let (person, organisasjonsnummer) = match &mottaker.id {
-        MottakerId::Person { fødselsnummer } => (Some(true), Some(fødselsnummer.clone())),
+        MottakerId::Person { fødselsnummer } => {
+            (Some(true), Some(fødselsnummer.as_str().to_string()))
+        }
         MottakerId::Virksomhet {
             organisasjonsnummer,
-        } => (Some(false), Some(organisasjonsnummer.clone())),
+        } => (Some(false), Some(organisasjonsnummer.as_str().to_string())),
     };
 
     Ok(ElementsAvsenderMottaker {
@@ -467,7 +465,7 @@ fn utsendingsmottaker_avsender_mottaker(
         epost: None,
         telefon: None,
         postadresse: Some(mottaker.adresse.adresse.clone()),
-        postnummer: Some(mottaker.adresse.postnummer.clone()),
+        postnummer: Some(mottaker.adresse.postnummer.as_str().to_string()),
         poststed: Some(mottaker.adresse.poststed.clone()),
         utlandsadresse: None,
     })

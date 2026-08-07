@@ -66,8 +66,8 @@ fn from_sikri_sak_to_domain_tilgang(
     // tolkes som «ingen skjerming». Da avviser vi i stedet for å vise uskjermet.
     match (sikri_sak.tilgangskode, sikri_sak.tilgangshjemmel) {
         (Some(tilgangskode), Some(tilgangshjemmel)) => Ok(Some(domain::model::tilgang::Tilgang {
-            tilgangskode,
-            tilgangshjemmel,
+            tilgangskode: domain::model::tilgang::Tilgangskode::new(tilgangskode)?,
+            tilgangshjemmel: domain::model::tilgang::Tilgangshjemmel::new(tilgangshjemmel)?,
         })),
         (None, None) => Ok(None),
         (Some(_), None) | (None, Some(_)) => Err(anyhow!(

@@ -1,4 +1,5 @@
 pub mod dokument;
+pub mod identifikator;
 pub mod journalpost;
 pub mod operasjon;
 pub mod sak;

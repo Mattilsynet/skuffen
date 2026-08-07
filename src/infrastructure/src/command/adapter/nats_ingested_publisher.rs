@@ -32,7 +32,7 @@ impl CommandDispatcher for NatsCommandDispatcher {
         )
     )]
     async fn dispatch(&self, command: &CommandEnvelope<Command>) -> Result<(), anyhow::Error> {
-        let wire_envelope = map_application_envelope_to_wire(command);
+        let wire_envelope = map_application_envelope_to_wire(command)?;
         let subject = command_subject(
             CommandStreamStage::Inbox,
             &wire_envelope.payload,
