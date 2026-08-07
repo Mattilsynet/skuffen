@@ -12,5 +12,6 @@ pub use env::start_runtime;
 #[allow(unused_imports)]
 pub use nats::{
     extract_saksnummer, hent_bruker_mt_enheter_via_nats, hent_journalpost_via_nats,
-    hent_sak_via_nats_by_arkiv_id, publish_media, send_command_batch, wait_for_status_events,
+    hent_sak_via_nats_by_arkiv_id, publish_media, send_command_batch, send_raw_command_payload,
+    wait_for_status_events,
 };

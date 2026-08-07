@@ -12,7 +12,7 @@ use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 use support::{
     CommandScenario, extract_saksnummer, hent_bruker_mt_enheter_via_nats,
     hent_journalpost_via_nats, hent_sak_via_nats_by_arkiv_id, publish_media, send_command_batch,
-    wait_for_status_events,
+    send_raw_command_payload, wait_for_status_events,
 };
 
 mod support;
@@ -546,4 +546,62 @@ fn assert_validate_error(events: &[SkuffenStatusEventV1], command_id: Uuid) {
                 && event.status == SkuffenStatus::Ok),
         "Rejected command {command_id} must not reach Execution+Ok"
     );
+}
+
+/// Ugyldige payloads skal avvises på wire-grensen (deserialisering) med en
+/// `Error`-kvittering, og aldri komme inn i pipelinen. Dekker regresjoner der
+/// en `#[serde(try_from)]`-validering eller `deny_unknown_fields` fjernes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ugyldig_payload_avvises_paa_wire_grensen() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let common = |sakstittel: &str, ekstra: &str| {
+        format!(
+            r#"[{{"command_id":"{cid}","correlation_id":null,"payload":{{"OpprettSak":{{"client_reference":"{cref}","sakstittel":"{sakstittel}","arkivdel":"Tilsynsdivisjonene","saksbehandler_id":"Z12345","saksbehandler_enhet":"42","ordningsverdi":"123","tilgjengelighet":"Offentlig"{ekstra}}}}}}}]"#,
+            cid = Uuid::new_v4(),
+            cref = Uuid::new_v4(),
+        )
+    };
+
+    // Hver ugyldig payload skal gi en Error-kvittering.
+    let for_lang_tittel = common(&"A".repeat(300), "");
+    let tom_tittel = common("", "");
+    let ukjent_felt = common("Gyldig", r#","evil_injected_field":"x""#);
+
+    let ugyldig_fnr = format!(
+        r#"[{{"command_id":"{cid}","correlation_id":null,"payload":{{"OpprettUtgåendeJournalpostMedUtsending":{{"client_reference":"{cref}","tittel":"Test","dokument_dato":"2025-01-01","saksbehandler":"Z12345","saksbehandler_enhet":"42","tilgjengelighet":"Offentlig","dokumenter":[],"sak_key":{{"type":"clientReference","value":"{sref}"}},"kildesystem":null,"mottakere":[{{"navn":"Ola","id":{{"Person":{{"fødselsnummer":"12345678901"}}}},"adresse":{{"adresse":"Gata 1","postnummer":"0350","poststed":"Oslo"}}}}]}}}}}}]"#,
+        cid = Uuid::new_v4(),
+        cref = Uuid::new_v4(),
+        sref = Uuid::new_v4(),
+    );
+
+    let skjermet_tom_kode = format!(
+        r#"[{{"command_id":"{cid}","correlation_id":null,"payload":{{"OpprettSak":{{"client_reference":"{cref}","sakstittel":"Test","arkivdel":"Tilsynsdivisjonene","saksbehandler_id":"Z12345","saksbehandler_enhet":"42","ordningsverdi":"123","tilgjengelighet":{{"Skjermet":{{"tilgangskode":"","tilgangshjemmel":"Offl. § 13"}}}}}}}}}}]"#,
+        cid = Uuid::new_v4(),
+        cref = Uuid::new_v4(),
+    );
+
+    for (beskrivelse, payload) in [
+        ("for lang sakstittel", &for_lang_tittel),
+        ("tom sakstittel", &tom_tittel),
+        ("ukjent felt", &ukjent_felt),
+        ("ugyldig fødselsnummer", &ugyldig_fnr),
+        ("skjermet med tom tilgangskode", &skjermet_tom_kode),
+    ] {
+        let kvittering = send_raw_command_payload(&env.nats_url, payload).await?;
+        assert!(
+            kvittering.get("Error").is_some(),
+            "'{beskrivelse}' skulle gitt Error-kvittering, fikk: {kvittering}"
+        );
+    }
+
+    // Positiv kontroll: en gyldig payload skal gi Ok-kvittering.
+    let gyldig = common("Gyldig kontrolltittel", "");
+    let kvittering = send_raw_command_payload(&env.nats_url, &gyldig).await?;
+    assert!(
+        kvittering.get("Ok").is_some(),
+        "Gyldig payload skulle gitt Ok-kvittering, fikk: {kvittering}"
+    );
+
+    Ok(())
 }

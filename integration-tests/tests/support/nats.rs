@@ -158,6 +158,28 @@ pub async fn send_command_batch(
     Ok(command_ids_response)
 }
 
+/// Send en rå JSON-payload til `arkiv.arkiver` og returner kvitteringen uendret.
+///
+/// Brukes for adversarisk testing: de validerte wire-typene kan ikke konstruere
+/// ugyldige verdier i Rust, så vi må sende rå bytes for å simulere en feilaktig
+/// eller ondsinnet klient.
+pub async fn send_raw_command_payload(nats_url: &str, raw_json: &str) -> Result<serde_json::Value> {
+    let client = async_nats::connect(nats_url).await?;
+    let inbox = client.new_inbox();
+    let mut sub = client.subscribe(inbox.clone()).await?;
+    client
+        .publish_with_reply(
+            "arkiv.arkiver",
+            inbox,
+            Bytes::from(raw_json.as_bytes().to_vec()),
+        )
+        .await?;
+    let response = tokio::time::timeout(Duration::from_secs(5), sub.next()).await?;
+    let response = response.ok_or_else(|| anyhow::anyhow!("Missing command batch response"))?;
+    let kvittering: serde_json::Value = serde_json::from_slice(&response.payload)?;
+    Ok(kvittering)
+}
+
 pub async fn wait_for_ready(nats_url: &str) -> Result<()> {
     let payload = serde_json::to_vec("ping")?;
     let client = async_nats::connect(nats_url).await?;
@@ -203,12 +225,12 @@ async fn nats_server_ping(nats_url: &str) -> Result<()> {
     let client_for_reply = client.clone();
 
     let responder = tokio::spawn(async move {
-        if let Some(msg) = probe_sub.next().await {
-            if let Some(reply) = msg.reply {
-                let _ = client_for_reply
-                    .publish(reply, Bytes::from_static(b"pong"))
-                    .await;
-            }
+        if let Some(msg) = probe_sub.next().await
+            && let Some(reply) = msg.reply
+        {
+            let _ = client_for_reply
+                .publish(reply, Bytes::from_static(b"pong"))
+                .await;
         }
     });
 
