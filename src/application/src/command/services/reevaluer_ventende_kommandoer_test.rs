@@ -500,7 +500,7 @@ async fn etter_sak_endret_gjor_journalpostkommando_klar_nar_saksnummer_kommer() 
     let entity_tilstand_repo = FakeEntityTilstandRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
     let status_publisher = FakeStatusPublisher::default();
-    let done_publisher = FakeDonePublisher::default();
+    let done_publisher = FakeDonePublisher;
 
     let sak_client_reference = Uuid::new_v4();
     let sak_id = Uuid::new_v4();
@@ -590,7 +590,7 @@ async fn etter_sak_endret_gjor_blokkert_command_klar_nar_den_reevaluerer_til_don
     let entity_tilstand_repo = FakeEntityTilstandRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
     let status_publisher = FakeStatusPublisher::default();
-    let done_publisher = FakeDonePublisher::default();
+    let done_publisher = FakeDonePublisher;
 
     let sak_client_reference = Uuid::new_v4();
     let sak_id = Uuid::new_v4();
@@ -659,7 +659,7 @@ async fn etter_journalpost_endret_gjor_avslutt_sak_klar_nar_journalpost_er_ferdi
     let entity_tilstand_repo = FakeEntityTilstandRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
     let status_publisher = FakeStatusPublisher::default();
-    let done_publisher = FakeDonePublisher::default();
+    let done_publisher = FakeDonePublisher;
 
     let sak_client_reference = Uuid::new_v4();
     let sak_id = Uuid::new_v4();
@@ -738,7 +738,7 @@ async fn etter_sak_endret_gjor_avslutt_sak_klar_naar_saksansvarlig_matcher() {
     let entity_tilstand_repo = FakeEntityTilstandRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
     let status_publisher = FakeStatusPublisher::default();
-    let done_publisher = FakeDonePublisher::default();
+    let done_publisher = FakeDonePublisher;
 
     let sak_client_reference = Uuid::new_v4();
     let sak_id = Uuid::new_v4();
@@ -811,7 +811,7 @@ async fn etter_sak_endret_holder_avslutt_sak_blokkert_naar_saksansvarlig_mangler
     let entity_tilstand_repo = FakeEntityTilstandRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
     let status_publisher = FakeStatusPublisher::default();
-    let done_publisher = FakeDonePublisher::default();
+    let done_publisher = FakeDonePublisher;
 
     let sak_client_reference = Uuid::new_v4();
     let sak_id = Uuid::new_v4();
@@ -888,7 +888,7 @@ async fn etter_journalpost_endret_noop_nar_journalpost_mangler() {
     let entity_tilstand_repo = FakeEntityTilstandRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
     let status_publisher = FakeStatusPublisher::default();
-    let done_publisher = FakeDonePublisher::default();
+    let done_publisher = FakeDonePublisher;
 
     let service = ReevaluerVentendeKommandoerService::new(
         Box::new(execution_repo.clone()),
@@ -915,7 +915,7 @@ async fn etter_sak_endret_gir_feil_ved_permanent_feilet_dokument() {
     let entity_tilstand_repo = FakeEntityTilstandRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
     let status_publisher = FakeStatusPublisher::default();
-    let done_publisher = FakeDonePublisher::default();
+    let done_publisher = FakeDonePublisher;
 
     let sak_client_reference = Uuid::new_v4();
     let sak_id = Uuid::new_v4();
@@ -1002,7 +1002,7 @@ async fn etter_sak_endret_oppdaterer_blocked_detail_nar_command_fortsatt_er_blok
     let entity_tilstand_repo = FakeEntityTilstandRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
     let status_publisher = FakeStatusPublisher::default();
-    let done_publisher = FakeDonePublisher::default();
+    let done_publisher = FakeDonePublisher;
 
     let sak_client_reference = Uuid::new_v4();
     let sak_id = Uuid::new_v4();
@@ -1074,7 +1074,7 @@ async fn etter_dokument_endret_gjor_eierkommando_klar_og_dekker_sak_wakeup() {
     let entity_tilstand_repo = FakeEntityTilstandRepository::default();
     let id_mapping_repo = FakeIdMappingRepository::default();
     let status_publisher = FakeStatusPublisher::default();
-    let done_publisher = FakeDonePublisher::default();
+    let done_publisher = FakeDonePublisher;
 
     let sak_client_reference = Uuid::new_v4();
     let sak_id = Uuid::new_v4();

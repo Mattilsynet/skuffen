@@ -253,22 +253,21 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
                 journalpost_id: journalpost_id_uuid,
                 sak_id: sak_id_uuid,
             });
-        if let Some(sak) = data.sak_med_barn.get_mut(&sak_id_uuid) {
-            if !sak
+        if let Some(sak) = data.sak_med_barn.get_mut(&sak_id_uuid)
+            && !sak
                 .journalposter
                 .iter()
                 .any(|journalpost| journalpost.journalpost_id == journalpost_id)
-            {
-                sak.journalposter.push(JournalpostMedDokumenter {
-                    journalpost_id,
-                    tilstand: JournalpostTilstand::IkkeRealisert,
-                    sikri_id: None,
-                    journalpostnummer: None,
-                    journalposttype,
-                    med_utsending,
-                    dokumenter: Vec::new(),
-                });
-            }
+        {
+            sak.journalposter.push(JournalpostMedDokumenter {
+                journalpost_id,
+                tilstand: JournalpostTilstand::IkkeRealisert,
+                sikri_id: None,
+                journalpostnummer: None,
+                journalposttype,
+                med_utsending,
+                dokumenter: Vec::new(),
+            });
         }
         Ok(())
     }

@@ -841,6 +841,124 @@ fn error_category_for_detail(detail: &str) -> &'static str {
     }
 }
 
+fn redact_sensitive_log_tokens(detail: &str) -> String {
+    let mut redacted = Vec::new();
+    let mut redacted_remaining = 0;
+
+    for token in detail.split_whitespace() {
+        if redacted_remaining > 0 {
+            redacted.push("redacted".to_string());
+            redacted_remaining -= 1;
+            continue;
+        }
+
+        let lower = token.to_ascii_lowercase();
+        if is_sensitive_log_token(&lower) {
+            redacted.push(redact_sensitive_log_token(token));
+            redacted_remaining = sensitive_following_token_count(token, &lower);
+        } else {
+            redacted.push(token.to_string());
+        }
+    }
+
+    redacted.join(" ")
+}
+
+fn is_sensitive_log_token(lower: &str) -> bool {
+    lower.contains("authorization")
+        || lower == "bearer"
+        || lower.starts_with("bearer=")
+        || lower == "basic"
+        || lower.starts_with("basic=")
+        || lower.contains("password")
+        || lower.contains("passwd")
+        || lower.contains("credential")
+        || lower.contains("token")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("x-api-key")
+        || lower.contains("secret")
+}
+
+fn sensitive_following_token_count(token: &str, lower: &str) -> usize {
+    if lower == "bearer" || lower == "basic" {
+        1
+    } else if lower.contains("authorization") && token.ends_with(':') {
+        2
+    } else if token.ends_with(':') || token == "=" {
+        1
+    } else {
+        0
+    }
+}
+
+fn redact_sensitive_log_token(token: &str) -> String {
+    token
+        .find(['=', ':'])
+        .map(|index| format!("{}redacted", &token[..=index]))
+        .unwrap_or_else(|| "redacted".to_string())
+}
+
+fn strip_embedded_payload(detail: &str) -> String {
+    let Some(index) = detail.find('{') else {
+        return detail.to_string();
+    };
+
+    let prefix = detail[..index].trim_end();
+    if prefix.is_empty() {
+        "[payload stripped]".to_string()
+    } else {
+        format!("{prefix} [payload stripped]")
+    }
+}
+
+fn truncate_log_detail(detail: &str, max_chars: usize) -> String {
+    let mut value: String = detail.chars().take(max_chars).collect();
+    if detail.chars().count() > max_chars {
+        value.push_str("...");
+    }
+    value
+}
+
+fn payload_to_application_envelope(
+    payload: serde_json::Value,
+) -> Result<application::command::CommandEnvelope<application::command::Command>, anyhow::Error> {
+    let wire_envelope: WireCommandEnvelope<Command> = serde_json::from_value(payload)?;
+    Ok(map_wire_envelope(wire_envelope))
+}
+
+fn command_type_code(command_type: CommandTypeCode) -> &'static str {
+    command_type.as_code()
+}
+
+async fn avslutt_forsok(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    command_id: Uuid,
+    attempt_no: i32,
+    outcome: &str,
+    detail: Option<&str>,
+) -> Result<(), anyhow::Error> {
+    sqlx::query(
+        r#"
+        UPDATE command_execution_attempt
+        SET outcome = $3,
+            detail = $4,
+            finished_at = now()
+        WHERE command_id = $1
+          AND attempt_no = $2
+          AND finished_at IS NULL
+        "#,
+    )
+    .bind(command_id)
+    .bind(attempt_no)
+    .bind(outcome)
+    .bind(detail)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::error_category_for_detail;
@@ -1123,122 +1241,4 @@ mod tests {
             );
         }
     }
-}
-
-fn redact_sensitive_log_tokens(detail: &str) -> String {
-    let mut redacted = Vec::new();
-    let mut redacted_remaining = 0;
-
-    for token in detail.split_whitespace() {
-        if redacted_remaining > 0 {
-            redacted.push("redacted".to_string());
-            redacted_remaining -= 1;
-            continue;
-        }
-
-        let lower = token.to_ascii_lowercase();
-        if is_sensitive_log_token(&lower) {
-            redacted.push(redact_sensitive_log_token(token));
-            redacted_remaining = sensitive_following_token_count(token, &lower);
-        } else {
-            redacted.push(token.to_string());
-        }
-    }
-
-    redacted.join(" ")
-}
-
-fn is_sensitive_log_token(lower: &str) -> bool {
-    lower.contains("authorization")
-        || lower == "bearer"
-        || lower.starts_with("bearer=")
-        || lower == "basic"
-        || lower.starts_with("basic=")
-        || lower.contains("password")
-        || lower.contains("passwd")
-        || lower.contains("credential")
-        || lower.contains("token")
-        || lower.contains("api_key")
-        || lower.contains("apikey")
-        || lower.contains("x-api-key")
-        || lower.contains("secret")
-}
-
-fn sensitive_following_token_count(token: &str, lower: &str) -> usize {
-    if lower == "bearer" || lower == "basic" {
-        1
-    } else if lower.contains("authorization") && token.ends_with(':') {
-        2
-    } else if token.ends_with(':') || token == "=" {
-        1
-    } else {
-        0
-    }
-}
-
-fn redact_sensitive_log_token(token: &str) -> String {
-    token
-        .find(['=', ':'])
-        .map(|index| format!("{}redacted", &token[..=index]))
-        .unwrap_or_else(|| "redacted".to_string())
-}
-
-fn strip_embedded_payload(detail: &str) -> String {
-    let Some(index) = detail.find('{') else {
-        return detail.to_string();
-    };
-
-    let prefix = detail[..index].trim_end();
-    if prefix.is_empty() {
-        "[payload stripped]".to_string()
-    } else {
-        format!("{prefix} [payload stripped]")
-    }
-}
-
-fn truncate_log_detail(detail: &str, max_chars: usize) -> String {
-    let mut value: String = detail.chars().take(max_chars).collect();
-    if detail.chars().count() > max_chars {
-        value.push_str("...");
-    }
-    value
-}
-
-fn payload_to_application_envelope(
-    payload: serde_json::Value,
-) -> Result<application::command::CommandEnvelope<application::command::Command>, anyhow::Error> {
-    let wire_envelope: WireCommandEnvelope<Command> = serde_json::from_value(payload)?;
-    Ok(map_wire_envelope(wire_envelope))
-}
-
-fn command_type_code(command_type: CommandTypeCode) -> &'static str {
-    command_type.as_code()
-}
-
-async fn avslutt_forsok(
-    tx: &mut sqlx::Transaction<'_, Postgres>,
-    command_id: Uuid,
-    attempt_no: i32,
-    outcome: &str,
-    detail: Option<&str>,
-) -> Result<(), anyhow::Error> {
-    sqlx::query(
-        r#"
-        UPDATE command_execution_attempt
-        SET outcome = $3,
-            detail = $4,
-            finished_at = now()
-        WHERE command_id = $1
-          AND attempt_no = $2
-          AND finished_at IS NULL
-        "#,
-    )
-    .bind(command_id)
-    .bind(attempt_no)
-    .bind(outcome)
-    .bind(detail)
-    .execute(&mut **tx)
-    .await?;
-
-    Ok(())
 }
