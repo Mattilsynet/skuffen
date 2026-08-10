@@ -46,6 +46,9 @@ type OppdatertJournalpost = (Uuid, JournalpostTilstand, Option<i64>, Option<i32>
 
 #[derive(Clone, Default)]
 struct FakeEntityTilstandRepository {
+    /// Simulerer at neste `oppdater_sak_tilstand` feiler (f.eks. DB-blipp).
+    /// Flagget nullstilles etter at feilen er utløst.
+    feil_ved_neste_oppdater_sak_tilstand: Arc<Mutex<bool>>,
     sak_med_barn: Arc<Mutex<HashMap<Uuid, SakMedBarn>>>,
     oppdaterte_journalposter: Arc<Mutex<Vec<OppdatertJournalpost>>>,
     oppdaterte_dokumenter: Arc<Mutex<Vec<(Uuid, DokumentTilstand)>>>,
@@ -68,6 +71,13 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
         sikri_id: Option<i64>,
         saksnummer: Option<&str>,
     ) -> Result<(), anyhow::Error> {
+        {
+            let mut feil = self.feil_ved_neste_oppdater_sak_tilstand.lock().unwrap();
+            if *feil {
+                *feil = false;
+                anyhow::bail!("connection reset by peer");
+            }
+        }
         if let Some(sak) = self.sak_med_barn.lock().unwrap().get_mut(&sak_id.0) {
             sak.tilstand = tilstand;
             sak.sikri_id = sikri_id;
@@ -264,6 +274,7 @@ impl EntityTilstandRepository for FakeEntityTilstandRepository {
 
 #[derive(Clone, Default)]
 struct FakeArkivGateway {
+    opprett_sak_calls: Arc<Mutex<Vec<Uuid>>>,
     opprett_journalpost_calls: Arc<Mutex<Vec<Uuid>>>,
     legg_til_vedlegg_calls: Arc<Mutex<Vec<Uuid>>>,
     journalfoer_calls: Arc<Mutex<Vec<i32>>>,
@@ -274,11 +285,15 @@ struct FakeArkivGateway {
 impl ArkivGateway for FakeArkivGateway {
     async fn opprett_sak(
         &self,
-        _command: &ApplicationCommandEnvelope<ApplicationCommand>,
+        command: &ApplicationCommandEnvelope<ApplicationCommand>,
     ) -> Result<String, anyhow::Error> {
         if let Some(error) = &self.opprett_sak_error {
             anyhow::bail!(error.clone());
         }
+        self.opprett_sak_calls
+            .lock()
+            .unwrap()
+            .push(command.command_id);
         Ok("2026/1".to_string())
     }
 
@@ -1628,4 +1643,180 @@ async fn statisk_html_template_rendres_uten_saksnummer_og_utsetter_journalpost()
     );
     assert_eq!(rendered_file.metadata.source_document_id, Some(dokument_id));
     assert_eq!(rendered_file.metadata.source_command_id, Some(command_id));
+}
+
+// ---------------------------------------------------------------------------
+// Regresjonstester for kjente execution-defekter.
+//
+// Disse testene beskriver ønsket oppførsel og feiler i dag. De er `#[ignore]`d
+// slik at CI er grønn, og kjøres med `cargo test -- --ignored`. Fjern
+// `#[ignore]`-linja som del av fixen — det er definition of done.
+// ---------------------------------------------------------------------------
+
+fn opprett_sak_envelope(
+    command_id: Uuid,
+    sak_client_reference: Uuid,
+) -> ApplicationCommandEnvelope<ApplicationCommand> {
+    use lib_schemas::skuffen::command::sak::{Arkivdel, OpprettSak};
+    use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
+
+    crate::command::test_support::map_wire_envelope(WireCommandEnvelope {
+        command_id,
+        correlation_id: Some(Uuid::new_v4()),
+        payload: WireCommand::OpprettSak(OpprettSak {
+            client_reference: sak_client_reference,
+            sakstittel: Sakstittel::try_from("Tilsynssak".to_string()).unwrap(),
+            ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
+            arkivdel: Arkivdel::Tilsynsdivisjonene,
+            saksbehandler_id: "Z12345".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            tilgjengelighet: Tilgjengelighet::Offentlig,
+        }),
+    })
+}
+
+fn sak_uten_journalposter(sak_id: Uuid, saksnummer: Option<&str>) -> SakMedBarn {
+    SakMedBarn {
+        sak_id: SkuffenSakId::from(sak_id),
+        tilstand: if saksnummer.is_some() {
+            SakTilstand::Opprettet
+        } else {
+            SakTilstand::IkkeRealisert
+        },
+        sikri_id: saksnummer.map(|_| 1),
+        saksnummer: saksnummer.map(ToOwned::to_owned),
+        oensket_saksansvarlig: None,
+        naavaerende_saksansvarlig: None,
+        journalposter: vec![],
+    }
+}
+
+/// `opprett_sak` skriver til arkivet og oppdaterer deretter lokal tilstand i
+/// tre separate, ikke-transaksjonelle steg. Alle mappes til `recoverable`.
+/// Feiler ett av dem, planlegger `planlegg_neste_handling` `OpprettSak` på nytt
+/// fordi `saksnummer` fortsatt er `None` lokalt — og `sikri_client::opprett_sak`
+/// har verken idempotency key eller lookup-before-create. Resultat: to saker i
+/// arkivet for én kommando.
+///
+/// Fix-retning: gjør arkiv-skrivet trygt å reprøve (idempotency key eller
+/// oppslag før opprettelse), eventuelt journal-før intensjonen lokalt før
+/// arkivkallet.
+#[tokio::test]
+#[ignore = "Kjent defekt: DB-feil etter vellykket Sikri-skriv gir duplikat sak i arkivet"]
+async fn db_feil_etter_arkivskriv_skal_ikke_gi_duplikat_sak() {
+    // Arrange
+    let sak_id = Uuid::new_v4();
+    let sak_client_reference = Uuid::new_v4();
+    let command_id = Uuid::new_v4();
+
+    let entity_repo = FakeEntityTilstandRepository::default();
+    entity_repo
+        .sak_med_barn
+        .lock()
+        .unwrap()
+        .insert(sak_id, sak_uten_journalposter(sak_id, None));
+    *entity_repo
+        .feil_ved_neste_oppdater_sak_tilstand
+        .lock()
+        .unwrap() = true;
+
+    let id_mapping = FakeIdMappingRepository::default();
+    id_mapping
+        .sak_mapping
+        .lock()
+        .unwrap()
+        .insert(sak_client_reference, sak_id);
+
+    let arkiv_gateway = FakeArkivGateway::default();
+    let service = build_executor(
+        entity_repo,
+        arkiv_gateway.clone(),
+        id_mapping,
+        FakeWakeup::default(),
+    );
+
+    // Act: forsøk 1 treffer arkivet, men lokal skriving feiler.
+    let outcome = service
+        .handle(opprett_sak_envelope(command_id, sak_client_reference), 1)
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, ExecutionOutcome::Retrying { .. }),
+        "DB-feil etter arkivskriv klassifiseres som recoverable, fikk {outcome:?}"
+    );
+
+    // Act: worker reprøver samme kommando.
+    let outcome = service
+        .handle(opprett_sak_envelope(command_id, sak_client_reference), 2)
+        .await
+        .unwrap();
+    assert_eq!(outcome, ExecutionOutcome::Ok);
+
+    // Assert
+    let kall = arkiv_gateway.opprett_sak_calls.lock().unwrap();
+    assert_eq!(
+        kall.len(),
+        1,
+        "opprett_sak skal treffe arkivet én gang per kommando, traff {} ganger",
+        kall.len()
+    );
+}
+
+/// `wakeup_after_operation` kalles kun fra `CommandStateDecision::Ready`-grenen.
+/// Dør prosessen etter at `OpprettSak` har skrevet saksnummer, men før wakeup
+/// rakk å kjøre, settes kommandoen tilbake til `klar` av
+/// `reset_kjorer_til_klar`. Ved reprøve svarer planleggeren `Done`, ingen
+/// operasjon utføres, og ingen wakeup trigges. Kommandoer som står i
+/// `blokkert_venter` på `saksnummer_mangler` for denne saken blir aldri vekket,
+/// og det finnes ingen periodisk rescan som redder dem.
+///
+/// Fix-retning: trigg wakeup også på `Done`-stien, eller legg til en periodisk
+/// reevaluering av `blokkert_venter`.
+#[tokio::test]
+#[ignore = "Kjent defekt: Done-stien trigger ingen wakeup, blokkerte kommandoer forblir blokkert"]
+async fn done_uten_operasjon_skal_likevel_vekke_blokkerte_kommandoer() {
+    // Arrange: saksnummer er allerede skrevet lokalt, så planleggeren svarer Done.
+    let sak_id = Uuid::new_v4();
+    let sak_client_reference = Uuid::new_v4();
+
+    let entity_repo = FakeEntityTilstandRepository::default();
+    entity_repo
+        .sak_med_barn
+        .lock()
+        .unwrap()
+        .insert(sak_id, sak_uten_journalposter(sak_id, Some("2026/1")));
+
+    let id_mapping = FakeIdMappingRepository::default();
+    id_mapping
+        .sak_mapping
+        .lock()
+        .unwrap()
+        .insert(sak_client_reference, sak_id);
+
+    let wakeup = FakeWakeup::default();
+    let service = build_executor(
+        entity_repo,
+        FakeArkivGateway::default(),
+        id_mapping,
+        wakeup.clone(),
+    );
+
+    // Act
+    let outcome = service
+        .handle(
+            opprett_sak_envelope(Uuid::new_v4(), sak_client_reference),
+            2,
+        )
+        .await
+        .unwrap();
+
+    // Assert
+    assert_eq!(outcome, ExecutionOutcome::Ok);
+    let sak_endret = wakeup.sak_endret.lock().unwrap();
+    assert_eq!(
+        sak_endret.as_slice(),
+        &[sak_id],
+        "Done skal vekke ventende kommandoer for saken, men trigget {} wakeups",
+        sak_endret.len()
+    );
 }

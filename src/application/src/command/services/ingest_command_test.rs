@@ -901,3 +901,77 @@ async fn test_ingest_command_returns_ids_preserving_order_with_idempotent_skip()
     assert_eq!(dispatched.len(), 2);
     assert!(dispatched.iter().all(|e| e.command_id != command_id_2));
 }
+
+// ---------------------------------------------------------------------------
+// Regresjonstest for kjent ingest-defekt.
+//
+// Beskriver ønsket oppførsel og feiler i dag. `#[ignore]`d slik at CI er grønn;
+// kjøres med `cargo test -- --ignored`. Fjern `#[ignore]`-linja som del av
+// fixen — det er definition of done.
+// ---------------------------------------------------------------------------
+
+/// `process_command` skriver `id_mapping` (som bærer `command_id`) før den
+/// dispatcher til NATS. Feiler dispatch, får klienten `ArkiveringKvittering::Error`
+/// for hele batchen — men mappingen ligger igjen. Når klienten reprøver samme
+/// batch med samme `command_id`, svarer `has_processed_command` `true`,
+/// kommandoen hoppes over som "allerede behandlet", og klienten får
+/// `ArkiveringKvittering::Ok` med command_id i kvitteringen.
+///
+/// Kommandoen ble aldri dispatchet, blir aldri validert, aldri eksekvert, og
+/// det publiseres aldri en status-event. Den er tapt, med positiv kvittering.
+///
+/// Fix-retning: skriv idempotency-markøren først etter vellykket dispatch, eller
+/// gjør ingest atomisk (outbox) slik at markør og dispatch ikke kan divergere.
+#[tokio::test]
+#[ignore = "Kjent defekt: dispatch-feil + klient-retry gir OK-kvittering for kommando som aldri ble dispatchet"]
+async fn retry_etter_dispatch_feil_skal_ikke_kvittere_ok_for_udispatchet_kommando() {
+    // Arrange
+    let fake_mapping = FakeIdMappingRepository::default();
+    let command_id = Uuid::new_v4();
+    let client_reference = Uuid::new_v4();
+
+    let lag_sequence = || {
+        CommandSequence::try_from(vec![WireCommandEnvelope {
+            command_id,
+            correlation_id: Some(Uuid::new_v4()),
+            payload: WireCommand::OpprettSak(OpprettSak {
+                client_reference,
+                sakstittel: Sakstittel::try_from("Tilsynssak".to_string()).unwrap(),
+                ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
+                arkivdel: Arkivdel::Tilsynsdivisjonene,
+                saksbehandler_id: "Z99999".to_string(),
+                saksbehandler_enhet: "42".to_string(),
+                tilgjengelighet: Tilgjengelighet::Offentlig,
+            }),
+        }])
+        .unwrap()
+    };
+
+    // Act: forsøk 1 — NATS nede, klienten får feil.
+    let failing_dispatcher = FakeCommandDispatcher {
+        should_fail: true,
+        ..Default::default()
+    };
+    let service = build_service(fake_mapping.clone(), failing_dispatcher);
+    assert!(service.handle(lag_sequence()).await.is_err());
+
+    // Act: forsøk 2 — NATS oppe igjen, klienten reprøver samme batch.
+    let working_dispatcher = FakeCommandDispatcher::default();
+    let service = build_service(fake_mapping, working_dispatcher.clone());
+    let command_ids = service
+        .handle(lag_sequence())
+        .await
+        .expect("retry rapporteres som akseptert");
+
+    // Assert: kvitteringen lover at kommandoen er akseptert...
+    assert_eq!(command_ids, vec![command_id]);
+
+    // ...da må den også faktisk være dispatchet.
+    let dispatched = working_dispatcher.dispatched.lock().unwrap();
+    assert_eq!(
+        dispatched.len(),
+        1,
+        "kommando kvittert som akseptert må være dispatchet, men ble dispatchet {} ganger",
+        dispatched.len()
+    );
+}
