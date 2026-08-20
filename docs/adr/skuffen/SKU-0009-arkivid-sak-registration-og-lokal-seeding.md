@@ -8,7 +8,7 @@ Crates: skuffen, domain, application, infrastructure, sikri_client, skuffen-inte
 
 ## Related
 
-References: SKU-0007, SKU-0001, SKU-0011
+References: SKU-0016, SKU-0011
 
 ## Context
 

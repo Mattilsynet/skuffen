@@ -1,977 +1,394 @@
-use crate::command::ports::command_dispatcher_port::CommandDispatcher;
-use crate::command::ports::id_mapping_port::{IdMappingRepository, MappingEntityType};
-use crate::command::ports::status_publisher_port::CommandStatusPublisher;
-use crate::command::services::ingest_command::IngestCommandService;
-use crate::command::{
-    Command as ApplicationCommand, CommandEnvelope as ApplicationCommandEnvelope,
-};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use async_trait::async_trait;
-use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
-use domain::eksekvering::typer::CommandLifecycleEvent;
+use domain::eksekvering::operasjon::EntitetType;
+use domain::eksekvering::typer::{CommandEvent, CommandStatus, Operasjonstatus};
 use lib_schemas::skuffen::command::commands::{
     Command as WireCommand, CommandEnvelope as WireCommandEnvelope, CommandSequence,
 };
-use lib_schemas::skuffen::command::journalpost::{
-    JournalpostCommon, Korrespondansepart, OpprettInngåendeJournalpost,
-    OpprettInterntNotatJournalpost, OpprettUtgåendeJournalpost, Parttype,
-};
 use lib_schemas::skuffen::command::sak::{Arkivdel, OpprettSak};
-use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
-use lib_schemas::skuffen::tilgang::Tilgjengelighet;
-
-use lib_schemas::skuffen::query::queries::SakKey;
 use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 use uuid::Uuid;
 
-// --- Fakes ---
+use crate::command::ports::command_dispatcher_port::CommandDispatcher;
+use crate::command::ports::command_port::{CommandRepository, Mottaksresultat};
+use crate::command::ports::entitet_port::{Entitet, EntitetRepository, NyEntitet};
+use crate::command::ports::status_publisher_port::StatusPublisher;
+use crate::command::services::ingest_command::IngestCommandService;
+use crate::command::{Command, CommandEnvelope};
 
-type IdMappingRecord = (Uuid, Uuid, Uuid, String, Option<String>);
+// ---------------------------------------------------------------------------
+// Fakes
+// ---------------------------------------------------------------------------
 
+/// Mottaksjournalen. Idempotency-nøkkelen er dispatch-milepælen, ikke radens
+/// eksistens (SKU-0016 R11), så fake-en må skille de to eksplisitt.
 #[derive(Clone, Default)]
-struct FakeIdMappingRepository {
-    // (command_id, client_reference, skuffen_id, entity_type, arkiv_id)
-    pub mappings: Arc<Mutex<Vec<IdMappingRecord>>>,
-    pub should_fail: bool,
+struct FakeCommandRepository {
+    mottatt: Arc<Mutex<HashMap<Uuid, bool>>>,
 }
 
 #[async_trait]
-impl IdMappingRepository for FakeIdMappingRepository {
-    async fn has_processed_command(&self, command_id: Uuid) -> Result<bool, anyhow::Error> {
-        let store = self.mappings.lock().unwrap();
-        Ok(store.iter().any(|(cid, _, _, _, _)| *cid == command_id))
-    }
-
-    async fn register_mapping(
+impl CommandRepository for FakeCommandRepository {
+    async fn registrer_mottatt(
         &self,
-        command_id: Uuid,
-        client_reference: Uuid,
-        skuffen_id: SkuffenSakId,
-        entity_type: MappingEntityType,
-        arkiv_id: Option<String>,
-    ) -> Result<(), anyhow::Error> {
-        if self.should_fail {
-            return Err(anyhow::anyhow!("DB Error"));
-        }
-        let entity_type = entity_type.as_code();
-        let mut store = self.mappings.lock().unwrap();
-        if let Some((_, _, existing_skuffen_id, _, _)) = store
-            .iter()
-            .find(|(_, existing_client_ref, _, _, _)| *existing_client_ref == client_reference)
-        {
-            if *existing_skuffen_id != Uuid::from(skuffen_id) {
-                return Err(anyhow::anyhow!(
-                    "client_reference is already mapped to a different skuffen_id"
-                ));
+        envelope: &CommandEnvelope<Command>,
+    ) -> Result<Mottaksresultat, anyhow::Error> {
+        let mut mottatt = self.mottatt.lock().unwrap();
+        match mottatt.get(&envelope.command_id) {
+            Some(true) => Ok(Mottaksresultat::AlleredeDispatchet),
+            Some(false) => Ok(Mottaksresultat::MottattIkkeDispatchet),
+            None => {
+                mottatt.insert(envelope.command_id, false);
+                Ok(Mottaksresultat::Ny)
             }
-            return Ok(());
         }
-        store.push((
-            command_id,
-            client_reference,
-            Uuid::from(skuffen_id),
-            entity_type.to_string(),
-            arkiv_id,
-        ));
-        Ok(())
     }
 
-    async fn register_document_mapping(
+    async fn marker_dispatchet(&self, command_id: Uuid) -> Result<(), anyhow::Error> {
+        self.mottatt.lock().unwrap().insert(command_id, true);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+struct FakeEntitetRepository {
+    /// client_reference -> (skuffen_id, type)
+    entiteter: Arc<Mutex<HashMap<Uuid, (Uuid, EntitetType)>>>,
+    arkiv: Arc<Mutex<HashMap<String, Uuid>>>,
+}
+
+#[async_trait]
+impl EntitetRepository for FakeEntitetRepository {
+    async fn registrer(&self, entitet: NyEntitet) -> Result<Uuid, anyhow::Error> {
+        let Some(client_reference) = entitet.client_reference else {
+            return Ok(entitet.skuffen_id);
+        };
+        let mut entiteter = self.entiteter.lock().unwrap();
+        // Eksisterende rad vinner, slik at en replay gjenbruker id-ene.
+        let effektiv = entiteter
+            .entry(client_reference)
+            .or_insert((entitet.skuffen_id, entitet.entitet_type));
+        Ok(effektiv.0)
+    }
+
+    async fn hent_for_client_reference(
         &self,
-        command_id: Uuid,
         client_reference: Uuid,
-        skuffen_id: SkuffenDokumentId,
-        arkiv_id: Option<String>,
-    ) -> Result<(), anyhow::Error> {
-        if self.should_fail {
-            return Err(anyhow::anyhow!("DB Error"));
-        }
-        let mut store = self.mappings.lock().unwrap();
-        if let Some((_, _, existing_skuffen_id, _, _)) = store
-            .iter()
-            .find(|(_, existing_client_ref, _, _, _)| *existing_client_ref == client_reference)
-        {
-            if *existing_skuffen_id != Uuid::from(skuffen_id) {
-                return Err(anyhow::anyhow!(
-                    "client_reference is already mapped to a different skuffen_id"
-                ));
-            }
-            return Ok(());
-        }
-        store.push((
-            command_id,
-            client_reference,
-            Uuid::from(skuffen_id),
-            "dokument".to_string(),
-            arkiv_id,
-        ));
-        Ok(())
+    ) -> Result<Option<Entitet>, anyhow::Error> {
+        Ok(self.entiteter.lock().unwrap().get(&client_reference).map(
+            |(skuffen_id, entitet_type)| Entitet {
+                skuffen_id: *skuffen_id,
+                entitet_type: *entitet_type,
+                client_reference: Some(client_reference),
+                arkiv_id: None,
+            },
+        ))
     }
 
-    async fn oppdater_arkiv_id_for_client_reference(
+    async fn hent_for_arkiv_id(
         &self,
-        _client_reference: Uuid,
-        _arkiv_id: String,
-    ) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn hent_arkiv_id_fra_mapping(
-        &self,
-        _skuffen_id: SkuffenSakId,
-    ) -> Result<Option<String>, anyhow::Error> {
-        Ok(None)
-    }
-
-    async fn hent_sak_id_fra_mapping(
-        &self,
-        _client_reference: Uuid,
-    ) -> Result<Option<SkuffenSakId>, anyhow::Error> {
-        Ok(None)
-    }
-
-    async fn hent_journalpost_id_fra_mapping(
-        &self,
-        _client_reference: Uuid,
-    ) -> Result<Option<SkuffenJournalpostId>, anyhow::Error> {
-        Ok(None)
-    }
-
-    async fn hent_dokument_id_fra_mapping(
-        &self,
-        _client_reference: Uuid,
-    ) -> Result<Option<SkuffenDokumentId>, anyhow::Error> {
-        Ok(None)
-    }
-
-    async fn hent_sak_id_fra_arkiv_id_i_mapping(
-        &self,
+        _entitet_type: EntitetType,
         _arkiv_id: &str,
-    ) -> Result<Option<SkuffenSakId>, anyhow::Error> {
+    ) -> Result<Option<Entitet>, anyhow::Error> {
         Ok(None)
     }
 
-    async fn hent_eller_opprett_skuffen_id_for_arkiv_id(
+    async fn hent_eller_opprett_for_arkiv_id(
         &self,
-        _entity_type: MappingEntityType,
-        _arkiv_id: &str,
-    ) -> Result<SkuffenSakId, anyhow::Error> {
-        Ok(SkuffenSakId::from(Uuid::new_v4()))
+        _entitet_type: EntitetType,
+        arkiv_id: &str,
+    ) -> Result<Uuid, anyhow::Error> {
+        let mut arkiv = self.arkiv.lock().unwrap();
+        Ok(*arkiv
+            .entry(arkiv_id.to_string())
+            .or_insert_with(Uuid::now_v7))
     }
 
-    async fn delete_arkiv_mapping(
-        &self,
-        _entity_type: MappingEntityType,
-        _arkiv_id: &str,
-    ) -> Result<(), anyhow::Error> {
-        Ok(())
+    async fn hent_arkiv_id(&self, _skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
+        Ok(None)
     }
 }
 
 #[derive(Clone, Default)]
 struct FakeCommandDispatcher {
-    pub dispatched: Arc<Mutex<Vec<ApplicationCommandEnvelope<ApplicationCommand>>>>,
-    pub should_fail: bool,
+    should_fail: bool,
+    dispatched: Arc<Mutex<Vec<Uuid>>>,
 }
 
 #[async_trait]
 impl CommandDispatcher for FakeCommandDispatcher {
-    async fn dispatch(
-        &self,
-        command: &ApplicationCommandEnvelope<ApplicationCommand>,
-    ) -> Result<(), anyhow::Error> {
+    async fn dispatch(&self, envelope: &CommandEnvelope<Command>) -> Result<(), anyhow::Error> {
         if self.should_fail {
-            return Err(anyhow::anyhow!("NATS Error"));
+            return Err(anyhow::anyhow!("nats nede"));
         }
-        let mut store = self.dispatched.lock().unwrap();
-        store.push(command.clone());
+        self.dispatched.lock().unwrap().push(envelope.command_id);
         Ok(())
     }
 }
 
 #[derive(Clone, Default)]
-struct FakeCommandStatusPublisher {
-    pub events: Arc<Mutex<Vec<CommandLifecycleEvent>>>,
+struct FakeStatusPublisher {
+    command_status: Arc<Mutex<Vec<CommandStatus>>>,
 }
 
 #[async_trait]
-impl CommandStatusPublisher for FakeCommandStatusPublisher {
-    async fn publish_status(&self, event: CommandLifecycleEvent) -> Result<(), anyhow::Error> {
-        self.events.lock().unwrap().push(event);
+impl StatusPublisher for FakeStatusPublisher {
+    async fn publiser_command_status(&self, status: CommandStatus) -> Result<(), anyhow::Error> {
+        self.command_status.lock().unwrap().push(status);
+        Ok(())
+    }
+
+    async fn publiser_operasjonstatus(
+        &self,
+        _status: Operasjonstatus,
+    ) -> Result<(), anyhow::Error> {
         Ok(())
     }
 }
 
 fn build_service(
-    fake_mapping: FakeIdMappingRepository,
-    fake_dispatcher: FakeCommandDispatcher,
+    command: FakeCommandRepository,
+    entitet: FakeEntitetRepository,
+    dispatcher: FakeCommandDispatcher,
+    publisher: FakeStatusPublisher,
 ) -> IngestCommandService {
     IngestCommandService::new(
-        Box::new(fake_mapping),
-        Box::new(fake_dispatcher),
-        Box::new(FakeCommandStatusPublisher::default()),
+        Box::new(command),
+        Box::new(entitet),
+        Box::new(dispatcher),
+        Box::new(publisher),
     )
 }
 
-// --- Tests ---
-
-#[tokio::test]
-async fn test_ingest_command_opprett_sak_success() {
-    // Arrange
-    let fake_mapping = FakeIdMappingRepository::default();
-    let fake_dispatcher = FakeCommandDispatcher::default();
-
-    let command_id = Uuid::new_v4();
-    let command = WireCommand::OpprettSak(OpprettSak {
-        client_reference: Uuid::new_v4(),
-        sakstittel: Sakstittel::try_from("Test Sak".to_string()).unwrap(),
-        ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
-        arkivdel: Arkivdel::Tilsynsdivisjonene,
-        saksbehandler_id: "Z99999".to_string(),
-        saksbehandler_enhet: "42".to_string(),
-        tilgjengelighet: Tilgjengelighet::Offentlig,
-    });
-    let envelope = WireCommandEnvelope {
+fn opprett_sak_sequence(command_id: Uuid, client_reference: Uuid) -> CommandSequence {
+    CommandSequence::try_from(vec![WireCommandEnvelope {
         command_id,
         correlation_id: Some(Uuid::new_v4()),
-        payload: command,
-    };
-    let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
-
-    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
-
-    // Act
-    let returned_ids = service.handle(sequence).await.unwrap();
-
-    // Assert
-    assert_eq!(returned_ids, vec![command_id]);
-
-    // Verify Mapping - Should be present for OpprettSak now
-    let mappings = fake_mapping.mappings.lock().unwrap();
-    assert_eq!(
-        mappings.len(),
-        1,
-        "OpprettSak SHOULD register mapping again"
-    );
-    assert_eq!(mappings[0].0, command_id);
-    assert_eq!(mappings[0].3, "sak");
-
-    // Verify Dispatch
-    let dispatched = fake_dispatcher.dispatched.lock().unwrap();
-    assert_eq!(dispatched.len(), 1);
-    assert_eq!(dispatched[0].command_id, command_id);
-}
-
-#[tokio::test]
-async fn test_ingest_command_journalpost_success() {
-    // Arrange
-    let fake_mapping = FakeIdMappingRepository::default();
-    let fake_dispatcher = FakeCommandDispatcher::default();
-
-    let command_id = Uuid::new_v4();
-    let client_reference = Uuid::new_v4();
-
-    let command = WireCommand::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
-        felles: JournalpostCommon {
+        payload: WireCommand::OpprettSak(OpprettSak {
             client_reference,
-            tittel: "Inngående brev".to_string(),
-            dokument_dato: "2023-01-01".to_string(),
-            saksbehandler: "Z99999".to_string(),
+            sakstittel: Sakstittel::try_from("Tilsynssak".to_string()).unwrap(),
+            ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
+            arkivdel: Arkivdel::Tilsynsdivisjonene,
+            saksbehandler_id: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
             tilgjengelighet: Tilgjengelighet::Offentlig,
-            dokumenter: vec![],
-            sak_key: SakKey::ClientReference(client_reference),
-            kildesystem: None,
-        },
-        avsender: Korrespondansepart {
-            navn: "Avsender AS".to_string(),
-            parttype: Parttype::Virksomhet,
-        },
-    });
-
-    let envelope = WireCommandEnvelope {
-        command_id,
-        correlation_id: Some(Uuid::new_v4()),
-        payload: command,
-    };
-    let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
-
-    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
-
-    // Act
-    let returned_ids = service.handle(sequence).await.unwrap();
-
-    // Assert
-    assert_eq!(returned_ids, vec![command_id]);
-
-    // Verify Mapping
-    let mappings = fake_mapping.mappings.lock().unwrap();
-    assert_eq!(mappings.len(), 1);
-    assert_eq!(mappings[0].0, command_id);
-    assert_eq!(mappings[0].3, "journalpost");
-
-    // Verify Dispatch
-    let dispatched = fake_dispatcher.dispatched.lock().unwrap();
-    assert_eq!(dispatched.len(), 1);
-    assert_eq!(dispatched[0].command_id, command_id);
-}
-
-#[tokio::test]
-async fn test_ingest_command_registers_document_mappings() {
-    // Arrange
-    let fake_mapping = FakeIdMappingRepository::default();
-    let fake_dispatcher = FakeCommandDispatcher::default();
-
-    let command_id = Uuid::new_v4();
-    let client_reference = Uuid::new_v4();
-
-    let documents = vec![
-        Dokument {
-            client_reference: Uuid::new_v4(),
-            tittel: "Vedlegg 1".to_string(),
-            form: Dokumentform::Bytes {
-                filtype: "PDF".to_string(),
-                dokument_referanse: Uuid::new_v4(),
-            },
-        },
-        Dokument {
-            client_reference: Uuid::new_v4(),
-            tittel: "Vedlegg 2".to_string(),
-            form: Dokumentform::Bytes {
-                filtype: "PDF".to_string(),
-                dokument_referanse: Uuid::new_v4(),
-            },
-        },
-    ];
-
-    let command = WireCommand::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
-        felles: JournalpostCommon {
-            client_reference,
-            tittel: "Inngående brev".to_string(),
-            dokument_dato: "2023-01-01".to_string(),
-            saksbehandler: "Z99999".to_string(),
-            saksbehandler_enhet: "42".to_string(),
-            tilgjengelighet: Tilgjengelighet::Offentlig,
-            dokumenter: documents.clone(),
-            sak_key: SakKey::ClientReference(client_reference),
-            kildesystem: None,
-        },
-        avsender: Korrespondansepart {
-            navn: "Avsender AS".to_string(),
-            parttype: Parttype::Virksomhet,
-        },
-    });
-
-    let envelope = WireCommandEnvelope {
-        command_id,
-        correlation_id: Some(Uuid::new_v4()),
-        payload: command,
-    };
-    let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
-
-    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
-
-    // Act
-    let result = service.handle(sequence).await;
-
-    // Assert
-    assert!(result.is_ok());
-
-    let mappings = fake_mapping.mappings.lock().unwrap();
-    assert_eq!(mappings.len(), 1 + documents.len());
-    assert!(mappings.iter().all(|(cid, _, _, _, _)| *cid == command_id));
-
-    let journalpost_count = mappings
-        .iter()
-        .filter(|(_, _, _, entity_type, _)| entity_type == "journalpost")
-        .count();
-    let dokument_count = mappings
-        .iter()
-        .filter(|(_, _, _, entity_type, _)| entity_type == "dokument")
-        .count();
-    assert_eq!(journalpost_count, 1);
-    assert_eq!(dokument_count, documents.len());
-
-    let skuffen_ids: HashSet<Uuid> = mappings.iter().map(|(_, _, sid, _, _)| *sid).collect();
-    assert_eq!(skuffen_ids.len(), mappings.len());
-
-    let client_refs: HashSet<Uuid> = mappings.iter().map(|(_, cr, _, _, _)| *cr).collect();
-    assert!(client_refs.contains(&client_reference));
-    for doc in documents {
-        assert!(client_refs.contains(&doc.client_reference));
-    }
-}
-
-#[tokio::test]
-async fn test_ingest_command_idempotency_duplicate_command() {
-    // Arrange
-    let fake_mapping = FakeIdMappingRepository::default();
-    let fake_dispatcher = FakeCommandDispatcher::default();
-
-    let command_id = Uuid::new_v4();
-    let client_reference = Uuid::new_v4();
-
-    let command = WireCommand::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
-        felles: JournalpostCommon {
-            client_reference,
-            tittel: "Inngående brev".to_string(),
-            dokument_dato: "2023-01-01".to_string(),
-            saksbehandler: "Z99999".to_string(),
-            saksbehandler_enhet: "42".to_string(),
-            tilgjengelighet: Tilgjengelighet::Offentlig,
-            dokumenter: vec![],
-            sak_key: SakKey::ClientReference(client_reference),
-            kildesystem: None,
-        },
-        avsender: Korrespondansepart {
-            navn: "Avsender AS".to_string(),
-            parttype: Parttype::Virksomhet,
-        },
-    });
-
-    let envelope = WireCommandEnvelope {
-        command_id,
-        correlation_id: Some(Uuid::new_v4()),
-        payload: command,
-    };
-    let sequence1 = CommandSequence::try_from(vec![envelope.clone()]).unwrap();
-    let sequence2 = CommandSequence::try_from(vec![envelope.clone()]).unwrap();
-
-    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
-
-    // Act - First Call
-    let result1 = service.handle(sequence1).await;
-    assert!(result1.is_ok());
-
-    // Act - Second Call (Duplicate)
-    let result2 = service.handle(sequence2).await;
-    assert!(result2.is_ok());
-
-    // Assert
-    let mappings = fake_mapping.mappings.lock().unwrap();
-    assert_eq!(mappings.len(), 1, "Should only register mapping once");
-
-    let dispatched = fake_dispatcher.dispatched.lock().unwrap();
-    assert_eq!(
-        dispatched.len(),
-        1,
-        "Should only dispatch once if idempotent"
-    );
-}
-
-#[tokio::test]
-async fn test_ingest_command_allows_multiple_mappings_per_command_id() {
-    // Arrange
-    let fake_mapping = FakeIdMappingRepository::default();
-    let fake_dispatcher = FakeCommandDispatcher::default();
-
-    let command_id = Uuid::new_v4();
-    let client_reference = Uuid::new_v4();
-
-    let documents = vec![
-        Dokument {
-            client_reference: Uuid::new_v4(),
-            tittel: "Vedlegg 1".to_string(),
-            form: Dokumentform::Bytes {
-                filtype: "PDF".to_string(),
-                dokument_referanse: Uuid::new_v4(),
-            },
-        },
-        Dokument {
-            client_reference: Uuid::new_v4(),
-            tittel: "Vedlegg 2".to_string(),
-            form: Dokumentform::Bytes {
-                filtype: "PDF".to_string(),
-                dokument_referanse: Uuid::new_v4(),
-            },
-        },
-    ];
-
-    let command = WireCommand::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
-        felles: JournalpostCommon {
-            client_reference,
-            tittel: "Inngående brev".to_string(),
-            dokument_dato: "2023-01-01".to_string(),
-            saksbehandler: "Z99999".to_string(),
-            saksbehandler_enhet: "42".to_string(),
-            tilgjengelighet: Tilgjengelighet::Offentlig,
-            dokumenter: documents.clone(),
-            sak_key: SakKey::ClientReference(client_reference),
-            kildesystem: None,
-        },
-        avsender: Korrespondansepart {
-            navn: "Avsender AS".to_string(),
-            parttype: Parttype::Virksomhet,
-        },
-    });
-
-    let envelope = WireCommandEnvelope {
-        command_id,
-        correlation_id: Some(Uuid::new_v4()),
-        payload: command,
-    };
-    let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
-
-    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
-
-    // Act
-    let result = service.handle(sequence).await;
-
-    // Assert
-    assert!(result.is_ok());
-
-    let mappings = fake_mapping.mappings.lock().unwrap();
-    let command_mappings = mappings
-        .iter()
-        .filter(|(cid, _, _, _, _)| *cid == command_id)
-        .count();
-    assert_eq!(command_mappings, 1 + documents.len());
-}
-
-#[tokio::test]
-async fn test_ingest_command_mapping_failure() {
-    // Arrange
-    let fake_mapping = FakeIdMappingRepository {
-        should_fail: true,
-        ..Default::default()
-    };
-
-    let fake_dispatcher = FakeCommandDispatcher::default();
-
-    let command_id = Uuid::new_v4();
-    let client_reference = Uuid::new_v4();
-
-    let command = WireCommand::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
-        felles: JournalpostCommon {
-            client_reference,
-            tittel: "Inngående brev".to_string(),
-            dokument_dato: "2023-01-01".to_string(),
-            saksbehandler: "Z99999".to_string(),
-            saksbehandler_enhet: "42".to_string(),
-            tilgjengelighet: Tilgjengelighet::Offentlig,
-            dokumenter: vec![],
-            sak_key: SakKey::ClientReference(client_reference),
-            kildesystem: None,
-        },
-        avsender: Korrespondansepart {
-            navn: "Avsender AS".to_string(),
-            parttype: Parttype::Virksomhet,
-        },
-    });
-
-    let envelope = WireCommandEnvelope {
-        command_id,
-        correlation_id: Some(Uuid::new_v4()),
-        payload: command,
-    };
-    let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
-
-    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
-
-    // Act
-    let result = service.handle(sequence).await;
-
-    // Assert
-    assert!(result.is_err());
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "Failed to register id_mapping"
-    );
-
-    // Verify NO dispatch
-    let dispatched = fake_dispatcher.dispatched.lock().unwrap();
-    assert_eq!(dispatched.len(), 0);
-}
-
-#[tokio::test]
-async fn test_ingest_command_dispatch_failure() {
-    // Arrange
-    let fake_mapping = FakeIdMappingRepository::default();
-    let fake_dispatcher = FakeCommandDispatcher {
-        should_fail: true,
-        ..Default::default()
-    };
-
-    let command_id = Uuid::new_v4();
-    let client_reference = Uuid::new_v4();
-
-    let command = WireCommand::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
-        felles: JournalpostCommon {
-            client_reference,
-            tittel: "Inngående brev".to_string(),
-            dokument_dato: "2023-01-01".to_string(),
-            saksbehandler: "Z99999".to_string(),
-            saksbehandler_enhet: "42".to_string(),
-            tilgjengelighet: Tilgjengelighet::Offentlig,
-            dokumenter: vec![],
-            sak_key: SakKey::ClientReference(client_reference),
-            kildesystem: None,
-        },
-        avsender: Korrespondansepart {
-            navn: "Avsender AS".to_string(),
-            parttype: Parttype::Virksomhet,
-        },
-    });
-
-    let envelope = WireCommandEnvelope {
-        command_id,
-        correlation_id: Some(Uuid::new_v4()),
-        payload: command,
-    };
-    let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
-
-    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
-
-    // Act
-    let result = service.handle(sequence).await;
-
-    // Assert
-    assert!(result.is_err());
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "Failed to dispatch command"
-    );
-
-    // But mapping should have happened
-    let mappings = fake_mapping.mappings.lock().unwrap();
-    assert_eq!(mappings.len(), 1);
-}
-
-#[tokio::test]
-async fn test_ingest_command_idempotent_duplicate_command_id() {
-    // Arrange
-    let fake_mapping = FakeIdMappingRepository::default();
-    let fake_dispatcher = FakeCommandDispatcher::default();
-
-    let command_id = Uuid::new_v4();
-    let client_reference = Uuid::new_v4();
-
-    let command = WireCommand::OpprettSak(OpprettSak {
-        client_reference,
-        sakstittel: Sakstittel::try_from("Test Sak".to_string()).unwrap(),
-        ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
-        arkivdel: Arkivdel::Tilsynsdivisjonene,
-        saksbehandler_id: "Z99999".to_string(),
-        saksbehandler_enhet: "42".to_string(),
-        tilgjengelighet: Tilgjengelighet::Offentlig,
-    });
-    let envelope = WireCommandEnvelope {
-        command_id,
-        correlation_id: Some(Uuid::new_v4()),
-        payload: command,
-    };
-    let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
-
-    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
-
-    // Act - first should succeed
-    let result1 = service.handle(sequence).await;
-    assert!(result1.is_ok());
-
-    let command2 = WireCommand::OpprettSak(OpprettSak {
-        client_reference,
-        sakstittel: Sakstittel::try_from("Test Sak 2".to_string()).unwrap(),
-        ordningsverdi: Ordningsverdi::new("456".to_string()).unwrap(),
-        arkivdel: Arkivdel::Tilsynsdivisjonene,
-        saksbehandler_id: "Z99999".to_string(),
-        saksbehandler_enhet: "42".to_string(),
-        tilgjengelighet: Tilgjengelighet::Offentlig,
-    });
-
-    let envelope2 = WireCommandEnvelope {
-        command_id,
-        correlation_id: Some(Uuid::new_v4()),
-        payload: command2,
-    };
-    let sequence2 = CommandSequence::try_from(vec![envelope2]).unwrap();
-
-    // Act - should now be idempotent based on command_id
-    let result2 = service.handle(sequence2).await;
-
-    // Assert
-    assert!(result2.is_ok());
-
-    let mappings = fake_mapping.mappings.lock().unwrap();
-    let client_mappings = mappings
-        .iter()
-        .filter(|(_, client_ref, _, _, _)| *client_ref == client_reference)
-        .count();
-    assert_eq!(client_mappings, 1);
-}
-
-#[tokio::test]
-async fn test_ingest_command_utgående_journalpost_success() {
-    // Arrange
-    let fake_mapping = FakeIdMappingRepository::default();
-    let fake_dispatcher = FakeCommandDispatcher::default();
-
-    let command_id = Uuid::new_v4();
-    let client_reference = Uuid::new_v4();
-
-    let command = WireCommand::OpprettUtgåendeJournalpost(OpprettUtgåendeJournalpost {
-        felles: JournalpostCommon {
-            client_reference,
-            tittel: "Utgående brev".to_string(),
-            dokument_dato: "2023-01-02".to_string(),
-            saksbehandler: "Z99999".to_string(),
-            saksbehandler_enhet: "42".to_string(),
-            tilgjengelighet: Tilgjengelighet::Offentlig,
-            dokumenter: vec![],
-            sak_key: SakKey::ClientReference(client_reference),
-            kildesystem: None,
-        },
-        mottakere: vec![Korrespondansepart {
-            navn: "Mottaker AS".to_string(),
-            parttype: Parttype::Virksomhet,
-        }],
-    });
-
-    let envelope = WireCommandEnvelope {
-        command_id,
-        correlation_id: Some(Uuid::new_v4()),
-        payload: command,
-    };
-    let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
-
-    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
-
-    // Act
-    let result = service.handle(sequence).await;
-
-    // Assert
-    assert!(result.is_ok());
-
-    // Verify Mapping
-    let mappings = fake_mapping.mappings.lock().unwrap();
-    assert_eq!(mappings.len(), 1);
-    assert_eq!(mappings[0].0, command_id);
-    assert_eq!(mappings[0].1, client_reference);
-    assert_eq!(mappings[0].3, "journalpost");
-
-    // Verify Dispatch
-    let dispatched = fake_dispatcher.dispatched.lock().unwrap();
-    assert_eq!(dispatched.len(), 1);
-    assert_eq!(dispatched[0].command_id, command_id);
-}
-
-#[tokio::test]
-async fn test_ingest_command_internt_notat_journalpost_success() {
-    // Arrange
-    let fake_mapping = FakeIdMappingRepository::default();
-    let fake_dispatcher = FakeCommandDispatcher::default();
-
-    let command_id = Uuid::new_v4();
-    let client_reference = Uuid::new_v4();
-
-    let command = WireCommand::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
-        felles: JournalpostCommon {
-            client_reference,
-            tittel: "Internt notat".to_string(),
-            dokument_dato: "2023-01-03".to_string(),
-            saksbehandler: "Z99999".to_string(),
-            saksbehandler_enhet: "42".to_string(),
-            tilgjengelighet: Tilgjengelighet::Offentlig,
-            dokumenter: vec![],
-            sak_key: SakKey::ClientReference(client_reference),
-            kildesystem: None,
-        },
-    });
-
-    let envelope = WireCommandEnvelope {
-        command_id,
-        correlation_id: Some(Uuid::new_v4()),
-        payload: command,
-    };
-    let sequence = CommandSequence::try_from(vec![envelope]).unwrap();
-
-    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
-
-    // Act
-    let result = service.handle(sequence).await;
-
-    // Assert
-    assert!(result.is_ok());
-
-    // Verify Mapping
-    let mappings = fake_mapping.mappings.lock().unwrap();
-    assert_eq!(mappings.len(), 1);
-    assert_eq!(mappings[0].0, command_id);
-    assert_eq!(mappings[0].1, client_reference);
-    assert_eq!(mappings[0].3, "journalpost");
-
-    // Verify Dispatch
-    let dispatched = fake_dispatcher.dispatched.lock().unwrap();
-    assert_eq!(dispatched.len(), 1);
-    assert_eq!(dispatched[0].command_id, command_id);
-}
-
-#[tokio::test]
-async fn test_ingest_command_returns_ids_preserving_order_with_idempotent_skip() {
-    // This test verifies that:
-    // 1. Returned command IDs preserve the submitted order
-    // 2. Idempotently accepted/skipped commands are included in the returned list
-
-    // Arrange
-    let fake_mapping = FakeIdMappingRepository::default();
-    let fake_dispatcher = FakeCommandDispatcher::default();
-
-    let command_id_1 = Uuid::new_v4();
-    let command_id_2 = Uuid::new_v4();
-    let command_id_3 = Uuid::new_v4();
-
-    // Pre-register command_id_2 as already processed (simulating idempotent scenario)
-    {
-        let mut store = fake_mapping.mappings.lock().unwrap();
-        store.push((
-            command_id_2,
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            "sak".to_string(),
-            None,
-        ));
-    }
-
-    let command1 = WireCommand::OpprettSak(OpprettSak {
-        client_reference: Uuid::new_v4(),
-        sakstittel: Sakstittel::try_from("Test Sak 1".to_string()).unwrap(),
-        ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
-        arkivdel: Arkivdel::Tilsynsdivisjonene,
-        saksbehandler_id: "Z99999".to_string(),
-        saksbehandler_enhet: "42".to_string(),
-        tilgjengelighet: Tilgjengelighet::Offentlig,
-    });
-
-    let command2 = WireCommand::OpprettSak(OpprettSak {
-        client_reference: Uuid::new_v4(),
-        sakstittel: Sakstittel::try_from("Test Sak 2".to_string()).unwrap(),
-        ordningsverdi: Ordningsverdi::new("456".to_string()).unwrap(),
-        arkivdel: Arkivdel::Tilsynsdivisjonene,
-        saksbehandler_id: "Z99999".to_string(),
-        saksbehandler_enhet: "42".to_string(),
-        tilgjengelighet: Tilgjengelighet::Offentlig,
-    });
-
-    let command3 = WireCommand::OpprettSak(OpprettSak {
-        client_reference: Uuid::new_v4(),
-        sakstittel: Sakstittel::try_from("Test Sak 3".to_string()).unwrap(),
-        ordningsverdi: Ordningsverdi::new("789".to_string()).unwrap(),
-        arkivdel: Arkivdel::Tilsynsdivisjonene,
-        saksbehandler_id: "Z99999".to_string(),
-        saksbehandler_enhet: "42".to_string(),
-        tilgjengelighet: Tilgjengelighet::Offentlig,
-    });
-
-    let envelope1 = WireCommandEnvelope {
-        command_id: command_id_1,
-        correlation_id: None,
-        payload: command1,
-    };
-
-    let envelope2 = WireCommandEnvelope {
-        command_id: command_id_2,
-        correlation_id: None,
-        payload: command2,
-    };
-
-    let envelope3 = WireCommandEnvelope {
-        command_id: command_id_3,
-        correlation_id: None,
-        payload: command3,
-    };
-
-    let sequence = CommandSequence::try_from(vec![envelope1, envelope2, envelope3]).unwrap();
-
-    let service = build_service(fake_mapping.clone(), fake_dispatcher.clone());
-
-    // Act
-    let returned_ids = service.handle(sequence).await.unwrap();
-
-    // Assert
-    // Verify all three IDs are returned (including the idempotently skipped one)
-    assert_eq!(returned_ids.len(), 3);
-
-    // Verify order is preserved: [command_id_1, command_id_2, command_id_3]
-    assert_eq!(returned_ids[0], command_id_1);
-    assert_eq!(returned_ids[1], command_id_2); // Idempotently skipped but still returned
-    assert_eq!(returned_ids[2], command_id_3);
-
-    // Verify only 2 commands were dispatched (command_id_2 was skipped)
-    let dispatched = fake_dispatcher.dispatched.lock().unwrap();
-    assert_eq!(dispatched.len(), 2);
-    assert!(dispatched.iter().all(|e| e.command_id != command_id_2));
+        }),
+    }])
+    .unwrap()
 }
 
 // ---------------------------------------------------------------------------
-// Regresjonstest for kjent ingest-defekt.
-//
-// Beskriver ønsket oppførsel og feiler i dag. `#[ignore]`d slik at CI er grønn;
-// kjøres med `cargo test -- --ignored`. Fjern `#[ignore]`-linja som del av
-// fixen — det er definition of done.
+// Regresjonstest for ingest-defekten SKU-0016 R11 fikser.
 // ---------------------------------------------------------------------------
 
-/// `process_command` skriver `id_mapping` (som bærer `command_id`) før den
-/// dispatcher til NATS. Feiler dispatch, får klienten `ArkiveringKvittering::Error`
-/// for hele batchen — men mappingen ligger igjen. Når klienten reprøver samme
-/// batch med samme `command_id`, svarer `has_processed_command` `true`,
-/// kommandoen hoppes over som "allerede behandlet", og klienten får
-/// `ArkiveringKvittering::Ok` med command_id i kvitteringen.
+/// v2 skrev idempotency-markøren (daværende `id_mapping`, som bar `command_id`) **før**
+/// dispatch. Feilet dispatch, fikk klienten `Error` for batchen — men markøren
+/// lå igjen. Ved klient-retry svarte `has_processed_command` `true`, kommandoen
+/// ble hoppet over som «allerede behandlet», og klienten fikk `Ok` med
+/// command_id i kvitteringen for noe som aldri ble dispatchet, aldri validert
+/// og aldri eksekvert.
 ///
-/// Kommandoen ble aldri dispatchet, blir aldri validert, aldri eksekvert, og
-/// det publiseres aldri en status-event. Den er tapt, med positiv kvittering.
-///
-/// Fix-retning: skriv idempotency-markøren først etter vellykket dispatch, eller
-/// gjør ingest atomisk (outbox) slik at markør og dispatch ikke kan divergere.
+/// v3 flytter milepælen til etter dispatch: `dispatchet_at` er nøkkelen, ikke
+/// radens eksistens.
 #[tokio::test]
-#[ignore = "Kjent defekt: dispatch-feil + klient-retry gir OK-kvittering for kommando som aldri ble dispatchet"]
-async fn retry_etter_dispatch_feil_skal_ikke_kvittere_ok_for_udispatchet_kommando() {
-    // Arrange
-    let fake_mapping = FakeIdMappingRepository::default();
+async fn retry_etter_dispatch_feil_skal_ikke_kvittere_ok_for_udispatchet_command() {
+    let command = FakeCommandRepository::default();
+    let entitet = FakeEntitetRepository::default();
     let command_id = Uuid::new_v4();
     let client_reference = Uuid::new_v4();
 
-    let lag_sequence = || {
-        CommandSequence::try_from(vec![WireCommandEnvelope {
-            command_id,
-            correlation_id: Some(Uuid::new_v4()),
-            payload: WireCommand::OpprettSak(OpprettSak {
-                client_reference,
-                sakstittel: Sakstittel::try_from("Tilsynssak".to_string()).unwrap(),
-                ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
-                arkivdel: Arkivdel::Tilsynsdivisjonene,
-                saksbehandler_id: "Z99999".to_string(),
-                saksbehandler_enhet: "42".to_string(),
-                tilgjengelighet: Tilgjengelighet::Offentlig,
-            }),
-        }])
-        .unwrap()
-    };
-
-    // Act: forsøk 1 — NATS nede, klienten får feil.
-    let failing_dispatcher = FakeCommandDispatcher {
+    // Forsøk 1 — NATS nede, klienten får feil.
+    let failing = FakeCommandDispatcher {
         should_fail: true,
         ..Default::default()
     };
-    let service = build_service(fake_mapping.clone(), failing_dispatcher);
-    assert!(service.handle(lag_sequence()).await.is_err());
+    let service = build_service(
+        command.clone(),
+        entitet.clone(),
+        failing,
+        FakeStatusPublisher::default(),
+    );
+    assert!(
+        service
+            .handle(opprett_sak_sequence(command_id, client_reference))
+            .await
+            .is_err()
+    );
 
-    // Act: forsøk 2 — NATS oppe igjen, klienten reprøver samme batch.
-    let working_dispatcher = FakeCommandDispatcher::default();
-    let service = build_service(fake_mapping, working_dispatcher.clone());
+    // Forsøk 2 — NATS oppe igjen, klienten reprøver samme batch.
+    let working = FakeCommandDispatcher::default();
+    let service = build_service(
+        command,
+        entitet,
+        working.clone(),
+        FakeStatusPublisher::default(),
+    );
     let command_ids = service
-        .handle(lag_sequence())
+        .handle(opprett_sak_sequence(command_id, client_reference))
         .await
         .expect("retry rapporteres som akseptert");
 
-    // Assert: kvitteringen lover at kommandoen er akseptert...
+    // Kvitteringen lover at kommandoen er akseptert...
     assert_eq!(command_ids, vec![command_id]);
 
     // ...da må den også faktisk være dispatchet.
-    let dispatched = working_dispatcher.dispatched.lock().unwrap();
+    let dispatched = working.dispatched.lock().unwrap();
     assert_eq!(
         dispatched.len(),
         1,
-        "kommando kvittert som akseptert må være dispatchet, men ble dispatchet {} ganger",
+        "command kvittert som akseptert må være dispatchet, men ble dispatchet {} ganger",
         dispatched.len()
     );
+}
+
+#[tokio::test]
+async fn ekte_duplikat_dispatches_ikke_paa_nytt() {
+    let command = FakeCommandRepository::default();
+    let entitet = FakeEntitetRepository::default();
+    let dispatcher = FakeCommandDispatcher::default();
+    let command_id = Uuid::new_v4();
+    let client_reference = Uuid::new_v4();
+
+    for _ in 0..2 {
+        let service = build_service(
+            command.clone(),
+            entitet.clone(),
+            dispatcher.clone(),
+            FakeStatusPublisher::default(),
+        );
+        let command_ids = service
+            .handle(opprett_sak_sequence(command_id, client_reference))
+            .await
+            .expect("duplikat aksepteres idempotent");
+        assert_eq!(command_ids, vec![command_id]);
+    }
+
+    assert_eq!(
+        dispatcher.dispatched.lock().unwrap().len(),
+        1,
+        "en allerede dispatchet command skal ikke sendes igjen"
+    );
+}
+
+#[tokio::test]
+async fn replay_etter_dispatch_feil_gjenbruker_skuffen_id() {
+    let command = FakeCommandRepository::default();
+    let entitet = FakeEntitetRepository::default();
+    let command_id = Uuid::new_v4();
+    let client_reference = Uuid::new_v4();
+
+    let failing = FakeCommandDispatcher {
+        should_fail: true,
+        ..Default::default()
+    };
+    let service = build_service(
+        command.clone(),
+        entitet.clone(),
+        failing,
+        FakeStatusPublisher::default(),
+    );
+    let _ = service
+        .handle(opprett_sak_sequence(command_id, client_reference))
+        .await;
+
+    let forste = entitet
+        .hent_for_client_reference(client_reference)
+        .await
+        .unwrap()
+        .expect("entitet mintet ved første forsøk");
+
+    let service = build_service(
+        command,
+        entitet.clone(),
+        FakeCommandDispatcher::default(),
+        FakeStatusPublisher::default(),
+    );
+    service
+        .handle(opprett_sak_sequence(command_id, client_reference))
+        .await
+        .unwrap();
+
+    let etter = entitet
+        .hent_for_client_reference(client_reference)
+        .await
+        .unwrap()
+        .expect("entitet finnes fortsatt");
+
+    assert_eq!(
+        forste.skuffen_id, etter.skuffen_id,
+        "en replay skal gjenbruke id-ene fra første forsøk, ikke minte nye"
+    );
+}
+
+#[tokio::test]
+async fn mottatt_publiseres_forst_etter_vellykket_dispatch() {
+    let publisher = FakeStatusPublisher::default();
+
+    let failing = FakeCommandDispatcher {
+        should_fail: true,
+        ..Default::default()
+    };
+    let service = build_service(
+        FakeCommandRepository::default(),
+        FakeEntitetRepository::default(),
+        failing,
+        publisher.clone(),
+    );
+    let _ = service
+        .handle(opprett_sak_sequence(Uuid::new_v4(), Uuid::new_v4()))
+        .await;
+
+    assert!(
+        publisher.command_status.lock().unwrap().is_empty(),
+        "ingen status skal love mottak når dispatch feilet"
+    );
+
+    let service = build_service(
+        FakeCommandRepository::default(),
+        FakeEntitetRepository::default(),
+        FakeCommandDispatcher::default(),
+        publisher.clone(),
+    );
+    service
+        .handle(opprett_sak_sequence(Uuid::new_v4(), Uuid::new_v4()))
+        .await
+        .unwrap();
+
+    let publisert = publisher.command_status.lock().unwrap();
+    assert_eq!(publisert.len(), 1);
+    assert_eq!(publisert[0].hendelse, CommandEvent::Mottatt);
+    assert!(!publisert[0].terminal);
+}
+
+#[tokio::test]
+async fn batch_beholder_rekkefolgen() {
+    let dispatcher = FakeCommandDispatcher::default();
+    let service = build_service(
+        FakeCommandRepository::default(),
+        FakeEntitetRepository::default(),
+        dispatcher.clone(),
+        FakeStatusPublisher::default(),
+    );
+
+    let ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
+    let envelopes: Vec<WireCommandEnvelope<WireCommand>> = ids
+        .iter()
+        .map(|id| {
+            opprett_sak_sequence(*id, Uuid::new_v4())
+                .into_iter()
+                .next()
+                .unwrap()
+        })
+        .collect();
+
+    let command_ids = service
+        .handle(CommandSequence::try_from(envelopes).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(command_ids, ids);
+    assert_eq!(*dispatcher.dispatched.lock().unwrap(), ids);
 }

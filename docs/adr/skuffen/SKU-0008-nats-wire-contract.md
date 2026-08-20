@@ -8,7 +8,7 @@ Crates: skuffen, infrastructure, application, skuffen-integration-tests
 
 ## Related
 
-References: SKU-0004, SKU-0007, SKU-0015
+References: SKU-0004, SKU-0016, SKU-0015
 
 ## Context
 

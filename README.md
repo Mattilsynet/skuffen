@@ -256,15 +256,29 @@ Wire-shape for query keys er tagged JSON fra `lib-schemas`, for eksempel:
 {"key":{"type":"journalpostId","value":"12345"}}
 ```
 
-JetStream (til klienter):
-- Stream: `arkiv_status` (subject: `arkiv.status.<commandId>`). Payload: `CommandStatusEvent`. Retention: 180 dager.
-- Payload inkluderer ogsaa `phase` med verdi `validation` eller `execution`.
-- Alle JetStream-streams og `arkiv_media` object store konfigureres med `num_replicas = 3`.
+JetStream (til klienter) — én statusstrøm, `arkiv_status`, retention 180 dager.
+Strømmen **er** loggen; en klient som vil ha historikken lager en consumer med `DeliverPolicy::All`.
+
+| Subject | Payload |
+| :-- | :-- |
+| `arkiv.status.<commandId>.command` | `SkuffenKommandoStatusV1` |
+| `arkiv.status.<commandId>.operasjon.<operasjonId>` | `SkuffenOperasjonStatusV1` |
+
+| Klienten vil ha | Subscription |
+| :-- | :-- |
+| Bare utfallet | `arkiv.status.<cmd>.command` |
+| Bare operasjonsdetaljer | `arkiv.status.<cmd>.operasjon.>` |
+| Full logg for kommandoen | `arkiv.status.<cmd>.>` |
+| Alt (dashboard/audit) | `arkiv.status.>` |
+
+`terminal: true` betyr at **utfallet er avgjort**, ikke at flere meldinger er utelukket.
+Operasjonsmeldinger kan fortsette etterpå, fordi søskenoperasjoner kjører videre best effort.
+
+Alle JetStream-streams og `arkiv_media` object store konfigureres med `num_replicas = 3`.
 
 Interne JetStreams (med `commandId` i subject for enklere debugging, retention 180 dager):
 - Stream: `arkiv_command_inbox` (subject: `arkiv.command.inbox.<entity>.<commandId>`)
 - Stream: `arkiv_command_ready` (subject: `arkiv.command.ready.<entity>.<commandId>`)
-- Stream: `arkiv_command_done` (subject: `arkiv.command.done.<entity>.<commandId>`)
 
 Durable consumers:
 - `validator` leser `arkiv_command_inbox` med explicit ack og `num_replicas = 3`.
@@ -276,13 +290,25 @@ Durable consumers:
 
 ## Eksekvering av kommandoer
 
-Se design og domenelogikk i `docs/command_executor.md`.
+Se design og domenelogikk i `docs/execution_v3_design.md` og ADR
+[SKU-0016](docs/adr/skuffen/SKU-0016-operasjonsbasert-eksekvering.md).
+
+En kommando dekomponeres én gang til en flat liste av **operasjoner**. En operasjon er ett
+arkivkall, med egen id, egen status, egen retry og egen statuslinje utad.
 
 ## Retry- og eksekveringsmodell
 
-- NATS `arkiv.command.ready.*` brukes kun til innlesing. Meldingen ACKes når kommandoen er lagret i `command_execution`.
-- NATS `arkiv.command.inbox.*` brukes til validering. Meldingen ACKes kun når validation er ferdig; recoverable/blocked utfall blir NAKet for redelivery.
-- Eksekvering og retries styres av en intern worker som poller DB etter `pending/retrying/blocked` hvor `next_retry_at <= now()`.
+- NATS `arkiv.command.inbox.*` brukes til validering. Meldingen ACKes kun når validering er ferdig;
+  recoverable og blokkerte utfall NAKes for redelivery.
+- NATS `arkiv.command.ready.*` brukes til dekomponering. Meldingen ACKes når kommandoen er
+  dekomponert til operasjonsrader — alt i én transaksjon, så en replay setter inn null rader.
+- Eksekvering styres av en intern worker som plukker operasjoner i `klar`, eller `retry_venter` med
+  forfalt frist. Ett periodisk evalueringspass frigjør `blokkert`-operasjoner når fakta tilsier det.
+- Skriveoperasjoner commiter `klar → sendt` **før** arkivkallet, og `sendt → ok` med arkivsvar og
+  faktaoppdatering i én transaksjon etterpå. En operasjon funnet i `sendt` ved oppstart har ukjent
+  utfall og går til `krever_avklaring` for manuell opprydding.
+- Recoverable feil retryes for alltid med eksponentiell backoff opp til én gang per døgn. Kun
+  irrecoverable feil blir terminalt `feilet`.
 - Worker tar lås med `FOR UPDATE SKIP LOCKED` slik at flere workere ikke tar samme kommando.
 - `command_execution.payload` er den varige kilden; planen bygges på nytt for hvert forsøk.
 

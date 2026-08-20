@@ -48,6 +48,10 @@ pub async fn legg_til_vedlegg(
     api::legg_til_vedlegg(journalpost_id, dokumenter).await
 }
 
+pub async fn hent_journalpost(journalpost_id: i32) -> anyhow::Result<ElementsJournalpostRespons> {
+    api::hent_journalpost(journalpost_id).await
+}
+
 pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> anyhow::Result<()> {
     api::sett_journalpost_status(journalpost_id, status).await
 }

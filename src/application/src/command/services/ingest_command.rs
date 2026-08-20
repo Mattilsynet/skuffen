@@ -1,15 +1,15 @@
 use anyhow::{Context, Result};
-use domain::eksekvering::typer::CommandLifecycleContext;
+use domain::eksekvering::operasjon::EntitetType;
+use domain::eksekvering::typer::{CommandEvent, CommandStatus, CommandTypeCode, Statuskontekst};
 use uuid::Uuid;
 
 use crate::command::ports::{
     command_dispatcher_port::CommandDispatcher,
-    id_mapping_port::{IdMappingRepository, MappingEntityType},
-    status_publisher_port::CommandStatusPublisher,
+    command_port::CommandRepository,
+    entitet_port::{EntitetRepository, NyEntitet},
+    status_publisher_port::StatusPublisher,
 };
-use crate::command::status::mottatt_event;
-use crate::command::{Command, CommandEnvelope, Dokument, JournalpostCommon, SakKey};
-use domain::eksekvering::id::{SkuffenDokumentId, SkuffenSakId};
+use crate::command::{Command, CommandEnvelope, SakKey};
 
 pub trait IntoCommandBatch {
     fn into_command_batch(self) -> Vec<CommandEnvelope<Command>>;
@@ -21,29 +21,38 @@ impl IntoCommandBatch for Vec<CommandEnvelope<Command>> {
     }
 }
 
+/// Mottak av kommandoer.
+///
+/// Idempotency-nøkkelen er `kommando.dispatchet_at`, ikke radens eksistens
+/// (SKU-0016 R11). Rekkefølgen er: skriv mottaksraden, mint id-ene, dispatch,
+/// og **først da** sett milepælen. Feiler dispatch, står milepælen igjen som
+/// `NULL`, og en klient-retry sender kommandoen på nytt i stedet for å få
+/// OK-kvittering for noe som aldri ble utført.
 pub struct IngestCommandService {
-    id_mapping: Box<dyn IdMappingRepository>,
+    command: Box<dyn CommandRepository>,
+    entitet: Box<dyn EntitetRepository>,
     dispatcher: Box<dyn CommandDispatcher>,
-    status_publisher: Box<dyn CommandStatusPublisher>,
+    status_publisher: Box<dyn StatusPublisher>,
 }
 
 impl IngestCommandService {
     pub fn new(
-        id_mapping: Box<dyn IdMappingRepository>,
+        command: Box<dyn CommandRepository>,
+        entitet: Box<dyn EntitetRepository>,
         dispatcher: Box<dyn CommandDispatcher>,
-        status_publisher: Box<dyn CommandStatusPublisher>,
+        status_publisher: Box<dyn StatusPublisher>,
     ) -> Self {
         Self {
-            id_mapping,
+            command,
+            entitet,
             dispatcher,
             status_publisher,
         }
     }
 
-    /// Handles a batch of commands.
-    /// Returns all submitted command IDs on success, preserving order.
-    /// Includes IDs for commands that are idempotently accepted/skipped.
-    /// Returns Err if any command fails (no partial list).
+    /// Håndterer en batch. Returnerer alle command-id-er i innsendt
+    /// rekkefølge, inkludert idempotent aksepterte (SKU-0008 R3). Feiler én,
+    /// feiler hele batchen — ingen partial acceptance rapporteres.
     pub async fn handle(&self, commands: impl IntoCommandBatch) -> Result<Vec<Uuid>> {
         let mut command_ids = Vec::new();
 
@@ -58,191 +67,172 @@ impl IngestCommandService {
 
     async fn process_command(&self, envelope: CommandEnvelope<Command>) -> Result<()> {
         let command_id = envelope.command_id;
-        let mottatt_context = self.build_initial_context(&envelope);
 
-        // 1. Check Command Idempotency
-        if self.id_mapping.has_processed_command(command_id).await? {
-            // Command already processed, idempotent success.
+        let mottak = self
+            .command
+            .registrer_mottatt(&envelope)
+            .await
+            .context("failed to record command receipt")?;
+
+        if !mottak.maa_dispatches() {
+            // Ekte duplikat: kommandoen er allerede sendt videre.
             return Ok(());
         }
 
-        let skuffen_id = Uuid::now_v7(); // Generate internal ID
+        self.registrer_entiteter(&envelope).await?;
 
-        // Extract Client Reference
-        let client_reference = self.extract_client_reference(&envelope.payload);
-
-        // 2. Idempotency / ID Mapping
-        // We register (command_id) -> (skuffen_id) with client_reference
-        if let Some(client_ref) = client_reference {
-            self.id_mapping
-                .register_mapping(
-                    command_id,
-                    client_ref,
-                    SkuffenSakId::from(skuffen_id),
-                    self.mapping_entity_type(&envelope.payload),
-                    None, // arkiv_id unknown yet
-                )
-                .await
-                .context("Failed to register id_mapping")?;
-
-            // Register documents mappings
-            if let Some(documents) = self.extract_documents(&envelope.payload) {
-                for doc in documents {
-                    let doc_skuffen_id = Uuid::now_v7();
-                    self.id_mapping
-                        .register_document_mapping(
-                            command_id,
-                            doc.client_reference,
-                            SkuffenDokumentId::from(doc_skuffen_id),
-                            None,
-                        )
-                        .await
-                        .context("Failed to register document mapping")?;
-                }
-            }
-        } else {
-            // Commands without client_reference (e.g. AvsluttSak) cannot be registered in id_mapping
-            // because they don't map to a new entity with a unique client_reference.
-            // Consequently, strict command idempotency (via has_processed_command) is not persisted for these commands.
-            // This is acceptable as these operations are typically idempotent by nature.
-        }
-
-        if let Some(arkiv_id) = self.extract_arkiv_id(&envelope.payload) {
-            let _ = self
-                .id_mapping
-                .hent_eller_opprett_skuffen_id_for_arkiv_id(
-                    MappingEntityType::Sak,
-                    arkiv_id.as_str(),
-                )
-                .await;
-        }
-
-        // 3. Dispatch
         self.dispatcher
             .dispatch(&envelope)
             .await
-            .context("Failed to dispatch command")?;
+            .context("failed to dispatch command")?;
+
+        // Milepælen settes først når dispatch faktisk lyktes.
+        self.command
+            .marker_dispatchet(command_id)
+            .await
+            .context("failed to mark command dispatched")?;
 
         self.status_publisher
-            .publish_status(mottatt_event(&envelope, mottatt_context))
+            .publiser_command_status(CommandStatus::new(
+                command_id,
+                envelope.correlation_id,
+                command_type(&envelope.payload),
+                CommandEvent::Mottatt,
+                "Forespørselen er mottatt.",
+                None,
+                kontekst(&envelope.payload),
+            ))
             .await
-            .context("Failed to publish mottatt status")?;
+            .context("failed to publish mottatt status")?;
 
         Ok(())
     }
 
-    fn mapping_entity_type(&self, command: &Command) -> MappingEntityType {
-        match command {
-            Command::OpprettSak(_) | Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => {
-                MappingEntityType::Sak
-            }
-            Command::OpprettInngaaendeJournalpost(_)
-            | Command::OpprettUtgaaendeJournalpost(_)
-            | Command::OpprettInterntNotatJournalpost(_) => MappingEntityType::Journalpost,
-        }
-    }
-
-    fn build_initial_context(
-        &self,
-        envelope: &CommandEnvelope<Command>,
-    ) -> CommandLifecycleContext {
-        let mut context = CommandLifecycleContext::default();
-
+    /// Minter `skuffen_id` for alle entitetene kommandoen nevner.
+    ///
+    /// Skjer før validering, som er hele grunnen til at `entitet` består som
+    /// egen tabell: en kommando kan mottas, id-er deles ut, og så feile
+    /// validering uten at noen state-rad noensinne oppstår (SKU-0016 R11).
+    async fn registrer_entiteter(&self, envelope: &CommandEnvelope<Command>) -> Result<()> {
         match &envelope.payload {
             Command::OpprettSak(command) => {
-                context.sak_client_reference = Some(command.client_reference.to_string());
+                self.registrer_entitet(EntitetType::Sak, Some(command.client_reference), None)
+                    .await?;
             }
-            Command::OpprettInngaaendeJournalpost(command) => {
-                self.populate_journalpost_context(&mut context, command.felles())
+            // AvsluttSak og SettSaksansvarlig oppretter ingenting — de virker
+            // på en sak som må finnes fra før. Mintet vi en id for en ukjent
+            // client_reference her, ville validering ikke lenger kunne se
+            // forskjell på en ukjent sak og en vi selv har opprettet.
+            Command::AvsluttSak(command) => {
+                self.knytt_arkiv_id(&command.sak_key).await?;
             }
-            Command::OpprettUtgaaendeJournalpost(command) => {
-                self.populate_journalpost_context(&mut context, command.felles())
+            Command::SettSaksansvarlig(command) => {
+                self.knytt_arkiv_id(&command.sak_key).await?;
             }
-            Command::OpprettInterntNotatJournalpost(command) => {
-                self.populate_journalpost_context(&mut context, command.felles())
+            Command::OpprettInngaaendeJournalpost(command)
+            | Command::OpprettUtgaaendeJournalpost(command)
+            | Command::OpprettInterntNotatJournalpost(command) => {
+                let felles = command.felles();
+                // Saken må finnes fra før, enten fra en OpprettSak tidligere i
+                // batchen eller via arkiv-id.
+                self.knytt_arkiv_id(&felles.sak_key).await?;
+                self.registrer_entitet(
+                    EntitetType::Journalpost,
+                    Some(felles.client_reference),
+                    None,
+                )
+                .await?;
+                for dokument in &felles.dokumenter {
+                    self.registrer_entitet(
+                        EntitetType::Dokument,
+                        Some(dokument.client_reference),
+                        None,
+                    )
+                    .await?;
+                }
             }
-            Command::AvsluttSak(command) => match &command.sak_key {
-                SakKey::ArkivId(saksnummer) => {
-                    context.saksnummer = Some(saksnummer.clone());
-                }
-                SakKey::ClientReference(client_reference) => {
-                    context.sak_client_reference = Some(client_reference.to_string());
-                }
-            },
-            Command::SettSaksansvarlig(command) => match &command.sak_key {
-                SakKey::ArkivId(saksnummer) => {
-                    context.saksnummer = Some(saksnummer.clone());
-                }
-                SakKey::ClientReference(client_reference) => {
-                    context.sak_client_reference = Some(client_reference.to_string());
-                }
-            },
         }
-
-        context
+        Ok(())
     }
 
-    fn populate_journalpost_context(
+    /// En arkiv-id er et eksternt faktum vi bringer inn i vår identitetsmodell;
+    /// den kan derfor opprettes. En client_reference kan ikke — den må komme
+    /// fra en kommando som faktisk oppretter saken.
+    async fn knytt_arkiv_id(&self, sak_key: &SakKey) -> Result<()> {
+        if let SakKey::ArkivId(arkiv_id) = sak_key {
+            self.entitet
+                .hent_eller_opprett_for_arkiv_id(EntitetType::Sak, arkiv_id)
+                .await
+                .context("failed to resolve sak by arkiv id")?;
+        }
+        Ok(())
+    }
+
+    async fn registrer_entitet(
         &self,
-        context: &mut CommandLifecycleContext,
-        felles: &JournalpostCommon,
-    ) {
-        context.journalpost_client_reference = Some(felles.client_reference.to_string());
+        entitet_type: EntitetType,
+        client_reference: Option<Uuid>,
+        arkiv_id: Option<String>,
+    ) -> Result<()> {
+        self.entitet
+            .registrer(NyEntitet {
+                skuffen_id: Uuid::now_v7(),
+                entitet_type,
+                client_reference,
+                arkiv_id,
+            })
+            .await
+            .context("failed to register entitet")?;
+        Ok(())
+    }
+}
 
-        match &felles.sak_key {
-            SakKey::ArkivId(saksnummer) => {
-                context.saksnummer = Some(saksnummer.clone());
-            }
-            SakKey::ClientReference(client_reference) => {
-                context.sak_client_reference = Some(client_reference.to_string());
-            }
+pub fn command_type(command: &Command) -> CommandTypeCode {
+    match command {
+        Command::OpprettSak(_) => CommandTypeCode::OpprettSak,
+        Command::OpprettInngaaendeJournalpost(_) => CommandTypeCode::OpprettInngaaendeJournalpost,
+        Command::OpprettUtgaaendeJournalpost(_) => CommandTypeCode::OpprettUtgaaendeJournalpost,
+        Command::OpprettInterntNotatJournalpost(_) => {
+            CommandTypeCode::OpprettInterntNotatJournalpost
         }
+        Command::AvsluttSak(_) => CommandTypeCode::AvsluttSak,
+        Command::SettSaksansvarlig(_) => CommandTypeCode::SettSaksansvarlig,
+    }
+}
 
-        context.dokument_client_references = felles
-            .dokumenter
-            .iter()
-            .map(|dokument| dokument.client_reference.to_string())
-            .collect();
-        context.dokument_ids = felles
-            .dokumenter
-            .iter()
-            .map(|dokument| dokument.client_reference.to_string())
-            .collect();
+pub fn kontekst(command: &Command) -> Statuskontekst {
+    let mut kontekst = Statuskontekst::default();
+
+    match command {
+        Command::OpprettSak(inner) => {
+            kontekst.sak_client_reference = Some(inner.client_reference.to_string());
+        }
+        Command::AvsluttSak(inner) => sak_key_kontekst(&mut kontekst, &inner.sak_key),
+        Command::SettSaksansvarlig(inner) => sak_key_kontekst(&mut kontekst, &inner.sak_key),
+        Command::OpprettInngaaendeJournalpost(inner)
+        | Command::OpprettUtgaaendeJournalpost(inner)
+        | Command::OpprettInterntNotatJournalpost(inner) => {
+            let felles = inner.felles();
+            sak_key_kontekst(&mut kontekst, &felles.sak_key);
+            kontekst.journalpost_client_reference = Some(felles.client_reference.to_string());
+            kontekst.dokument_client_references = felles
+                .dokumenter
+                .iter()
+                .map(|dokument| dokument.client_reference.to_string())
+                .collect();
+        }
     }
 
-    fn extract_client_reference(&self, command: &Command) -> Option<Uuid> {
-        match command {
-            Command::OpprettSak(c) => Some(c.client_reference),
-            Command::OpprettInngaaendeJournalpost(c) => Some(c.felles().client_reference),
-            Command::OpprettUtgaaendeJournalpost(c) => Some(c.felles().client_reference),
-            Command::OpprettInterntNotatJournalpost(c) => Some(c.felles().client_reference),
-            Command::AvsluttSak(_) => None, // No new client reference
-            Command::SettSaksansvarlig(_) => None, // No new client reference
+    kontekst
+}
+
+fn sak_key_kontekst(kontekst: &mut Statuskontekst, sak_key: &SakKey) {
+    match sak_key {
+        SakKey::ClientReference(client_reference) => {
+            kontekst.sak_client_reference = Some(client_reference.to_string());
         }
-    }
-
-    fn extract_documents<'a>(&self, command: &'a Command) -> Option<&'a Vec<Dokument>> {
-        match command {
-            Command::OpprettInngaaendeJournalpost(c) => Some(&c.felles().dokumenter),
-            Command::OpprettUtgaaendeJournalpost(c) => Some(&c.felles().dokumenter),
-            Command::OpprettInterntNotatJournalpost(c) => Some(&c.felles().dokumenter),
-            Command::OpprettSak(_) | Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => None,
-        }
-    }
-
-    fn extract_arkiv_id(&self, command: &Command) -> Option<String> {
-        let sak_key = match command {
-            Command::OpprettInngaaendeJournalpost(c) => Some(&c.felles().sak_key),
-            Command::OpprettUtgaaendeJournalpost(c) => Some(&c.felles().sak_key),
-            Command::OpprettInterntNotatJournalpost(c) => Some(&c.felles().sak_key),
-            Command::AvsluttSak(c) => Some(&c.sak_key),
-            Command::SettSaksansvarlig(c) => Some(&c.sak_key),
-            Command::OpprettSak(_) => None,
-        }?;
-
-        match sak_key {
-            SakKey::ArkivId(saksnummer) => Some(saksnummer.clone()),
-            SakKey::ClientReference(_) => None,
+        SakKey::ArkivId(arkiv_id) => {
+            kontekst.saksnummer = Some(arkiv_id.clone());
         }
     }
 }

@@ -8,7 +8,7 @@ Crates: domain, application, infrastructure
 
 ## Related
 
-References: SKU-0012, SKU-0011, SKU-0007
+References: SKU-0012, SKU-0011, SKU-0016
 
 ## Context
 

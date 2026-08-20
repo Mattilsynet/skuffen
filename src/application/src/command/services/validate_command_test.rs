@@ -1,8 +1,5 @@
 use async_trait::async_trait;
-use domain::eksekvering::typer::{
-    CommandLifecycleContext, CommandLifecycleEvent, CommandStage, CommandStageStatus,
-    CommandStatus, StatusErrorCode,
-};
+use domain::eksekvering::typer::{CommandEvent, CommandStatus, Operasjonstatus, StatusErrorCode};
 use lib_schemas::skuffen::command::commands::{
     Command as WireCommand, CommandEnvelope as WireCommandEnvelope,
 };
@@ -20,39 +17,31 @@ use uuid::Uuid;
 use crate::command::ports::command_state_port::{
     ArkivSakTilstand, ArkivSakTilstandError, ArkivSakTilstandErrorKind, ArkivSakTilstandRepository,
 };
-use crate::command::ports::id_mapping_port::{IdMappingRepository, MappingEntityType};
-use crate::command::ports::status_projection_port::CommandOutwardStatusProjector;
-use crate::command::ports::status_publisher_port::CommandStatusPublisher;
+use crate::command::ports::entitet_port::{Entitet, EntitetRepository, NyEntitet};
+use crate::command::ports::status_publisher_port::StatusPublisher;
 use crate::command::ports::validated_command_dispatcher_port::ValidatedCommandDispatcher;
 use crate::command::services::validate_command::{ValidateCommandService, ValidationOutcome};
 use crate::command::{
     Command as ApplicationCommand, CommandEnvelope as ApplicationCommandEnvelope,
 };
-use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 
 #[derive(Clone, Default)]
 struct FakeCommandStatusPublisher {
-    events: Arc<Mutex<Vec<CommandLifecycleEvent>>>,
+    events: Arc<Mutex<Vec<CommandStatus>>>,
 }
 
 #[async_trait]
-impl CommandStatusPublisher for FakeCommandStatusPublisher {
-    async fn publish_status(&self, event: CommandLifecycleEvent) -> Result<(), anyhow::Error> {
-        self.events.lock().unwrap().push(event);
+impl StatusPublisher for FakeCommandStatusPublisher {
+    async fn publiser_command_status(&self, status: CommandStatus) -> Result<(), anyhow::Error> {
+        self.events.lock().unwrap().push(status);
         Ok(())
     }
-}
 
-#[derive(Clone, Default)]
-struct FakeStatusContextResolver;
-
-#[async_trait]
-impl CommandOutwardStatusProjector for FakeStatusContextResolver {
-    async fn resolve_context(
+    async fn publiser_operasjonstatus(
         &self,
-        _envelope: &ApplicationCommandEnvelope<ApplicationCommand>,
-    ) -> Result<CommandLifecycleContext, anyhow::Error> {
-        Ok(CommandLifecycleContext::default())
+        _status: Operasjonstatus,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
     }
 }
 
@@ -112,36 +101,6 @@ impl ArkivSakTilstandRepository for FakeArkivSakTilstandRepository {
     }
 }
 
-#[derive(Clone, Default)]
-struct FakeIdMappingRepository {
-    responses: Arc<Mutex<IdMappingResponses>>,
-    calls: Arc<Mutex<IdMappingCalls>>,
-}
-
-#[derive(Clone)]
-struct IdMappingResponses {
-    skuffen_id: SkuffenIdResponse,
-    arkiv_id: ArkivIdResponse,
-}
-
-impl Default for IdMappingResponses {
-    fn default() -> Self {
-        Self {
-            skuffen_id: SkuffenIdResponse::Ok(None),
-            arkiv_id: ArkivIdResponse::Ok(None),
-        }
-    }
-}
-
-#[derive(Clone, Default)]
-struct IdMappingCalls {
-    hent_sak_id_fra_mapping: usize,
-    hent_arkiv_id_fra_mapping: usize,
-    last_client_reference: Option<Uuid>,
-    last_skuffen_id: Option<SkuffenSakId>,
-    write_calls: usize,
-}
-
 #[derive(Clone)]
 enum SkuffenIdResponse {
     Ok(Option<Uuid>),
@@ -154,136 +113,106 @@ enum ArkivIdResponse {
     Err(String),
 }
 
-impl FakeIdMappingRepository {
+#[derive(Clone, Default)]
+struct EntitetCalls {
+    write_calls: usize,
+}
+
+/// Identitetsoppslaget som `validate_sak_ref` bruker.
+///
+/// I v3 gir ett kall både `skuffen_id` og `arkiv_id`, så fake-en folder de to
+/// tidligere responsene sammen: mangler entiteten er den `None`, og feiler
+/// enten oppslaget eller arkiv-id-en propagerer den som `Err`.
+#[derive(Clone)]
+struct FakeEntitetRepository {
+    skuffen_id: Arc<Mutex<SkuffenIdResponse>>,
+    arkiv_id: Arc<Mutex<ArkivIdResponse>>,
+    calls: Arc<Mutex<EntitetCalls>>,
+}
+
+impl Default for FakeEntitetRepository {
+    fn default() -> Self {
+        Self {
+            skuffen_id: Arc::new(Mutex::new(SkuffenIdResponse::Ok(None))),
+            arkiv_id: Arc::new(Mutex::new(ArkivIdResponse::Ok(None))),
+            calls: Arc::new(Mutex::new(EntitetCalls::default())),
+        }
+    }
+}
+
+impl FakeEntitetRepository {
     fn set_skuffen_id_response(&self, response: SkuffenIdResponse) {
-        self.responses.lock().unwrap().skuffen_id = response;
+        *self.skuffen_id.lock().unwrap() = response;
     }
 
     fn set_arkiv_id_response(&self, response: ArkivIdResponse) {
-        self.responses.lock().unwrap().arkiv_id = response;
+        *self.arkiv_id.lock().unwrap() = response;
     }
 }
 
 #[async_trait]
-impl IdMappingRepository for FakeIdMappingRepository {
-    async fn has_processed_command(&self, _command_id: Uuid) -> Result<bool, anyhow::Error> {
-        Ok(false)
-    }
-
-    async fn register_mapping(
-        &self,
-        _command_id: Uuid,
-        _client_reference: Uuid,
-        _skuffen_id: SkuffenSakId,
-        _entity_type: MappingEntityType,
-        _arkiv_id: Option<String>,
-    ) -> Result<(), anyhow::Error> {
+impl EntitetRepository for FakeEntitetRepository {
+    async fn registrer(&self, entitet: NyEntitet) -> Result<Uuid, anyhow::Error> {
         self.calls.lock().unwrap().write_calls += 1;
-        Ok(())
+        Ok(entitet.skuffen_id)
     }
 
-    async fn register_document_mapping(
-        &self,
-        _command_id: Uuid,
-        _client_reference: Uuid,
-        _skuffen_id: SkuffenDokumentId,
-        _arkiv_id: Option<String>,
-    ) -> Result<(), anyhow::Error> {
-        self.calls.lock().unwrap().write_calls += 1;
-        Ok(())
-    }
-
-    async fn oppdater_arkiv_id_for_client_reference(
-        &self,
-        _client_reference: Uuid,
-        _arkiv_id: String,
-    ) -> Result<(), anyhow::Error> {
-        self.calls.lock().unwrap().write_calls += 1;
-        Ok(())
-    }
-
-    async fn hent_arkiv_id_fra_mapping(
-        &self,
-        skuffen_id: SkuffenSakId,
-    ) -> Result<Option<String>, anyhow::Error> {
-        let mut calls = self.calls.lock().unwrap();
-        calls.hent_arkiv_id_fra_mapping += 1;
-        calls.last_skuffen_id = Some(skuffen_id);
-        drop(calls);
-
-        match self.responses.lock().unwrap().arkiv_id.clone() {
-            ArkivIdResponse::Ok(value) => Ok(value),
-            ArkivIdResponse::Err(message) => Err(anyhow::anyhow!(message)),
-        }
-    }
-
-    async fn hent_sak_id_fra_mapping(
+    async fn hent_for_client_reference(
         &self,
         client_reference: Uuid,
-    ) -> Result<Option<SkuffenSakId>, anyhow::Error> {
-        let mut calls = self.calls.lock().unwrap();
-        calls.hent_sak_id_fra_mapping += 1;
-        calls.last_client_reference = Some(client_reference);
-        drop(calls);
+    ) -> Result<Option<Entitet>, anyhow::Error> {
+        let skuffen_id = match &*self.skuffen_id.lock().unwrap() {
+            SkuffenIdResponse::Err(message) => return Err(anyhow::anyhow!(message.clone())),
+            SkuffenIdResponse::Ok(None) => return Ok(None),
+            SkuffenIdResponse::Ok(Some(id)) => *id,
+        };
 
-        match self.responses.lock().unwrap().skuffen_id.clone() {
-            SkuffenIdResponse::Ok(value) => Ok(value.map(SkuffenSakId::from)),
-            SkuffenIdResponse::Err(message) => Err(anyhow::anyhow!(message)),
-        }
+        let arkiv_id = match &*self.arkiv_id.lock().unwrap() {
+            ArkivIdResponse::Err(message) => return Err(anyhow::anyhow!(message.clone())),
+            ArkivIdResponse::Ok(value) => value.clone(),
+        };
+
+        Ok(Some(Entitet {
+            skuffen_id,
+            entitet_type: domain::eksekvering::operasjon::EntitetType::Sak,
+            client_reference: Some(client_reference),
+            arkiv_id,
+        }))
     }
 
-    async fn hent_journalpost_id_fra_mapping(
+    async fn hent_for_arkiv_id(
         &self,
-        _client_reference: Uuid,
-    ) -> Result<Option<SkuffenJournalpostId>, anyhow::Error> {
-        Ok(None)
-    }
-
-    async fn hent_dokument_id_fra_mapping(
-        &self,
-        _client_reference: Uuid,
-    ) -> Result<Option<SkuffenDokumentId>, anyhow::Error> {
-        Ok(None)
-    }
-
-    async fn hent_sak_id_fra_arkiv_id_i_mapping(
-        &self,
+        _entitet_type: domain::eksekvering::operasjon::EntitetType,
         _arkiv_id: &str,
-    ) -> Result<Option<SkuffenSakId>, anyhow::Error> {
+    ) -> Result<Option<Entitet>, anyhow::Error> {
         Ok(None)
     }
 
-    async fn hent_eller_opprett_skuffen_id_for_arkiv_id(
+    async fn hent_eller_opprett_for_arkiv_id(
         &self,
-        _entity_type: MappingEntityType,
+        _entitet_type: domain::eksekvering::operasjon::EntitetType,
         _arkiv_id: &str,
-    ) -> Result<SkuffenSakId, anyhow::Error> {
+    ) -> Result<Uuid, anyhow::Error> {
         self.calls.lock().unwrap().write_calls += 1;
-        Ok(SkuffenSakId::from(Uuid::new_v4()))
+        Ok(Uuid::now_v7())
     }
 
-    async fn delete_arkiv_mapping(
-        &self,
-        _entity_type: MappingEntityType,
-        _arkiv_id: &str,
-    ) -> Result<(), anyhow::Error> {
-        self.calls.lock().unwrap().write_calls += 1;
-        Ok(())
+    async fn hent_arkiv_id(&self, _skuffen_id: Uuid) -> Result<Option<String>, anyhow::Error> {
+        Ok(None)
     }
 }
 
 fn build_service(
     state_repo: FakeArkivSakTilstandRepository,
-    id_mapping: FakeIdMappingRepository,
+    entitet: FakeEntitetRepository,
     dispatcher: FakeValidatedCommandDispatcher,
     status_publisher: FakeCommandStatusPublisher,
 ) -> ValidateCommandService {
     ValidateCommandService::new(
         Box::new(state_repo),
-        Box::new(id_mapping),
+        Box::new(entitet),
         Box::new(dispatcher),
         Box::new(status_publisher),
-        Box::new(FakeStatusContextResolver),
     )
 }
 
@@ -339,47 +268,43 @@ fn wrap_command(command: WireCommand) -> ApplicationCommandEnvelope<ApplicationC
 }
 
 fn assert_statuses(
-    events: &[CommandLifecycleEvent],
+    events: &[CommandStatus],
     command_id: Uuid,
-    final_status: CommandStatus,
-    final_stage_status: CommandStageStatus,
-    final_detail: Option<&str>,
+    hendelse: CommandEvent,
     expected_error_code: Option<StatusErrorCode>,
 ) {
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].status, final_status);
     assert_eq!(events[0].command_id, command_id);
-    assert_eq!(events[0].stage, CommandStage::Validert);
-    assert_eq!(events[0].stage_status, final_stage_status);
-    match final_stage_status {
-        CommandStageStatus::Ok => assert_eq!(events[0].message, "validert::ok"),
-        CommandStageStatus::Blocked => assert_eq!(events[0].message, "validert::blocked"),
-        CommandStageStatus::Retrying => assert_eq!(events[0].message, "validert::retrying"),
-        CommandStageStatus::Error => assert_eq!(events[0].message, "validert::error"),
-        CommandStageStatus::Venter => unreachable!(),
-    }
-    match final_detail {
-        Some(expected) => assert_eq!(events[0].detail.as_deref(), Some(expected)),
-        None => assert!(events[0].detail.is_none()),
-    }
+    assert_eq!(events[0].hendelse, hendelse);
+    assert_eq!(events[0].terminal, hendelse.er_terminal());
     assert_eq!(events[0].error_code, expected_error_code);
+}
+
+/// Blokkert og recoverable er transiente: kommandoen redeliveres av NATS.
+/// Vi publiserer utfall, ikke flakking (D33).
+fn assert_ingen_status(events: &[CommandStatus]) {
+    assert!(
+        events.is_empty(),
+        "transient valideringsutfall skal ikke publisere status, fikk {events:?}"
+    );
 }
 
 #[tokio::test]
 async fn test_validate_opprett_sak_dispatches_and_emits_ok_status() {
     let state_repo = FakeArkivSakTilstandRepository::default();
-    let id_mapping = FakeIdMappingRepository::default();
+    let entitet = FakeEntitetRepository::default();
     let dispatcher = FakeValidatedCommandDispatcher::default();
     let status_publisher = FakeCommandStatusPublisher::default();
 
     let service = build_service(
         state_repo.clone(),
-        id_mapping.clone(),
+        entitet.clone(),
         dispatcher.clone(),
         status_publisher.clone(),
     );
 
     let envelope = wrap_command(make_opprett_sak_command());
+
     let command_id = envelope.command_id;
 
     let outcome = service.handle(envelope).await.unwrap();
@@ -388,35 +313,29 @@ async fn test_validate_opprett_sak_dispatches_and_emits_ok_status() {
     assert_eq!(dispatcher.dispatched.lock().unwrap().len(), 1);
 
     let events = status_publisher.events.lock().unwrap();
-    assert_statuses(
-        &events,
-        command_id,
-        CommandStatus::Ok,
-        CommandStageStatus::Ok,
-        None,
-        None,
-    );
+    assert_statuses(&events, command_id, CommandEvent::Validert, None);
 
     assert!(state_repo.calls.lock().unwrap().is_empty());
-    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
+    assert_eq!(entitet.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
 async fn test_validate_journalpost_missing_sak_is_irrecoverable() {
     let state_repo = FakeArkivSakTilstandRepository::default();
-    let id_mapping = FakeIdMappingRepository::default();
+    let entitet = FakeEntitetRepository::default();
     let dispatcher = FakeValidatedCommandDispatcher::default();
     let status_publisher = FakeCommandStatusPublisher::default();
 
     let service = build_service(
         state_repo.clone(),
-        id_mapping.clone(),
+        entitet.clone(),
         dispatcher.clone(),
         status_publisher.clone(),
     );
 
     let sak_ref = Uuid::new_v4();
     let envelope = wrap_command(make_journalpost_command(SakKey::ClientReference(sak_ref)));
+
     let command_id = envelope.command_id;
 
     let outcome = service.handle(envelope).await.unwrap();
@@ -438,36 +357,35 @@ async fn test_validate_journalpost_missing_sak_is_irrecoverable() {
     assert_statuses(
         &events,
         command_id,
-        CommandStatus::Error,
-        CommandStageStatus::Error,
-        Some("Sak finnes ikke i Skuffen"),
+        CommandEvent::Avvist,
         Some(StatusErrorCode::NotFound),
     );
 
     assert!(state_repo.calls.lock().unwrap().is_empty());
-    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
+    assert_eq!(entitet.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
 async fn test_validate_journalpost_allows_skuffen_only_sak() {
     let state_repo = FakeArkivSakTilstandRepository::default();
-    let id_mapping = FakeIdMappingRepository::default();
+    let entitet = FakeEntitetRepository::default();
     let dispatcher = FakeValidatedCommandDispatcher::default();
     let status_publisher = FakeCommandStatusPublisher::default();
 
     let skuffen_id = Uuid::new_v4();
-    id_mapping.set_skuffen_id_response(SkuffenIdResponse::Ok(Some(skuffen_id)));
-    id_mapping.set_arkiv_id_response(ArkivIdResponse::Ok(None));
+    entitet.set_skuffen_id_response(SkuffenIdResponse::Ok(Some(skuffen_id)));
+    entitet.set_arkiv_id_response(ArkivIdResponse::Ok(None));
 
     let service = build_service(
         state_repo.clone(),
-        id_mapping.clone(),
+        entitet.clone(),
         dispatcher.clone(),
         status_publisher.clone(),
     );
 
     let sak_ref = Uuid::new_v4();
     let envelope = wrap_command(make_journalpost_command(SakKey::ClientReference(sak_ref)));
+
     let command_id = envelope.command_id;
 
     let outcome = service.handle(envelope).await.unwrap();
@@ -476,42 +394,36 @@ async fn test_validate_journalpost_allows_skuffen_only_sak() {
     assert_eq!(dispatcher.dispatched.lock().unwrap().len(), 1);
 
     let events = status_publisher.events.lock().unwrap();
-    assert_statuses(
-        &events,
-        command_id,
-        CommandStatus::Ok,
-        CommandStageStatus::Ok,
-        None,
-        None,
-    );
+    assert_statuses(&events, command_id, CommandEvent::Validert, None);
 
     assert!(state_repo.calls.lock().unwrap().is_empty());
-    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
+    assert_eq!(entitet.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
 async fn test_validate_journalpost_blocks_closed_sak() {
     let state_repo = FakeArkivSakTilstandRepository::default();
-    let id_mapping = FakeIdMappingRepository::default();
+    let entitet = FakeEntitetRepository::default();
     let dispatcher = FakeValidatedCommandDispatcher::default();
     let status_publisher = FakeCommandStatusPublisher::default();
 
     let skuffen_id = Uuid::new_v4();
-    id_mapping.set_skuffen_id_response(SkuffenIdResponse::Ok(Some(skuffen_id)));
-    id_mapping.set_arkiv_id_response(ArkivIdResponse::Ok(Some("2025/1".to_string())));
+    entitet.set_skuffen_id_response(SkuffenIdResponse::Ok(Some(skuffen_id)));
+    entitet.set_arkiv_id_response(ArkivIdResponse::Ok(Some("2025/1".to_string())));
     state_repo.set_response(ArkivSakTilstandResponse::Ok(ArkivSakTilstand {
         avsluttet: true,
     }));
 
     let service = build_service(
         state_repo.clone(),
-        id_mapping.clone(),
+        entitet.clone(),
         dispatcher.clone(),
         status_publisher.clone(),
     );
 
     let sak_ref = Uuid::new_v4();
     let envelope = wrap_command(make_journalpost_command(SakKey::ClientReference(sak_ref)));
+
     let command_id = envelope.command_id;
 
     let outcome = service.handle(envelope).await.unwrap();
@@ -533,33 +445,32 @@ async fn test_validate_journalpost_blocks_closed_sak() {
     assert_statuses(
         &events,
         command_id,
-        CommandStatus::Error,
-        CommandStageStatus::Error,
-        Some("Sak er avsluttet"),
+        CommandEvent::Avvist,
         Some(StatusErrorCode::Conflict),
     );
 
     let calls = state_repo.calls.lock().unwrap();
     assert_eq!(calls.as_slice(), ["2025/1".to_string()]);
-    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
+    assert_eq!(entitet.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
 async fn test_validate_arkiv_id_open_sak_is_ok() {
     let state_repo = FakeArkivSakTilstandRepository::default();
-    let id_mapping = FakeIdMappingRepository::default();
+    let entitet = FakeEntitetRepository::default();
     let dispatcher = FakeValidatedCommandDispatcher::default();
     let status_publisher = FakeCommandStatusPublisher::default();
 
     let service = build_service(
         state_repo.clone(),
-        id_mapping.clone(),
+        entitet.clone(),
         dispatcher.clone(),
         status_publisher.clone(),
     );
 
     let saksnummer = Saksnummer::new("2025/42").unwrap();
     let envelope = wrap_command(make_avslutt_sak_command(SakKey::ArkivId(saksnummer)));
+
     let command_id = envelope.command_id;
 
     let outcome = service.handle(envelope).await.unwrap();
@@ -568,24 +479,17 @@ async fn test_validate_arkiv_id_open_sak_is_ok() {
     assert_eq!(dispatcher.dispatched.lock().unwrap().len(), 1);
 
     let events = status_publisher.events.lock().unwrap();
-    assert_statuses(
-        &events,
-        command_id,
-        CommandStatus::Ok,
-        CommandStageStatus::Ok,
-        None,
-        None,
-    );
+    assert_statuses(&events, command_id, CommandEvent::Validert, None);
 
     let calls = state_repo.calls.lock().unwrap();
     assert_eq!(calls.as_slice(), ["2025/42".to_string()]);
-    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
+    assert_eq!(entitet.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
 async fn test_validate_arkiv_id_recoverable_error_retries() {
     let state_repo = FakeArkivSakTilstandRepository::default();
-    let id_mapping = FakeIdMappingRepository::default();
+    let entitet = FakeEntitetRepository::default();
     let dispatcher = FakeValidatedCommandDispatcher::default();
     let status_publisher = FakeCommandStatusPublisher::default();
 
@@ -596,14 +500,15 @@ async fn test_validate_arkiv_id_recoverable_error_retries() {
 
     let service = build_service(
         state_repo.clone(),
-        id_mapping.clone(),
+        entitet.clone(),
         dispatcher.clone(),
         status_publisher.clone(),
     );
 
     let saksnummer = Saksnummer::new("2025/99").unwrap();
     let envelope = wrap_command(make_journalpost_command(SakKey::ArkivId(saksnummer)));
-    let command_id = envelope.command_id;
+
+    let _command_id = envelope.command_id;
 
     let outcome = service.handle(envelope).await.unwrap();
 
@@ -621,21 +526,14 @@ async fn test_validate_arkiv_id_recoverable_error_retries() {
     assert!(dispatcher.dispatched.lock().unwrap().is_empty());
 
     let events = status_publisher.events.lock().unwrap();
-    assert_statuses(
-        &events,
-        command_id,
-        CommandStatus::Retrying,
-        CommandStageStatus::Retrying,
-        Some("Sikri timeout"),
-        Some(StatusErrorCode::TemporaryUnavailable),
-    );
-    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
+    assert_ingen_status(&events);
+    assert_eq!(entitet.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
 async fn test_validate_arkiv_id_irrecoverable_error_is_error() {
     let state_repo = FakeArkivSakTilstandRepository::default();
-    let id_mapping = FakeIdMappingRepository::default();
+    let entitet = FakeEntitetRepository::default();
     let dispatcher = FakeValidatedCommandDispatcher::default();
     let status_publisher = FakeCommandStatusPublisher::default();
 
@@ -646,13 +544,14 @@ async fn test_validate_arkiv_id_irrecoverable_error_is_error() {
 
     let service = build_service(
         state_repo.clone(),
-        id_mapping.clone(),
+        entitet.clone(),
         dispatcher.clone(),
         status_publisher.clone(),
     );
 
     let saksnummer = Saksnummer::new("2025/404").unwrap();
     let envelope = wrap_command(make_journalpost_command(SakKey::ArkivId(saksnummer)));
+
     let command_id = envelope.command_id;
 
     let outcome = service.handle(envelope).await.unwrap();
@@ -674,33 +573,32 @@ async fn test_validate_arkiv_id_irrecoverable_error_is_error() {
     assert_statuses(
         &events,
         command_id,
-        CommandStatus::Error,
-        CommandStageStatus::Error,
-        Some("Sak finnes ikke i Sikri (2025/404)"),
+        CommandEvent::Avvist,
         Some(StatusErrorCode::InvalidRequest),
     );
-    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
+    assert_eq!(entitet.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
 async fn test_validate_client_reference_lookup_error_is_retrying() {
     let state_repo = FakeArkivSakTilstandRepository::default();
-    let id_mapping = FakeIdMappingRepository::default();
+    let entitet = FakeEntitetRepository::default();
     let dispatcher = FakeValidatedCommandDispatcher::default();
     let status_publisher = FakeCommandStatusPublisher::default();
 
-    id_mapping.set_skuffen_id_response(SkuffenIdResponse::Err("db error".to_string()));
+    entitet.set_skuffen_id_response(SkuffenIdResponse::Err("db error".to_string()));
 
     let service = build_service(
         state_repo,
-        id_mapping.clone(),
+        entitet.clone(),
         dispatcher.clone(),
         status_publisher.clone(),
     );
 
     let sak_ref = Uuid::new_v4();
     let envelope = wrap_command(make_journalpost_command(SakKey::ClientReference(sak_ref)));
-    let command_id = envelope.command_id;
+
+    let _command_id = envelope.command_id;
 
     let outcome = service.handle(envelope).await.unwrap();
 
@@ -718,37 +616,31 @@ async fn test_validate_client_reference_lookup_error_is_retrying() {
     assert!(dispatcher.dispatched.lock().unwrap().is_empty());
 
     let events = status_publisher.events.lock().unwrap();
-    assert_statuses(
-        &events,
-        command_id,
-        CommandStatus::Retrying,
-        CommandStageStatus::Retrying,
-        Some("db error"),
-        Some(StatusErrorCode::TemporaryUnavailable),
-    );
-    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
+    assert_ingen_status(&events);
+    assert_eq!(entitet.calls.lock().unwrap().write_calls, 0);
 }
 
 #[tokio::test]
 async fn test_validate_arkiv_id_lookup_error_is_retrying() {
     let state_repo = FakeArkivSakTilstandRepository::default();
-    let id_mapping = FakeIdMappingRepository::default();
+    let entitet = FakeEntitetRepository::default();
     let dispatcher = FakeValidatedCommandDispatcher::default();
     let status_publisher = FakeCommandStatusPublisher::default();
 
-    id_mapping.set_skuffen_id_response(SkuffenIdResponse::Ok(Some(Uuid::new_v4())));
-    id_mapping.set_arkiv_id_response(ArkivIdResponse::Err("lookup failed".to_string()));
+    entitet.set_skuffen_id_response(SkuffenIdResponse::Ok(Some(Uuid::new_v4())));
+    entitet.set_arkiv_id_response(ArkivIdResponse::Err("lookup failed".to_string()));
 
     let service = build_service(
         state_repo,
-        id_mapping.clone(),
+        entitet.clone(),
         dispatcher.clone(),
         status_publisher.clone(),
     );
 
     let sak_ref = Uuid::new_v4();
     let envelope = wrap_command(make_journalpost_command(SakKey::ClientReference(sak_ref)));
-    let command_id = envelope.command_id;
+
+    let _command_id = envelope.command_id;
 
     let outcome = service.handle(envelope).await.unwrap();
 
@@ -766,13 +658,6 @@ async fn test_validate_arkiv_id_lookup_error_is_retrying() {
     assert!(dispatcher.dispatched.lock().unwrap().is_empty());
 
     let events = status_publisher.events.lock().unwrap();
-    assert_statuses(
-        &events,
-        command_id,
-        CommandStatus::Retrying,
-        CommandStageStatus::Retrying,
-        Some("lookup failed"),
-        Some(StatusErrorCode::TemporaryUnavailable),
-    );
-    assert_eq!(id_mapping.calls.lock().unwrap().write_calls, 0);
+    assert_ingen_status(&events);
+    assert_eq!(entitet.calls.lock().unwrap().write_calls, 0);
 }

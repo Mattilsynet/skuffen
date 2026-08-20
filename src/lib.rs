@@ -48,20 +48,18 @@ pub async fn run() -> anyhow::Result<()> {
     );
     let command_listener = infrastructure::bootstrap::build_command_listener(
         runtime.nats.clone(),
-        runtime.id_mapping_repo.clone(),
+        runtime.db_pool.clone(),
         runtime.media_store.clone(),
     );
     let validator_listener = infrastructure::bootstrap::build_validator_listener(
         runtime.nats.clone(),
-        runtime.id_mapping_repo.clone(),
+        runtime.db_pool.clone(),
         runtime.use_fake_sikri,
     );
     let (eksekvering_listener, eksekvering_worker) =
         infrastructure::bootstrap::build_eksekvering_components(
             runtime.nats.clone(),
-            runtime.id_mapping_repo,
-            runtime.execution_store,
-            runtime.entity_tilstand_store,
+            runtime.db_pool,
             runtime.media_store,
             runtime.use_fake_sikri,
         )?;

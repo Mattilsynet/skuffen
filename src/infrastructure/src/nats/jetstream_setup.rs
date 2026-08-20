@@ -29,20 +29,11 @@ pub fn command_ready_stream_config(num_replicas: usize) -> stream::Config {
     }
 }
 
-pub fn command_done_stream_config(num_replicas: usize) -> stream::Config {
-    stream::Config {
-        name: "arkiv_command_done".to_string(),
-        subjects: vec!["arkiv.command.done.>".to_string()],
-        max_age: COMMAND_STREAM_MAX_AGE,
-        num_replicas,
-        ..Default::default()
-    }
-}
-
 pub fn status_stream_config(num_replicas: usize) -> stream::Config {
     stream::Config {
         name: "arkiv_status".to_string(),
-        subjects: vec!["arkiv.status.*".to_string()],
+        // Begge subjektdybdene: `.command` og `.operasjon.<id>`.
+        subjects: vec!["arkiv.status.>".to_string()],
         max_age: COMMAND_STREAM_MAX_AGE,
         num_replicas,
         ..Default::default()

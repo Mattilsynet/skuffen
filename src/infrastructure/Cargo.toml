@@ -58,3 +58,8 @@ tracing-stackdriver = { workspace = true }
 tracing-log = { workspace = true }
 
 uuid = { workspace = true, features = ["serde", "v7", "v5", "v4"] }
+chrono = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["postgres"] }

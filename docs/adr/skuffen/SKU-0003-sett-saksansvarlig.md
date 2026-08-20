@@ -8,7 +8,7 @@ Crates: skuffen, domain, application, infrastructure
 
 ## Related
 
-References: SKU-0007
+References: SKU-0016
 
 ## Context
 

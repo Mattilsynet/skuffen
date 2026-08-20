@@ -1,24 +1,40 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
-use application::command::{Command, CommandEnvelope};
-use async_trait::async_trait;
-use domain::eksekvering::tilstand::JournalpostMedDokumenter;
-
-use application::command::ports::eksekvering_port::{
-    ArkivGateway, OpprettJournalpostResultat, Utsendingsvalg,
+use application::command::materialisering::{
+    DokumentAttributter, JournalpostAttributter, SakAttributter,
 };
+use application::command::ports::eksekvering_port::{
+    ArkivGateway, Journalstatus, ObservertJournalstatus, OpprettJournalpostResultat,
+    OpprettSakResultat,
+};
+use async_trait::async_trait;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
+/// Arkivet uten Sikri. Brukes når gatewayen ikke er konfigurert.
+///
+/// Den holder journalpoststatus i minnet slik at `AvventJournalfort` faktisk
+/// kan observere en overgang i stedet for å polle mot en konstant.
 #[derive(Clone, Default)]
 pub struct FakeArkivGateway {
     sak_counter: Arc<AtomicUsize>,
     journalpost_counter: Arc<AtomicI32>,
     dokument_counter: Arc<AtomicI32>,
+    journalstatus: Arc<Mutex<HashMap<i32, ObservertJournalstatus>>>,
 }
 
 impl FakeArkivGateway {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Lar tester styre hva neste observasjon returnerer.
+    pub fn sett_journalstatus(&self, journalpost_id: i32, status: ObservertJournalstatus) {
+        self.journalstatus
+            .lock()
+            .unwrap()
+            .insert(journalpost_id, status);
     }
 }
 
@@ -26,53 +42,83 @@ impl FakeArkivGateway {
 impl ArkivGateway for FakeArkivGateway {
     async fn opprett_sak(
         &self,
-        _command: &CommandEnvelope<Command>,
-    ) -> Result<String, anyhow::Error> {
+        _attributter: &SakAttributter,
+    ) -> Result<OpprettSakResultat, anyhow::Error> {
         let seq = self.sak_counter.fetch_add(1, Ordering::SeqCst) + 1;
-        Ok(format!("2026/{:06}", 900000 + seq))
+        let saksnummer = format!("2026/{:06}", 900000 + seq);
+        super::fake_command_state_repo::registrer_fake_sak(&saksnummer);
+        Ok(OpprettSakResultat { saksnummer })
     }
 
     async fn opprett_journalpost(
         &self,
-        _command: &CommandEnvelope<Command>,
-        _journalpost: &JournalpostMedDokumenter,
         _saksnummer: &str,
-        _utsending: Option<Utsendingsvalg>,
+        _journalpost: &JournalpostAttributter,
+        _hoveddokument: &DokumentAttributter,
     ) -> Result<OpprettJournalpostResultat, anyhow::Error> {
         let seq = self.journalpost_counter.fetch_add(1, Ordering::SeqCst) + 1;
-        Ok(OpprettJournalpostResultat {
-            journalpost_id: 10_000 + seq,
-        })
+        let journalpost_id = 10_000 + seq;
+        self.journalstatus
+            .lock()
+            .unwrap()
+            .insert(journalpost_id, ObservertJournalstatus::Reservert);
+        Ok(OpprettJournalpostResultat { journalpost_id })
     }
 
     async fn legg_til_vedlegg(
         &self,
-        _command: &CommandEnvelope<Command>,
         _journalpost_id: i32,
-        dokument_ids: Vec<uuid::Uuid>,
-    ) -> Result<Vec<Option<i32>>, anyhow::Error> {
-        let mut arkiv_ids = Vec::with_capacity(dokument_ids.len());
-        for _ in dokument_ids {
-            let seq = self.dokument_counter.fetch_add(1, Ordering::SeqCst) + 1;
-            arkiv_ids.push(Some(70_000 + seq));
-        }
-        Ok(arkiv_ids)
+        _vedlegg: &DokumentAttributter,
+    ) -> Result<Option<i32>, anyhow::Error> {
+        let seq = self.dokument_counter.fetch_add(1, Ordering::SeqCst) + 1;
+        Ok(Some(20_000 + seq))
     }
 
     async fn sett_journalpost_status(
         &self,
-        _journalpost_id: i32,
-        _status: &str,
+        journalpost_id: i32,
+        status: Journalstatus,
     ) -> Result<(), anyhow::Error> {
+        let observert = match status {
+            Journalstatus::Journalfoert => ObservertJournalstatus::Journalfoert,
+            Journalstatus::Ekspedert => ObservertJournalstatus::Ekspedert,
+            Journalstatus::KlarForEkspedering => ObservertJournalstatus::KlarForEkspedering,
+        };
+        self.journalstatus
+            .lock()
+            .unwrap()
+            .insert(journalpost_id, observert);
         Ok(())
     }
 
-    async fn avskriv_journalpost(
-        &self,
-        _journalpost_id: i32,
-        _avskrivingsmaate: &str,
-    ) -> Result<(), anyhow::Error> {
+    async fn avskriv_journalpost(&self, _journalpost_id: i32) -> Result<(), anyhow::Error> {
         Ok(())
+    }
+
+    /// Simulerer SvarUt og RPA.
+    ///
+    /// I ekte drift setter SvarUt `F → E` på et par minutter, og RPA `E → J`
+    /// på en halv til én time. Fake-en gjør det samme, ett steg per
+    /// observasjon, slik at `AvventJournalfort` faktisk kan bli terminal uten
+    /// eksterne roboter.
+    async fn hent_journalstatus(
+        &self,
+        journalpost_id: i32,
+    ) -> Result<ObservertJournalstatus, anyhow::Error> {
+        let mut statuser = self.journalstatus.lock().unwrap();
+        let naavaerende = statuser
+            .get(&journalpost_id)
+            .copied()
+            .unwrap_or(ObservertJournalstatus::Annet);
+
+        let neste = match naavaerende {
+            ObservertJournalstatus::KlarForEkspedering => ObservertJournalstatus::Ekspedert,
+            ObservertJournalstatus::Ekspedert => ObservertJournalstatus::Journalfoert,
+            annet => annet,
+        };
+        statuser.insert(journalpost_id, neste);
+
+        Ok(neste)
     }
 
     async fn avslutt_sak(&self, _saksnummer: &str) -> Result<(), anyhow::Error> {
@@ -82,7 +128,7 @@ impl ArkivGateway for FakeArkivGateway {
     async fn sett_saksansvarlig(
         &self,
         _saksnummer: &str,
-        _saksbehandler: &str,
+        _saksbehandler_id: &str,
         _saksbehandler_enhet: &str,
     ) -> Result<(), anyhow::Error> {
         Ok(())

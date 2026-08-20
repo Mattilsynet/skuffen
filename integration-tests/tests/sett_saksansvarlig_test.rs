@@ -11,7 +11,7 @@ use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::sak::{Arkivdel, OpprettSak, SettSaksansvarlig};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
-use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1, SkuffenStatusPhase};
+use lib_schemas::skuffen::status::{SkuffenCommandEvent, SkuffenCommandStatusV1};
 use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 
 use support::{CommandScenario, extract_saksnummer, send_command_batch, wait_for_status_events};
@@ -142,7 +142,6 @@ async fn sett_saksansvarlig_med_client_reference() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "Dramallama-skrevet test: sak som ikke finnes gir FK-feil ved registrering, ingen status-event returneres ennå"]
 async fn sett_saksansvarlig_sak_not_found() -> Result<()> {
     let env = support::start_runtime().await?;
 
@@ -173,7 +172,7 @@ async fn sett_saksansvarlig_sak_not_found() -> Result<()> {
         .expect("Should have terminal event");
 
     // The command should fail (not Ok)
-    assert_ne!(terminal_event.status, SkuffenStatus::Ok);
+    assert_ne!(terminal_event.hendelse, SkuffenCommandEvent::Fullfort);
 
     Ok(())
 }
@@ -241,7 +240,7 @@ async fn sett_saksansvarlig_sak_i_eksekvering() -> Result<()> {
         .expect("Should have terminal event");
 
     // If the command succeeded, verify saksnummer is present
-    if terminal_event.status == SkuffenStatus::Ok {
+    if terminal_event.hendelse == SkuffenCommandEvent::Fullfort {
         let result_saksnummer = extract_saksnummer(&events, sett_saksansvarlig.command_id);
         assert_eq!(result_saksnummer.as_deref(), Some(saksnummer.as_str()));
     }
@@ -251,11 +250,11 @@ async fn sett_saksansvarlig_sak_i_eksekvering() -> Result<()> {
 }
 
 fn assert_happy_path_stages(
-    events: &[SkuffenStatusEventV1],
+    events: &[SkuffenCommandStatusV1],
     command_ids: impl IntoIterator<Item = Uuid>,
 ) {
     for command_id in command_ids {
-        let command_events: Vec<&SkuffenStatusEventV1> = events
+        let command_events: Vec<&SkuffenCommandStatusV1> = events
             .iter()
             .filter(|event| event.command_id == command_id)
             .collect();
@@ -263,30 +262,26 @@ fn assert_happy_path_stages(
         assert!(
             command_events
                 .iter()
-                .any(|event| event.phase == SkuffenStatusPhase::Ingest),
+                .any(|event| event.hendelse == SkuffenCommandEvent::Mottatt),
             "Missing Ingest event for command {command_id}"
         );
         assert!(
             command_events
                 .iter()
-                .any(|event| event.phase == SkuffenStatusPhase::Validate
-                    && event.status == SkuffenStatus::Ok),
+                .any(|event| event.hendelse == SkuffenCommandEvent::Validert),
             "Missing Validate+Ok event for command {command_id}"
         );
         assert!(
             command_events
                 .iter()
-                .any(|event| event.phase == SkuffenStatusPhase::Execution
-                    && event.status == SkuffenStatus::Pending),
+                .any(|event| event.hendelse == SkuffenCommandEvent::Utfores),
             "Missing Execution+Pending event for command {command_id}"
         );
         assert!(
             command_events
                 .iter()
-                .any(|event| event.phase == SkuffenStatusPhase::Execution
-                    && event.status == SkuffenStatus::Ok
-                    && event.terminal),
-            "Missing terminal Execution+Ok event for command {command_id}"
+                .any(|event| event.hendelse == SkuffenCommandEvent::Fullfort && event.terminal),
+            "Missing terminal fullfort event for command {command_id}"
         );
     }
 }

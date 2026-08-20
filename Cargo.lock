@@ -1666,6 +1666,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bytes",
+ "chrono",
  "domain",
  "dotenvy",
  "futures",
@@ -1682,6 +1683,8 @@ dependencies = [
  "serde_json",
  "sikri_client",
  "sqlx",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -1824,7 +1827,7 @@ dependencies = [
 [[package]]
 name = "lib-schemas"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#18e3a08ff85f52f9289688cae0d1a7497410c435"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#9b47b3291e513d51c6e555d0b2212c497b5c7f3c"
 dependencies = [
  "chrono",
  "serde",

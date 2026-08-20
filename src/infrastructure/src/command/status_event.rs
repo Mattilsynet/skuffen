@@ -1,31 +1,21 @@
+//! Oversetter interne statushendelser til den utadgående wire-kontrakten.
+//!
+//! Meldingene skal være sanitiserte: statiske, klientvennlige strenger, aldri
+//! intern `detalj` eller stacktrace.
+
+use domain::eksekvering::operasjon::Operasjonstype;
 use domain::eksekvering::typer::{
-    CommandLifecycleEvent, CommandStage, CommandStageStatus, StatusErrorCode,
+    CommandEvent, CommandStatus, Operasjonshendelse, Operasjonstatus, StatusErrorCode,
 };
 use lib_schemas::skuffen::journalpost::JournalpostId;
 use lib_schemas::skuffen::sak::Saksnummer;
 use lib_schemas::skuffen::status::{
-    SkuffenStatus, SkuffenStatusErrorCode, SkuffenStatusEventV1, SkuffenStatusPhase,
+    SkuffenCommandEvent, SkuffenCommandStatusV1, SkuffenOperasjonHendelse,
+    SkuffenOperasjonStatusV1, SkuffenOperasjonstype, SkuffenStatusErrorCode,
 };
+use uuid::Uuid;
 
-fn phase_for(stage: CommandStage) -> SkuffenStatusPhase {
-    match stage {
-        CommandStage::Mottatt => SkuffenStatusPhase::Ingest,
-        CommandStage::Validert => SkuffenStatusPhase::Validate,
-        CommandStage::Utfores => SkuffenStatusPhase::Execution,
-    }
-}
-
-fn status_for(stage_status: CommandStageStatus) -> SkuffenStatus {
-    match stage_status {
-        CommandStageStatus::Venter => SkuffenStatus::Pending,
-        CommandStageStatus::Ok => SkuffenStatus::Ok,
-        CommandStageStatus::Blocked => SkuffenStatus::Blocked,
-        CommandStageStatus::Retrying => SkuffenStatus::Retrying,
-        CommandStageStatus::Error => SkuffenStatus::Error,
-    }
-}
-
-fn error_code_for(error_code: StatusErrorCode) -> SkuffenStatusErrorCode {
+fn error_code(error_code: StatusErrorCode) -> SkuffenStatusErrorCode {
     match error_code {
         StatusErrorCode::InvalidRequest => SkuffenStatusErrorCode::InvalidRequest,
         StatusErrorCode::NotFound => SkuffenStatusErrorCode::NotFound,
@@ -36,272 +26,204 @@ fn error_code_for(error_code: StatusErrorCode) -> SkuffenStatusErrorCode {
     }
 }
 
-pub fn to_public_status_event(event: &CommandLifecycleEvent) -> SkuffenStatusEventV1 {
-    SkuffenStatusEventV1 {
-        command_id: event.command_id,
-        correlation_id: event.correlation_id,
-        phase: phase_for(event.stage),
-        status: status_for(event.stage_status),
-        terminal: event.terminal,
-        error_code: event.error_code.map(error_code_for),
-        // Public status skal aldri bære intern/vilkårlig tekst. Bruk klientens
-        // eksplisitte outward_message, ellers den statiske stage::status-koden
-        // som regenereres her — aldri det interne `message`/`detail`-feltet.
-        message: event.outward_message.clone().unwrap_or_else(|| {
-            domain::eksekvering::typer::status_message(event.stage, event.stage_status)
-        }),
-        attempt: event.attempt,
-        saksnummer: event
-            .context
-            .saksnummer
-            .as_ref()
-            .and_then(|value| Saksnummer::new(value.clone()).ok()),
-        journalpost_id: event
-            .context
-            .journalpost_id
-            .as_ref()
-            .map(|value| JournalpostId(value.clone())),
-        dokument_id: (!event.context.dokument_ids.is_empty()).then(|| {
-            event
-                .context
-                .dokument_ids
-                .iter()
-                .cloned()
-                .map(lib_schemas::skuffen::dokument::DokumentId)
-                .collect()
-        }),
-        timestamp: event.timestamp.clone(),
+fn command_event(hendelse: CommandEvent) -> SkuffenCommandEvent {
+    match hendelse {
+        CommandEvent::Mottatt => SkuffenCommandEvent::Mottatt,
+        CommandEvent::Validert => SkuffenCommandEvent::Validert,
+        CommandEvent::Avvist => SkuffenCommandEvent::Avvist,
+        CommandEvent::Utfores => SkuffenCommandEvent::Utfores,
+        CommandEvent::Fullfort => SkuffenCommandEvent::Fullfort,
+        CommandEvent::Feilet => SkuffenCommandEvent::Feilet,
     }
+}
+
+fn operasjonshendelse(hendelse: Operasjonshendelse) -> SkuffenOperasjonHendelse {
+    match hendelse {
+        Operasjonshendelse::ForsokFeilet => SkuffenOperasjonHendelse::ForsokFeilet,
+        Operasjonshendelse::Ok => SkuffenOperasjonHendelse::Ok,
+        Operasjonshendelse::Feilet => SkuffenOperasjonHendelse::Feilet,
+        Operasjonshendelse::KreverAvklaring => SkuffenOperasjonHendelse::KreverAvklaring,
+        Operasjonshendelse::Varsel => SkuffenOperasjonHendelse::Varsel,
+    }
+}
+
+fn operasjonstype(operasjonstype: Operasjonstype) -> SkuffenOperasjonstype {
+    match operasjonstype {
+        Operasjonstype::OpprettSak => SkuffenOperasjonstype::OpprettSak,
+        Operasjonstype::RenderDokument => SkuffenOperasjonstype::RenderDokument,
+        Operasjonstype::OpprettJournalpost => SkuffenOperasjonstype::OpprettJournalpost,
+        Operasjonstype::LeggTilVedlegg => SkuffenOperasjonstype::LeggTilVedlegg,
+        Operasjonstype::Journalfor => SkuffenOperasjonstype::Journalfor,
+        Operasjonstype::SettEkspedert => SkuffenOperasjonstype::SettEkspedert,
+        Operasjonstype::KlargjorForEkspedering => SkuffenOperasjonstype::KlargjorForEkspedering,
+        Operasjonstype::AvventJournalfort => SkuffenOperasjonstype::AvventJournalfort,
+        Operasjonstype::Avskriv => SkuffenOperasjonstype::Avskriv,
+        Operasjonstype::SettSaksansvarlig => SkuffenOperasjonstype::SettSaksansvarlig,
+        Operasjonstype::AvsluttSak => SkuffenOperasjonstype::AvsluttSak,
+    }
+}
+
+fn parse_uuid(verdi: &Option<String>) -> Option<Uuid> {
+    verdi.as_deref().and_then(|v| Uuid::parse_str(v).ok())
+}
+
+pub fn to_public_command_status(status: &CommandStatus) -> SkuffenCommandStatusV1 {
+    let kontekst = &status.kontekst;
+
+    SkuffenCommandStatusV1 {
+        command_id: status.command_id,
+        correlation_id: status.correlation_id,
+        hendelse: command_event(status.hendelse),
+        terminal: status.terminal,
+        message: status.melding.clone(),
+        error_code: status.error_code.map(error_code),
+        sak_client_reference: parse_uuid(&kontekst.sak_client_reference),
+        // Saksnummer valideres ved konstruksjon; en verdi som ikke passer
+        // kontrakten utelates heller enn å sendes rå.
+        saksnummer: kontekst
+            .saksnummer
+            .as_deref()
+            .and_then(|verdi| Saksnummer::new(verdi).ok()),
+        journalpost_client_reference: parse_uuid(&kontekst.journalpost_client_reference),
+        journalpost_id: kontekst
+            .journalpost_arkiv_id
+            .as_ref()
+            .map(|id| JournalpostId(id.clone())),
+        dokument_client_references: if kontekst.dokument_client_references.is_empty() {
+            None
+        } else {
+            Some(
+                kontekst
+                    .dokument_client_references
+                    .iter()
+                    .filter_map(|verdi| Uuid::parse_str(verdi).ok())
+                    .collect(),
+            )
+        },
+        timestamp: Some(status.timestamp.clone()),
+    }
+}
+
+pub fn to_public_operasjonstatus(status: &Operasjonstatus) -> SkuffenOperasjonStatusV1 {
+    SkuffenOperasjonStatusV1 {
+        command_id: status.command_id,
+        correlation_id: status.correlation_id,
+        operasjon_id: status.operasjon_id.0,
+        operasjonstype: operasjonstype(status.operasjonstype),
+        hendelse: operasjonshendelse(status.hendelse),
+        terminal: status.terminal,
+        message: status.melding.clone(),
+        error_code: status.error_code.map(error_code),
+        attempt: u32::try_from(status.attempt_no).ok().filter(|n| *n > 0),
+        timestamp: Some(status.timestamp.clone()),
+    }
+}
+
+/// `arkiv.status.<command_id>.command`
+///
+/// Kommandoeventet ligger på `.command` og ikke på `arkiv.status.<cmd>` fordi
+/// `arkiv.status.<cmd>.>` ikke matcher `arkiv.status.<cmd>` selv. Ett ekstra
+/// token kjøper én subscription for hele historikken.
+pub fn command_subject(command_id: Uuid) -> String {
+    format!("arkiv.status.{command_id}.command")
+}
+
+/// `arkiv.status.<command_id>.operasjon.<operasjon_id>`
+pub fn operasjon_subject(command_id: Uuid, operasjon_id: Uuid) -> String {
+    format!("arkiv.status.{command_id}.operasjon.{operasjon_id}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::eksekvering::typer::{
-        CommandLifecycleContext, CommandLifecycleMetadata, CommandStatus, CommandTypeCode,
-    };
-    use uuid::Uuid;
+    use domain::eksekvering::operasjon::OperasjonId;
+    use domain::eksekvering::typer::Statuskontekst;
 
-    fn lifecycle_event(
-        stage: CommandStage,
-        stage_status: CommandStageStatus,
-    ) -> CommandLifecycleEvent {
-        CommandLifecycleEvent {
-            command_id: Uuid::parse_str("123e4567-e89b-12d3-a456-426614174100").unwrap(),
-            correlation_id: Some(Uuid::parse_str("123e4567-e89b-12d3-a456-426614174101").unwrap()),
-            command_type: CommandTypeCode::OpprettSak,
-            status: CommandStatus::Pending,
-            stage,
-            stage_status,
-            terminal: domain::eksekvering::typer::is_terminal(stage, stage_status),
-            message: domain::eksekvering::typer::status_message(stage, stage_status),
-            outward_message: None,
-            error_code: None,
-            detail: None,
-            context: CommandLifecycleContext::default(),
-            attempt: None,
-            timestamp: Some("2026-01-02T03:04:05Z".to_string()),
-        }
+    #[test]
+    fn subjects_folger_kontrakten() {
+        let command_id = Uuid::from_u128(1);
+        let operasjon_id = Uuid::from_u128(2);
+
+        assert_eq!(
+            command_subject(command_id),
+            format!("arkiv.status.{command_id}.command")
+        );
+        assert_eq!(
+            operasjon_subject(command_id, operasjon_id),
+            format!("arkiv.status.{command_id}.operasjon.{operasjon_id}")
+        );
     }
 
     #[test]
-    fn public_status_event_json_pins_phase_and_status_wire_values() {
-        let cases = [
-            (
-                CommandStage::Mottatt,
-                CommandStageStatus::Venter,
-                "ingest",
-                "pending",
-                false,
-            ),
-            (
-                CommandStage::Mottatt,
-                CommandStageStatus::Ok,
-                "ingest",
-                "ok",
-                false,
-            ),
-            (
-                CommandStage::Validert,
-                CommandStageStatus::Ok,
-                "validate",
-                "ok",
-                false,
-            ),
-            (
-                CommandStage::Validert,
-                CommandStageStatus::Error,
-                "validate",
-                "error",
-                true,
-            ),
-            (
-                CommandStage::Utfores,
-                CommandStageStatus::Venter,
-                "execution",
-                "pending",
-                false,
-            ),
-            (
-                CommandStage::Utfores,
-                CommandStageStatus::Blocked,
-                "execution",
-                "blocked",
-                false,
-            ),
-            (
-                CommandStage::Utfores,
-                CommandStageStatus::Retrying,
-                "execution",
-                "retrying",
-                false,
-            ),
-            (
-                CommandStage::Utfores,
-                CommandStageStatus::Ok,
-                "execution",
-                "ok",
-                true,
-            ),
-            (
-                CommandStage::Utfores,
-                CommandStageStatus::Error,
-                "execution",
-                "error",
-                true,
-            ),
-        ];
+    fn begge_subjektdybder_matches_av_full_logg_wildcard() {
+        // `arkiv.status.<cmd>.>` skal fange begge.
+        let command_id = Uuid::from_u128(3);
+        let command = command_subject(command_id);
+        let operasjon = operasjon_subject(command_id, Uuid::from_u128(4));
+        let prefiks = format!("arkiv.status.{command_id}.");
 
-        for (stage, stage_status, expected_phase, expected_status, expected_terminal) in cases {
-            let outward = to_public_status_event(&lifecycle_event(stage, stage_status));
-            let json = serde_json::to_value(outward).unwrap();
-
-            assert_eq!(json["phase"], expected_phase);
-            assert_eq!(json["status"], expected_status);
-            assert_eq!(json["terminal"], expected_terminal);
-        }
+        assert!(command.starts_with(&prefiks));
+        assert!(operasjon.starts_with(&prefiks));
     }
 
     #[test]
-    fn public_status_event_json_pins_error_code_wire_values() {
-        let cases = [
-            (StatusErrorCode::InvalidRequest, "INVALID_REQUEST"),
-            (StatusErrorCode::NotFound, "NOT_FOUND"),
-            (StatusErrorCode::Conflict, "CONFLICT"),
-            (StatusErrorCode::PrerequisitePending, "PREREQUISITE_PENDING"),
-            (
-                StatusErrorCode::TemporaryUnavailable,
-                "TEMPORARY_UNAVAILABLE",
-            ),
-            (StatusErrorCode::ProcessingFailed, "PROCESSING_FAILED"),
-        ];
-
-        for (error_code, expected_wire_value) in cases {
-            let mut event = lifecycle_event(CommandStage::Utfores, CommandStageStatus::Error);
-            event.error_code = Some(error_code);
-
-            let json = serde_json::to_value(to_public_status_event(&event)).unwrap();
-
-            assert_eq!(json["error_code"], expected_wire_value);
-        }
-    }
-
-    #[test]
-    fn converts_execution_ok_to_public_status_event() {
-        let event = CommandLifecycleEvent::new(
-            CommandLifecycleMetadata::new(
-                Uuid::parse_str("123e4567-e89b-12d3-a456-426614174100").unwrap(),
-                CommandTypeCode::OpprettSak,
-            ),
-            Some(Uuid::parse_str("123e4567-e89b-12d3-a456-426614174101").unwrap()),
-            CommandStatus::Ok,
-            CommandStage::Utfores,
-            CommandStageStatus::Ok,
+    fn command_status_mapper_kontekst() {
+        let sak_ref = Uuid::from_u128(5);
+        let status = CommandStatus::new(
+            Uuid::from_u128(6),
             None,
-            Some("Sak opprettet.".to_string()),
-            CommandLifecycleContext {
+            domain::eksekvering::typer::CommandTypeCode::OpprettSak,
+            CommandEvent::Fullfort,
+            "Forespørselen er fullført.",
+            None,
+            Statuskontekst {
+                sak_client_reference: Some(sak_ref.to_string()),
                 saksnummer: Some("2026/123".to_string()),
                 ..Default::default()
             },
-            Some(1),
         );
 
-        let outward = to_public_status_event(&event);
+        let wire = to_public_command_status(&status);
 
-        assert_eq!(outward.phase, SkuffenStatusPhase::Execution);
-        assert_eq!(outward.status, SkuffenStatus::Ok);
-        assert!(outward.terminal);
-        assert_eq!(outward.error_code, None);
-        assert_eq!(outward.message, "utfores::ok");
-        assert_eq!(outward.saksnummer.unwrap().as_str(), "2026/123");
+        assert_eq!(wire.hendelse, SkuffenCommandEvent::Fullfort);
+        assert!(wire.terminal);
+        assert_eq!(wire.sak_client_reference, Some(sak_ref));
+        assert_eq!(wire.saksnummer, Saksnummer::new("2026/123").ok());
+        assert_eq!(wire.journalpost_id, None);
     }
 
     #[test]
-    fn does_not_expose_internal_detail_without_outward_message() {
-        // Selv om det interne `message`-feltet forurenses med Sikri-detalj,
-        // skal public status regenerere den statiske stage::status-koden.
-        let mut event = lifecycle_event(CommandStage::Utfores, CommandStageStatus::Error);
-        event.message = "Sikri responded with internal archive detail".to_string();
-        event.outward_message = None;
-        event.detail = Some("Sikri responded with internal archive detail".to_string());
-        event.error_code = Some(StatusErrorCode::ProcessingFailed);
-
-        let outward = to_public_status_event(&event);
-
-        assert_eq!(outward.message, "utfores::error");
-        assert_ne!(
-            outward.message,
-            "Sikri responded with internal archive detail"
+    fn attempt_null_utelates() {
+        let status = Operasjonstatus::new(
+            Uuid::from_u128(7),
+            None,
+            OperasjonId(Uuid::from_u128(8)),
+            Operasjonstype::AvsluttSak,
+            Operasjonshendelse::Ok,
+            0,
+            "Allerede utført.",
+            None,
         );
+
+        assert_eq!(to_public_operasjonstatus(&status).attempt, None);
     }
 
     #[test]
-    fn uses_outward_message_when_provided() {
-        let event = CommandLifecycleEvent::new(
-            CommandLifecycleMetadata::new(
-                Uuid::new_v4(),
-                CommandTypeCode::OpprettInterntNotatJournalpost,
-            ),
+    fn varsel_er_ikke_terminalt_utad() {
+        let status = Operasjonstatus::new(
+            Uuid::from_u128(9),
             None,
-            CommandStatus::Error,
-            CommandStage::Utfores,
-            CommandStageStatus::Error,
-            Some(StatusErrorCode::ProcessingFailed),
-            Some("Sikri responded with internal archive detail".to_string()),
-            CommandLifecycleContext::default(),
-            Some(3),
-        )
-        .with_outward_message("Command execution failed.");
-
-        let outward = to_public_status_event(&event);
-
-        assert_eq!(outward.message, "Command execution failed.");
-    }
-
-    #[test]
-    fn converts_blocked_to_client_safe_error_code() {
-        let event = CommandLifecycleEvent::new(
-            CommandLifecycleMetadata::new(
-                Uuid::new_v4(),
-                CommandTypeCode::OpprettInterntNotatJournalpost,
-            ),
-            None,
-            CommandStatus::Blocked,
-            CommandStage::Utfores,
-            CommandStageStatus::Blocked,
+            OperasjonId(Uuid::from_u128(10)),
+            Operasjonstype::AvventJournalfort,
+            Operasjonshendelse::Varsel,
+            0,
+            "Operasjonen har ikke fullført innen fristen.",
             Some(StatusErrorCode::PrerequisitePending),
-            Some("Saksnummer mangler".to_string()),
-            CommandLifecycleContext::default(),
-            Some(2),
         );
 
-        let outward = to_public_status_event(&event);
+        let wire = to_public_operasjonstatus(&status);
 
-        assert_eq!(outward.status, SkuffenStatus::Blocked);
-        assert_eq!(
-            outward.error_code,
-            Some(SkuffenStatusErrorCode::PrerequisitePending)
-        );
-        assert!(!outward.terminal);
+        assert_eq!(wire.hendelse, SkuffenOperasjonHendelse::Varsel);
+        assert!(!wire.terminal);
     }
 }

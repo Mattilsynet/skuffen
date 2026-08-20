@@ -6,7 +6,7 @@ use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
-use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1, SkuffenStatusPhase};
+use lib_schemas::skuffen::status::{SkuffenCommandEvent, SkuffenCommandStatusV1};
 use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 
 use support::{
@@ -158,7 +158,7 @@ async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn query_hent_sak_via_nats_uses_id_mapping() -> Result<()> {
+async fn query_hent_sak_via_nats_slaar_opp_entitet() -> Result<()> {
     let env = support::start_runtime().await?;
 
     let scenario = CommandScenario::new();
@@ -191,7 +191,7 @@ async fn query_hent_sak_via_nats_uses_id_mapping() -> Result<()> {
     let saksnummer = extract_saksnummer(&events, opprett_sak.command_id)
         .expect("OpprettSak should return saksnummer");
 
-    // Query by arkiv_id (uses id_mapping lookup internally)
+    // Query by arkiv_id (slår opp entitet internt)
     let response = hent_sak_via_nats_by_arkiv_id(&env.nats_url, &saksnummer).await?;
     assert_eq!(response.get("status").and_then(|s| s.as_str()), Some("Ok"));
     Ok(())
@@ -331,41 +331,37 @@ async fn avslutt_sak_med_arkiv_id_fullfoerer_gjennom_hele_flyten() -> Result<()>
 }
 
 fn assert_happy_path_stages(
-    events: &[SkuffenStatusEventV1],
+    events: &[SkuffenCommandStatusV1],
     command_ids: impl IntoIterator<Item = Uuid>,
 ) {
     for command_id in command_ids {
-        let command_events: Vec<&SkuffenStatusEventV1> = events
+        let command_events: Vec<&SkuffenCommandStatusV1> = events
             .iter()
             .filter(|event| event.command_id == command_id)
             .collect();
         assert!(
             command_events
                 .iter()
-                .any(|event| event.phase == SkuffenStatusPhase::Ingest),
+                .any(|event| event.hendelse == SkuffenCommandEvent::Mottatt),
             "Missing Ingest event for command {command_id}"
         );
         assert!(
             command_events
                 .iter()
-                .any(|event| event.phase == SkuffenStatusPhase::Validate
-                    && event.status == SkuffenStatus::Ok),
+                .any(|event| event.hendelse == SkuffenCommandEvent::Validert),
             "Missing Validate+Ok event for command {command_id}"
         );
         assert!(
             command_events
                 .iter()
-                .any(|event| event.phase == SkuffenStatusPhase::Execution
-                    && event.status == SkuffenStatus::Pending),
+                .any(|event| event.hendelse == SkuffenCommandEvent::Utfores),
             "Missing Execution+Pending event for command {command_id}"
         );
         assert!(
             command_events
                 .iter()
-                .any(|event| event.phase == SkuffenStatusPhase::Execution
-                    && event.status == SkuffenStatus::Ok
-                    && event.terminal),
-            "Missing terminal Execution+Ok event for command {command_id}"
+                .any(|event| event.hendelse == SkuffenCommandEvent::Fullfort && event.terminal),
+            "Missing terminal fullfort event for command {command_id}"
         );
     }
 }
@@ -526,8 +522,8 @@ async fn utgaaende_med_flere_mottakere_flow() -> Result<()> {
     Ok(())
 }
 
-fn assert_validate_error(events: &[SkuffenStatusEventV1], command_id: Uuid) {
-    let command_events: Vec<&SkuffenStatusEventV1> = events
+fn assert_validate_error(events: &[SkuffenCommandStatusV1], command_id: Uuid) {
+    let command_events: Vec<&SkuffenCommandStatusV1> = events
         .iter()
         .filter(|event| event.command_id == command_id)
         .collect();
@@ -535,16 +531,14 @@ fn assert_validate_error(events: &[SkuffenStatusEventV1], command_id: Uuid) {
     assert!(
         command_events
             .iter()
-            .any(|event| event.phase == SkuffenStatusPhase::Validate
-                && event.status == SkuffenStatus::Error),
-        "Expected Validate+Error event for command {command_id}, got {command_events:?}"
+            .any(|event| event.hendelse == SkuffenCommandEvent::Avvist),
+        "Expected avvist event for command {command_id}, got {command_events:?}"
     );
     assert!(
         !command_events
             .iter()
-            .any(|event| event.phase == SkuffenStatusPhase::Execution
-                && event.status == SkuffenStatus::Ok),
-        "Rejected command {command_id} must not reach Execution+Ok"
+            .any(|event| event.hendelse == SkuffenCommandEvent::Fullfort),
+        "Rejected command {command_id} must never reach fullfort"
     );
 }
 

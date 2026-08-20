@@ -7,9 +7,15 @@
 ## 🧩 Nøkkelpunkter
 
 - **Journalposttype = "X"**
+- `journalstatus` settes **ikke** ved opprettelse — Elements åpner journalposten
+  i en status der endringer er mulige.
+- Journalføring (`J`) er et **eget steg etterpå**, når alle dokumenter er på plass.
 - **Ingen mottakere** (`avsendereMottakere` kan være tom liste).
 - Minst **ett hoveddokument** må følge journalposten.
 - Publiseres til eInnsyn når status = **J** (om ikke skjermet).
+
+> ⚠️ En journalført journalpost er **låst**. Opprettes den direkte i `J`, kan
+> vedlegg ikke legges til i ettertid.
 
 ## 🛠️ Obligatoriske felter
 
@@ -18,7 +24,7 @@
 | `tittel`             | string   | ✅         | Tittel på journalposten                     |
 | `dokumentDato`       | datetime | ✅         | Dato dokumentet ble opprettet               |
 | `journalposttype`    | string   | ✅         | Alltid `"X"`                                |
-| `journalstatus`      | string   | ✅         | Settes til `"J"`                            |
+| `journalstatus`      | string   | ⛔         | Settes **ikke** ved opprettelse. Journalføres i eget steg |
 | `avskrivDirekte`     | boolean  | 🛡️         | Ikke relevant for X-notater                 |
 | `avskrivningsmaate`  | string   | 🛡️         | Ikke relevant for X-notater                 |
 | `saksbehandler`      | string   | ✅         | ID for ansvarlig saksbehandler              |

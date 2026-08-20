@@ -1,70 +1,111 @@
 use async_trait::async_trait;
-use domain::eksekvering::tilstand::JournalpostMedDokumenter;
-use domain::eksekvering::typer::CommandLifecycleEvent;
+use uuid::Uuid;
 
-use crate::command::{Command, CommandEnvelope};
+use crate::command::materialisering::{
+    DokumentAttributter, JournalpostAttributter, SakAttributter,
+};
 
+/// Arkivstatusen `AvventJournalfort` observerer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Utsendingsvalg {
-    MedUtsending,
-    UtenUtsending,
+pub enum ObservertJournalstatus {
+    /// `R` — reservert / under arbeid.
+    Reservert,
+    /// `F` — ferdig for ekspedering.
+    KlarForEkspedering,
+    /// `E` — ekspedert.
+    Ekspedert,
+    /// `J` — journalført og låst.
+    Journalfoert,
+    /// Noe annet; behandles som «ikke ferdig ennå».
+    Annet,
 }
 
-#[derive(Debug, Clone)]
+/// Journalstatuskodene Skuffen selv setter.
+///
+/// Skuffen setter aldri `J` på utgående — det gjør RPA (SKU-0016 R10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Journalstatus {
+    /// `J` — kun inngående og internt notat.
+    Journalfoert,
+    /// `E` — utgående uten utsending.
+    Ekspedert,
+    /// `F` — utgående med utsending, trigger SvarUt.
+    KlarForEkspedering,
+}
+
+impl Journalstatus {
+    pub fn as_arkivkode(self) -> &'static str {
+        match self {
+            Self::Journalfoert => "J",
+            Self::Ekspedert => "E",
+            Self::KlarForEkspedering => "F",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpprettSakResultat {
+    pub saksnummer: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpprettJournalpostResultat {
     pub journalpost_id: i32,
 }
 
+/// Arkivet, sett fra application.
+///
+/// Alle argumenter er materialiserte attributter. Gatewayen får aldri
+/// `CommandEnvelope` og executor rører derfor aldri wire-typer (SKU-0016 R12).
 #[async_trait]
 pub trait ArkivGateway: Send + Sync {
     async fn opprett_sak(
         &self,
-        command: &CommandEnvelope<Command>,
-    ) -> Result<String, anyhow::Error>;
+        attributter: &SakAttributter,
+    ) -> Result<OpprettSakResultat, anyhow::Error>;
 
     async fn opprett_journalpost(
         &self,
-        command: &CommandEnvelope<Command>,
-        journalpost: &JournalpostMedDokumenter,
         saksnummer: &str,
-        utsending: Option<Utsendingsvalg>,
+        journalpost: &JournalpostAttributter,
+        hoveddokument: &DokumentAttributter,
     ) -> Result<OpprettJournalpostResultat, anyhow::Error>;
 
+    /// Ett vedlegg om gangen (D5). Sikris batch-API returnerer
+    /// `Vec<Option<i32>>` og partial success er ikke håndterbart.
     async fn legg_til_vedlegg(
         &self,
-        command: &CommandEnvelope<Command>,
         journalpost_id: i32,
-        dokument_ids: Vec<uuid::Uuid>,
-    ) -> Result<Vec<Option<i32>>, anyhow::Error>;
+        vedlegg: &DokumentAttributter,
+    ) -> Result<Option<i32>, anyhow::Error>;
 
     async fn sett_journalpost_status(
         &self,
         journalpost_id: i32,
-        status: &str,
+        status: Journalstatus,
     ) -> Result<(), anyhow::Error>;
 
-    async fn avskriv_journalpost(
+    /// Kun inngående avskrives (D21). `TE` — tatt til etterretning.
+    async fn avskriv_journalpost(&self, journalpost_id: i32) -> Result<(), anyhow::Error>;
+
+    /// Observasjon for `AvventJournalfort`. Muterer ingenting.
+    async fn hent_journalstatus(
         &self,
         journalpost_id: i32,
-        avskrivingsmaate: &str,
-    ) -> Result<(), anyhow::Error>;
+    ) -> Result<ObservertJournalstatus, anyhow::Error>;
 
     async fn avslutt_sak(&self, saksnummer: &str) -> Result<(), anyhow::Error>;
 
     async fn sett_saksansvarlig(
         &self,
         saksnummer: &str,
-        saksbehandler: &str,
+        saksbehandler_id: &str,
         saksbehandler_enhet: &str,
     ) -> Result<(), anyhow::Error>;
 }
 
-#[async_trait]
-pub trait EksekveringKvitteringPublisher: Send + Sync {
-    async fn publiser_done(&self, command: &CommandEnvelope<Command>) -> Result<(), anyhow::Error>;
-}
-
-#[async_trait]
-pub trait EksekveringStatusPublisher: Send + Sync {
-    async fn publiser_status(&self, event: CommandLifecycleEvent) -> Result<(), anyhow::Error>;
+/// Rendring av HTML-mal til PDF, lagret på deterministisk nøkkel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderResultat {
+    pub rendered_dokument_referanse: Uuid,
 }

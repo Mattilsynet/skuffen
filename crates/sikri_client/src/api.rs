@@ -213,6 +213,42 @@ pub async fn get_sak(
     Ok(parsed)
 }
 
+/// `GET /api/Archive/HentJournalpost` — henter journalposten med
+/// dokumentobjekter.
+///
+/// Ren observasjon. Brukes av `AvventJournalfort` for å se når RPA har satt
+/// journalstatus til `J` (SKU-0016).
+#[tracing::instrument(skip_all, name = "sikri.hent_journalpost")]
+pub async fn hent_journalpost(journalpost_id: i32) -> Result<ElementsJournalpostRespons> {
+    let (username, password) = hent_brukernavn_passord_sikri().await?;
+    let url = format!("{}/api/Archive/HentJournalpost", base_url());
+
+    info!(
+        target: "sikri.http",
+        method = "GET",
+        endpoint = safe_endpoint_label(&url),
+        "Sending request to Sikri"
+    );
+
+    let resp = Client::new()
+        .get(&url)
+        .query(&[("journalpostId", journalpost_id.to_string())])
+        .basic_auth(username, Some(password))
+        .send()
+        .await
+        .with_context(|| "Klarte ikke å sende Sikri hent_journalpost request")?;
+    let resp = ensure_success(resp, "GET", &url)
+        .await
+        .with_context(|| "Sikri server svarte med feil for hent_journalpost")?;
+
+    let parsed = resp
+        .json::<ElementsJournalpostRespons>()
+        .await
+        .with_context(|| "Feil ved parsing av JSON-respons for hent_journalpost()")?;
+
+    Ok(parsed)
+}
+
 #[tracing::instrument(skip_all, name = "sikri.create_sak")]
 pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposterResponse> {
     data.validate()

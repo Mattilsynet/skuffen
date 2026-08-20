@@ -1,6 +1,4 @@
-use crate::command::services::eksekver_kommando::IntoExecutorEnvelope;
 use crate::command::services::ingest_command::IntoCommandBatch;
-use crate::command::services::registrer_i_eksekveringssystem::IntoRegistrationEnvelope;
 use crate::command::services::validate_command::IntoCommandEnvelope;
 use crate::command::{
     Command as ApplicationCommand, CommandEnvelope as ApplicationCommandEnvelope, test_support,
@@ -20,17 +18,5 @@ impl IntoCommandBatch for CommandSequence {
 impl IntoCommandEnvelope for WireCommandEnvelope<WireCommand> {
     fn into_command_envelope(self) -> ApplicationCommandEnvelope<ApplicationCommand> {
         test_support::map_wire_envelope(self)
-    }
-}
-
-impl IntoExecutorEnvelope for WireCommandEnvelope<WireCommand> {
-    fn into_executor_envelope(self) -> ApplicationCommandEnvelope<ApplicationCommand> {
-        test_support::map_wire_envelope(self)
-    }
-}
-
-impl IntoRegistrationEnvelope for &WireCommandEnvelope<WireCommand> {
-    fn into_registration_envelope(self) -> ApplicationCommandEnvelope<ApplicationCommand> {
-        test_support::map_wire_envelope(self.clone())
     }
 }

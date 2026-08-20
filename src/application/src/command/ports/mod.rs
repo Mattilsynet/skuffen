@@ -1,13 +1,11 @@
 pub mod command_dispatcher_port;
-pub mod command_execution_port;
+pub mod command_port;
 pub mod command_state_port;
 pub mod dokument_lager_port;
 pub mod dokument_renderer_port;
 pub mod eksekvering_port;
-pub mod entity_tilstand_port;
-pub mod id_mapping_port;
-pub mod registrer_i_eksekveringssystem_port;
-pub mod status_projection_port;
+pub mod entitet_port;
+pub mod fakta_port;
+pub mod operasjon_port;
 pub mod status_publisher_port;
 pub mod validated_command_dispatcher_port;
-pub mod ventende_kommando_wakeup_port;
