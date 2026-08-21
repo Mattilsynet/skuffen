@@ -107,11 +107,7 @@ pub fn build_query_listener(nats: NatsClient, use_fake_sikri: bool) -> QueryList
     )
 }
 
-/// Lytter på SIGTERM og SIGINT og signaliserer nedstenging.
-///
-/// Cloud Run sender SIGTERM og dreper containeren etter 10 sekunder. Uten
-/// dette blir executoren avbrutt der den står — og står den mellom `sendt` og
-/// `fullfor_ok`, er utfallet ukjent og operasjonen må ryddes manuelt.
+/// Cloud Run sender SIGTERM og dreper containeren 10 sekunder senere.
 pub async fn vent_paa_nedstengingssignal(
     shutdown: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<()> {

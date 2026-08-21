@@ -137,10 +137,8 @@ where
     #[tracing::instrument(skip_all)]
     pub async fn run(&self) -> anyhow::Result<()> {
         info!("Lytter etter meldinger på subject '{}'", self.subject);
-        // Queue group, ikke vanlig subscribe: uten den svarer *alle* instanser
-        // på samme forespørsel. Det skjer ved deploy-overlapp, når ny og gammel
-        // revisjon lever samtidig. Alle de andre lytterne er allerede arbitrert
-        // slik — denne var den eneste som ikke var det.
+        // Uten queue group svarer alle instanser på samme forespørsel. Det
+        // skjer ved utrullingsoverlapp, når to revisjoner lever samtidig.
         let queue_group = format!("skuffen-query-{}", self.subject);
         let mut sub = self
             .client

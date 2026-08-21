@@ -75,11 +75,8 @@ impl OperasjonWorker {
         }
     }
 
-    /// Venter på lederskap, og kjører til nedstenging blir bedt om.
-    ///
-    /// Returnerer `Ok(())` bare når nedstenging er signalisert. Feil
-    /// propagerer, slik at supervisoren kan restarte med backoff — da slippes
-    /// også leasen, og en annen instans kan overta i mellomtiden.
+    /// Feil propagerer til supervisoren, som restarter med backoff. Leasen
+    /// slippes da, så en annen instans kan overta i mellomtiden.
     pub async fn run(&self) -> Result<()> {
         let Some(_lease) = self.vent_paa_lederskap().await? else {
             return Ok(());
@@ -99,21 +96,17 @@ impl OperasjonWorker {
                 return Ok(());
             }
 
-            // Evalueringspasset *er* readiness-mekanismen: en nydekomponert
-            // operasjon står `blokkert` til et pass flytter den til `klar`.
-            // Passet må derfor gå på pollefrekvensen, ikke på varselintervallet.
+            // En nydekomponert operasjon står `blokkert` til et pass flytter
+            // den til `klar`. Passet er derfor readiness-mekanismen, og må gå
+            // på pollefrekvensen.
             self.evaluator.run_evaluation_pass().await?;
 
-            // Tøm køen før vi sover. Hver fullførte operasjon kan gjøre søsken
-            // kjørbare, så vi evaluerer på nytt mellom hver.
             let mut arbeidet = false;
             while self.executor.run_next().await? {
                 arbeidet = true;
 
-                // Nedstenging sjekkes **mellom** operasjoner, aldri under.
-                // En operasjon som er avbrutt etter `sendt` har ukjent utfall
-                // og krever manuell opprydding; en som får fullføre koster
-                // ingenting.
+                // Avbrytes en operasjon etter `sendt`, er utfallet ukjent og
+                // må ryddes manuelt. Derfor mellom operasjoner, aldri under.
                 if self.shutdown.is_cancelled() {
                     return Ok(());
                 }
@@ -131,14 +124,11 @@ impl OperasjonWorker {
         }
     }
 
-    /// Venter til denne instansen blir eneste executor.
+    /// Venter til denne instansen blir eneste executor. Ved utrulling starter
+    /// ny instans mens den gamle fortsatt holder låsen, og overtar når den
+    /// slipper den.
     ///
-    /// At en annen instans er leder er en normal, midlertidig tilstand — ikke
-    /// en feil, og ikke en grunn til å gi opp. Ved utrulling starter ny
-    /// instans mens den gamle fortsatt holder låsen, og skal overta av seg selv
-    /// når den gamle slipper den.
-    ///
-    /// `None` betyr at nedstenging kom før vi rakk å bli leder.
+    /// `None` betyr at nedstenging kom først.
     async fn vent_paa_lederskap(&self) -> Result<Option<Box<dyn ExecutorLease>>> {
         loop {
             if self.shutdown.is_cancelled() {
@@ -157,7 +147,7 @@ impl OperasjonWorker {
         }
     }
 
-    /// Sover, men våkner med én gang hvis nedstenging blir signalisert.
+    /// Våkner umiddelbart ved nedstenging.
     async fn sov(&self, varighet: Duration) {
         tokio::select! {
             _ = tokio::time::sleep(varighet) => {}

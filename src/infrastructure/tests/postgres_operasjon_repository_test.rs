@@ -305,7 +305,6 @@ async fn status_kan_leses_tilbake_som_domenetype() {
 // Executor-låsen (SKU-0016 R5, single executor)
 // ---------------------------------------------------------------------------
 
-/// Låsen skal utelukke en annen instans så lenge leasen lever.
 #[tokio::test]
 async fn andre_instans_far_ikke_laasen_mens_forste_holder_den() {
     let fixture = start().await;
@@ -326,8 +325,6 @@ async fn andre_instans_far_ikke_laasen_mens_forste_holder_den() {
     drop(lease);
 }
 
-/// Låsen slippes når leasen droppes, slik at en annen instans kan overta.
-/// Dette er deploy-overtakelsen: gammel instans dør, ny skal kunne bli leder.
 #[tokio::test]
 async fn laasen_slippes_naar_leasen_droppes() {
     let fixture = start().await;
@@ -354,9 +351,6 @@ async fn laasen_slippes_naar_leasen_droppes() {
     );
 }
 
-/// Låsen må ikke ligge igjen på en pooled connection. Holder vi den på en
-/// connection som leveres tilbake, kan poolen dele den ut til andre spørringer
-/// og resirkulere den — og da forsvinner låsen i stillhet.
 #[tokio::test]
 async fn laasen_overlever_at_poolen_brukes_til_annet_arbeid() {
     let fixture = start().await;
@@ -406,9 +400,6 @@ async fn detach_stjeler_ikke_plass_i_poolen() {
 // Lederskap ved utrulling
 // ---------------------------------------------------------------------------
 
-/// Ved utrulling starter ny instans mens den gamle fortsatt holder låsen. Den
-/// nye skal vente og overta — ikke gi opp. Før fiksen returnerte workeren
-/// `Ok(())` med én gang og lot instansen stå uten executor resten av levetiden.
 #[tokio::test]
 async fn ny_instans_overtar_lederskapet_naar_den_gamle_slipper_det() {
     let fixture = start().await;

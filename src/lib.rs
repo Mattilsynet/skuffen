@@ -136,9 +136,8 @@ pub async fn run() -> anyhow::Result<()> {
     spawn_named_task(&mut tasks, "execution_worker", TaskCriticality::Degraded, {
         let shutdown = shutdown.clone();
         async move {
-            // Degraded betyr «prøv igjen». Én forbigående DB-feil skal ikke
-            // etterlate prosessen uten executor for alltid — den skal restarte
-            // med backoff, og da også slippe og gjenerobre lederskapet.
+            // Én forbigående DB-feil skal ikke etterlate prosessen uten
+            // executor. Restart slipper og gjenerobrer også lederskapet.
             infrastructure::nats::supervisor::TaskSupervisor::background("execution_worker")
                 .with_shutdown(shutdown)
                 .run(|| eksekvering_worker.run())

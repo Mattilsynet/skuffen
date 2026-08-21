@@ -84,18 +84,12 @@ pub struct CommandMetadata {
     pub kontekst: domain::eksekvering::typer::Statuskontekst,
 }
 
-/// Bevis på at denne instansen er eneste executor.
-///
-/// Lederskap er noe man **holder**, ikke noe man sjekker én gang: låsen lever
-/// nøyaktig så lenge denne verdien gjør. Droppes den, slippes låsen, og en
-/// annen instans kan overta. Den må derfor eies av workeren gjennom hele dens
-/// levetid.
+/// Lederskapet varer så lenge denne verdien lever. Droppes den, slippes låsen.
 pub trait ExecutorLease: Send + Sync {}
 
 #[async_trait]
 pub trait OperasjonRepository: Send + Sync {
-    /// Forsøker å bli eneste executor. `None` betyr at en annen instans er
-    /// leder nå — en normal, midlertidig tilstand, ikke en feil.
+    /// `None` betyr at en annen instans er leder.
     async fn try_acquire_executor_lock(
         &self,
         executor_id: &str,

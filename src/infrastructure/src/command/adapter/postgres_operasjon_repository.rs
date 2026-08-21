@@ -19,8 +19,7 @@ use uuid::Uuid;
 /// Fast nøkkel for executor-låsen.
 const EXECUTOR_LOCK_KEY: i64 = 4711;
 
-/// Holder sessionen som eier advisory-låsen. Droppes den, lukkes connection-en
-/// og låsen slippes.
+/// Holder sessionen som eier låsen. Droppes den, lukkes connection-en.
 struct PostgresExecutorLease {
     _connection: sqlx::PgConnection,
 }
@@ -178,15 +177,12 @@ impl OperasjonRepository for PostgresOperasjonRepository {
         &self,
         _executor_id: &str,
     ) -> Result<Option<Box<dyn ExecutorLease>>> {
-        // Advisory locks i Postgres tilhører **sessionen**, ikke spørringen.
-        // Tas låsen på en pooled connection som leveres tilbake, slipper
-        // poolen den i stillhet når den resirkulerer connection-en — og da
-        // står workeren igjen og tror den er alene.
+        // Advisory locks tilhører sessionen. En pooled connection som leveres
+        // tilbake tar låsen med seg, og poolen slipper den når den resirkulerer
+        // connection-en etter max_lifetime.
         //
-        // `detach()` tar connection-en permanent ut av poolen. Da lever
-        // sessionen nøyaktig så lenge `PostgresExecutorLease` gjør, og et
-        // drop — også ved panikk eller abort — lukker socketen slik at
-        // Postgres slipper låsen umiddelbart.
+        // `detach()` tar connection-en ut av poolen, så sessionen lever så
+        // lenge leasen gjør.
         let mut connection = self
             .pool
             .acquire()

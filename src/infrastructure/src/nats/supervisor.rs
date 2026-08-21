@@ -39,11 +39,8 @@ impl TaskSupervisor {
         }
     }
 
-    /// Gjør supervisoren nedstengingsbevisst.
-    ///
-    /// Uten dette ville en task som avslutter pent ved SIGTERM blitt restartet
-    /// umiddelbart — supervisoren kan ikke se forskjell på «stoppet fordi den
-    /// skal» og «stoppet uventet».
+    /// Skiller «stoppet fordi den skal» fra «stoppet uventet», slik at en task
+    /// som avslutter ved SIGTERM ikke restartes.
     pub fn with_shutdown(mut self, shutdown: tokio_util::sync::CancellationToken) -> Self {
         self.shutdown = Some(shutdown);
         self
