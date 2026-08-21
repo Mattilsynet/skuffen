@@ -1,8 +1,7 @@
 //! Skriver dekomponeringsplanen: entitet, state og attributter.
 //!
-//! Hele planen går i samme transaksjon som operasjonsradene (SKU-0016 R12).
-//! I v2 var dette 7+ uavhengige autocommit-statements, og en delvis skriving
-//! ga permanent PK-violation ved redelivery.
+//! Hele planen går i samme transaksjon som operasjonsradene (SKU-0016 R12), så
+//! en delvis skriving ikke kan overleve en crash.
 
 use anyhow::{Context, Result};
 use application::command::materialisering::{
@@ -14,8 +13,8 @@ use serde::Serialize;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-// Wire-nære DTO-er som eksisterer kun for JSONB-serialisering. De hører hjemme
-// her fordi serde ikke skal lekke inn i application (repo_rules).
+// DTO-er for JSONB-serialisering. Bor her fordi serde ikke skal inn i
+// application (repo_rules).
 #[derive(Serialize)]
 #[serde(tag = "rolle", rename_all = "snake_case")]
 enum KorrespondansepartJson {
@@ -172,8 +171,8 @@ async fn skriv_sak(
             None => (None, None, None, None, None, Default::default()),
         };
 
-    // Saken kan allerede finnes fra en tidligere kommando; attributter fra
-    // OpprettSak skal ikke overskrives av senere kommandoer (SKU-0009 R5).
+    // Attributter fra OpprettSak skal ikke overskrives av senere kommandoer
+    // som treffer samme sak (SKU-0009 R5).
     sqlx::query(
         r#"INSERT INTO sak_tilstand (
                sak_id, tilstand, sakstittel, arkivdel, ordningsverdi,
@@ -274,7 +273,7 @@ async fn skriv_dokument(
     .await?;
 
     let a = &dokument.attributter;
-    // En mal må rendres før innholdet finnes; bytes er klare med én gang.
+    // En mal må rendres først; bytes er klare med én gang.
     let (tilstand, filtype, dokument_referanse, mal_referanse, felter) = match &a.kilde {
         Dokumentkilde::Bytes {
             dokument_referanse,

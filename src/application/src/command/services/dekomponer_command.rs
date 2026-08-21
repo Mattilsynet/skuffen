@@ -24,10 +24,9 @@ use crate::command::{
 
 /// Dekomponering fra kommando til operasjoner (SKU-0016 R2).
 ///
-/// Skjer **én gang**, når den validerte kommandoen leses inn. Det finnes ingen
-/// re-planlegging: operasjonslisten er en ren funksjon av command payload, og
-/// alt skrives i én transaksjon sammen med de materialiserte attributtene
-/// (R12), slik at en crash aldri etterlater orphan-rader.
+/// Skjer én gang, når den validerte kommandoen leses inn. Operasjonslisten er
+/// en ren funksjon av command payload, og alt skrives i én transaksjon sammen
+/// med de materialiserte attributtene (R12).
 pub struct DekomponerCommandService {
     entitet: Box<dyn EntitetRepository>,
     operasjon: Box<dyn OperasjonRepository>,
@@ -55,8 +54,8 @@ impl DekomponerCommandService {
             .await
             .context("failed to persist decomposition")?;
 
-        // `rows_affected` er signalet om det var første gang. En replay setter
-        // inn null rader, så ingen egen flaggkolonne trengs.
+        // En replay setter inn null rader, så `rows_affected` sier om det var
+        // første gang.
         if resultat.var_forste_gang() {
             self.status_publisher
                 .publiser_command_status(CommandStatus::new(
@@ -156,9 +155,9 @@ impl DekomponerCommandService {
         let mut dokument_spesifikasjoner = Vec::with_capacity(felles.dokumenter.len());
         let mut dokument_rader = Vec::with_capacity(felles.dokumenter.len());
 
-        // Rekkefølgen i DTO-en er hoveddokument først. Den gjøres eksplisitt
-        // her (D27) i stedet for å overleve som en implisitt bivirkning av at
-        // id-ene genereres i payload-rekkefølge.
+        // Hoveddokument først i DTO-en. Rekkefølgen gjøres eksplisitt her
+        // (D27), i stedet for å overleve som bivirkning av at id-ene genereres
+        // i payload-rekkefølge.
         for (indeks, dokument) in felles.dokumenter.iter().enumerate() {
             let rekkefolge = u16::try_from(indeks)
                 .map_err(|_| anyhow!("for mange dokumenter på journalposten"))?;
@@ -333,14 +332,12 @@ impl DekomponerCommandService {
 
     /// Oversetter klientens referanse til vår `skuffen_id`.
     ///
-    /// Feiler hardt hvis entiteten ikke finnes: etter at ingest sluttet å minte
-    /// id-er for entiteter kommandoen bare refererer til, betyr en manglende
-    /// rad at validering slapp gjennom noe den ikke skulle. Dekomponering skal
-    /// ikke reparere det ved å opprette entiteten.
+    /// Feiler hardt hvis entiteten mangler: ingest minter bare id-er for
+    /// entiteter kommandoen oppretter, så en manglende rad betyr at validering
+    /// slapp gjennom noe. Dekomponering skal ikke reparere det.
     ///
     /// Typesjekken hindrer at en gjenbrukt `client_reference` gir en
-    /// journalposts id inn som `sak_id` — den svake FK-en i `operasjon`
-    /// garanterer bare at entiteten finnes, ikke at typen passer.
+    /// journalposts id inn som `sak_id`.
     async fn skuffen_id(&self, client_reference: Uuid, forventet: EntitetType) -> Result<Uuid> {
         let entitet = self
             .entitet

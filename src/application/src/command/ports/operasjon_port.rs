@@ -9,10 +9,8 @@ use uuid::Uuid;
 
 use crate::command::materialisering::Dekomponeringsplan;
 
-/// Faktaendringen en vellykket operasjon medfører.
-///
 /// Skrives sammen med statusovergangen `sendt → ok` i én transaksjon
-/// (SKU-0016 R4), slik at arkivsvaret og faktaene aldri kan divergere.
+/// (SKU-0016 R4), så arkivsvar og fakta ikke kan divergere.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Faktaoppdatering {
     Ingen,
@@ -31,7 +29,7 @@ pub enum Faktaoppdatering {
     JournalpostOpprettet {
         journalpost_id: SkuffenJournalpostId,
         arkiv_id: String,
-        /// Hoveddokumentet følger med opprettelsen og ligger dermed i arkivet.
+        /// Følger med opprettelsen, og ligger dermed i arkivet.
         hoveddokument_id: SkuffenDokumentId,
     },
     VedleggArkivert {
@@ -47,11 +45,10 @@ pub enum Faktaoppdatering {
 /// Foldet over `operasjon` (SKU-0016 R8). CommandStatus er ikke en kolonne.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandOutcome {
-    /// Minst én operasjon er ikke terminal, og ingen har feilet.
     Uavklart,
-    /// Alle operasjoner er terminalt ok.
+    /// Alle operasjoner terminalt ok.
     Fullfort,
-    /// Minst én operasjon er terminalt feilet. Monotont — kan ikke gå tilbake.
+    /// Minst én terminalt feilet. Monotont: kan ikke gå tilbake.
     Feilet,
 }
 
@@ -95,13 +92,11 @@ pub trait OperasjonRepository: Send + Sync {
         executor_id: &str,
     ) -> Result<Option<Box<dyn ExecutorLease>>, anyhow::Error>;
 
-    /// Persisterer en ferdig utregnet dekomponering: entitet, state og alle
-    /// operasjonsrader, i én transaksjon.
+    /// Skriver entitet, state og operasjonsrader i én transaksjon.
+    /// Operasjonslisten kommer fra domenets `dekomponer`.
     ///
-    /// Regner ikke ut noe selv — operasjonslisten kommer fra domenets
-    /// `dekomponer`. Idempotent via
-    /// `UNIQUE (command_id, operasjonstype, entitet_id)`, så en replay setter
-    /// inn null rader.
+    /// Idempotent via `UNIQUE (command_id, operasjonstype, entitet_id)`, så en
+    /// replay setter inn null rader.
     async fn lagre_dekomponering(
         &self,
         plan: Dekomponeringsplan,

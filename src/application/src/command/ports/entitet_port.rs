@@ -4,9 +4,8 @@ use uuid::Uuid;
 
 /// Identitetstabellen (SKU-0016 R11). Master for `skuffen_id`.
 ///
-/// Består som egen tabell fordi `skuffen_id` mintes ved ingest, før vi vet om
-/// entiteten noensinne får en state-rad: en kommando kan mottas, id-er deles
-/// ut, og så feile validering.
+/// Egen tabell fordi id-ene mintes ved ingest, før validering — en kommando kan
+/// få id-er og så bli avvist, uten at noen state-rad oppstår.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NyEntitet {
     pub skuffen_id: Uuid,
@@ -25,10 +24,8 @@ pub struct Entitet {
 
 #[async_trait]
 pub trait EntitetRepository: Send + Sync {
-    /// Idempotent. Returnerer den effektive `skuffen_id`-en: er
-    /// `client_reference` sett før, vinner den eksisterende raden. Det gjør at
-    /// en replay etter dispatch-feil gjenbruker id-ene fra første forsøk i
-    /// stedet for å minte nye.
+    /// Idempotent: en kjent `client_reference` gir den eksisterende
+    /// `skuffen_id`, slik at en replay gjenbruker id-ene fra første forsøk.
     async fn registrer(&self, entitet: NyEntitet) -> Result<Uuid, anyhow::Error>;
 
     async fn hent_for_client_reference(
@@ -36,8 +33,7 @@ pub trait EntitetRepository: Send + Sync {
         client_reference: Uuid,
     ) -> Result<Option<Entitet>, anyhow::Error>;
 
-    /// Rent oppslag. Oppretter aldri — brukes fra query-siden, som ikke skal
-    /// ha bivirkninger.
+    /// Rent oppslag, uten bivirkninger. Brukes fra query-siden.
     async fn hent_for_arkiv_id(
         &self,
         entitet_type: EntitetType,

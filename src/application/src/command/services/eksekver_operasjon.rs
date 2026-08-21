@@ -21,24 +21,19 @@ use crate::command::ports::{
     status_publisher_port::StatusPublisher,
 };
 
-/// Hva ett utført forsøk endte i.
 enum Utfall {
-    /// Operasjonen er ferdig; skriv fakta og gå terminalt ok.
     Ferdig(Faktaoppdatering),
-    /// Ikke ferdig ennå. Skriv observerte fakta og prøv igjen senere.
+    /// Skriv observerte fakta og prøv igjen senere.
     PollIgjen {
         oppdatering: Faktaoppdatering,
         om: Duration,
     },
 }
 
-/// Utfører én operasjon.
-///
-/// Skriveoperasjoner går i to faser (SKU-0016 R4): `klar → sendt` commites
-/// **før** arkivkallet, og `sendt → ok` med arkivsvar og faktaoppdatering
-/// commites i én transaksjon etterpå. Det er der at-most-once-grensen
-/// registreres — en DB-feil etter et vellykket arkivskriv gir dermed
-/// `krever_avklaring` ved recovery, ikke et duplikat i arkivet.
+/// Skriveoperasjoner går i to faser (SKU-0016 R4): `klar → sendt` commites før
+/// arkivkallet, og `sendt → ok` med arkivsvar og faktaoppdatering i én
+/// transaksjon etterpå. Der ligger at-most-once-grensen — en DB-feil etter et
+/// vellykket arkivskriv gir `krever_avklaring`, ikke et duplikat.
 pub struct EksekverOperasjonService {
     operasjon: Box<dyn OperasjonRepository>,
     fakta: Box<dyn FaktaRepository>,
@@ -49,8 +44,7 @@ pub struct EksekverOperasjonService {
     poll_intervall: Duration,
 }
 
-/// Rendring er skilt ut som egen seam fordi den henter mal fra object store og
-/// lagrer PDF, mens resten av executoren bare snakker med arkivet.
+/// Egen seam fordi rendring går mot object store, ikke mot arkivet.
 #[async_trait::async_trait]
 pub trait RenderOperasjon: Send + Sync {
     async fn render(
@@ -101,8 +95,8 @@ impl EksekverOperasjonService {
 
         match self.beslutt(&op, &facts).await? {
             Beslutning::Blokkert(grunn) => {
-                // Blokkeringsårsak er spørrbar tilstand, ikke en hendelse
-                // (D33) — vi publiserer ikke ved `blokkert ↔ klar`-flakking.
+                // Blokkeringsårsak er spørrbar tilstand (D33), så vi
+                // publiserer ikke ved `blokkert ↔ klar`-flakking.
                 self.operasjon
                     .marker_blokkert(op.operasjon_id, None, &grunn.safe_detail())
                     .await?;

@@ -12,10 +12,8 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// Arkivet uten Sikri. Brukes når gatewayen ikke er konfigurert.
-///
-/// Den holder journalpoststatus i minnet slik at `AvventJournalfort` faktisk
-/// kan observere en overgang i stedet for å polle mot en konstant.
+/// Arkivet uten Sikri. Holder journalpoststatus i minnet, så
+/// `AvventJournalfort` kan observere en faktisk overgang.
 #[derive(Clone, Default)]
 pub struct FakeArkivGateway {
     sak_counter: Arc<AtomicUsize>,
@@ -95,12 +93,7 @@ impl ArkivGateway for FakeArkivGateway {
         Ok(())
     }
 
-    /// Simulerer SvarUt og RPA.
-    ///
-    /// I ekte drift setter SvarUt `F → E` på et par minutter, og RPA `E → J`
-    /// på en halv til én time. Fake-en gjør det samme, ett steg per
-    /// observasjon, slik at `AvventJournalfort` faktisk kan bli terminal uten
-    /// eksterne roboter.
+    /// Simulerer SvarUt (`F → E`) og RPA (`E → J`), ett steg per observasjon.
     async fn hent_journalstatus(
         &self,
         journalpost_id: i32,

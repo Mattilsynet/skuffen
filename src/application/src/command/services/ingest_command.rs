@@ -21,13 +21,10 @@ impl IntoCommandBatch for Vec<CommandEnvelope<Command>> {
     }
 }
 
-/// Mottak av kommandoer.
-///
-/// Idempotency-nøkkelen er `kommando.dispatchet_at`, ikke radens eksistens
+/// Idempotency-nøkkelen er `command.dispatchet_at`, ikke radens eksistens
 /// (SKU-0016 R11). Rekkefølgen er: skriv mottaksraden, mint id-ene, dispatch,
-/// og **først da** sett milepælen. Feiler dispatch, står milepælen igjen som
-/// `NULL`, og en klient-retry sender kommandoen på nytt i stedet for å få
-/// OK-kvittering for noe som aldri ble utført.
+/// og først da sett milepælen. Feiler dispatch, står milepælen som `NULL`, og
+/// en klient-retry sender kommandoen på nytt.
 pub struct IngestCommandService {
     command: Box<dyn CommandRepository>,
     entitet: Box<dyn EntitetRepository>,
@@ -50,9 +47,8 @@ impl IngestCommandService {
         }
     }
 
-    /// Håndterer en batch. Returnerer alle command-id-er i innsendt
-    /// rekkefølge, inkludert idempotent aksepterte (SKU-0008 R3). Feiler én,
-    /// feiler hele batchen — ingen partial acceptance rapporteres.
+    /// Returnerer alle command-id-er i innsendt rekkefølge, inkludert
+    /// idempotent aksepterte (SKU-0008 R3). Feiler én, feiler hele batchen.
     pub async fn handle(&self, commands: impl IntoCommandBatch) -> Result<Vec<Uuid>> {
         let mut command_ids = Vec::new();
 
@@ -75,7 +71,7 @@ impl IngestCommandService {
             .context("failed to record command receipt")?;
 
         if !mottak.maa_dispatches() {
-            // Ekte duplikat: kommandoen er allerede sendt videre.
+            // Ekte duplikat.
             return Ok(());
         }
 
@@ -108,11 +104,10 @@ impl IngestCommandService {
         Ok(())
     }
 
-    /// Minter `skuffen_id` for alle entitetene kommandoen nevner.
+    /// Minter `skuffen_id` for entitetene kommandoen oppretter.
     ///
-    /// Skjer før validering, som er hele grunnen til at `entitet` består som
-    /// egen tabell: en kommando kan mottas, id-er deles ut, og så feile
-    /// validering uten at noen state-rad noensinne oppstår (SKU-0016 R11).
+    /// Skjer før validering, som er grunnen til at `entitet` er en egen tabell:
+    /// id-ene kan deles ut og kommandoen så bli avvist (SKU-0016 R11).
     async fn registrer_entiteter(&self, envelope: &CommandEnvelope<Command>) -> Result<()> {
         match &envelope.payload {
             Command::OpprettSak(command) => {

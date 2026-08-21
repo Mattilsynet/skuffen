@@ -5,31 +5,29 @@ use crate::command::materialisering::{
     DokumentAttributter, JournalpostAttributter, SakAttributter,
 };
 
-/// Arkivstatusen `AvventJournalfort` observerer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObservertJournalstatus {
-    /// `R` — reservert / under arbeid.
+    /// `R`
     Reservert,
-    /// `F` — ferdig for ekspedering.
+    /// `F`
     KlarForEkspedering,
-    /// `E` — ekspedert.
+    /// `E`
     Ekspedert,
-    /// `J` — journalført og låst.
+    /// `J`
     Journalfoert,
-    /// Noe annet; behandles som «ikke ferdig ennå».
+    /// Behandles som «ikke ferdig ennå».
     Annet,
 }
 
-/// Journalstatuskodene Skuffen selv setter.
-///
-/// Skuffen setter aldri `J` på utgående — det gjør RPA (SKU-0016 R10).
+/// Statuskodene Skuffen selv setter. På utgående settes `J` av RPA
+/// (SKU-0016 R10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Journalstatus {
-    /// `J` — kun inngående og internt notat.
+    /// `J`. Kun inngående og internt notat.
     Journalfoert,
-    /// `E` — utgående uten utsending.
+    /// `E`. Utgående uten utsending.
     Ekspedert,
-    /// `F` — utgående med utsending, trigger SvarUt.
+    /// `F`. Trigger SvarUt.
     KlarForEkspedering,
 }
 
@@ -53,10 +51,8 @@ pub struct OpprettJournalpostResultat {
     pub journalpost_id: i32,
 }
 
-/// Arkivet, sett fra application.
-///
-/// Alle argumenter er materialiserte attributter. Gatewayen får aldri
-/// `CommandEnvelope` og executor rører derfor aldri wire-typer (SKU-0016 R12).
+/// Alle argumenter er materialiserte attributter, så executor aldri rører
+/// wire-typer (SKU-0016 R12).
 #[async_trait]
 pub trait ArkivGateway: Send + Sync {
     async fn opprett_sak(
@@ -71,8 +67,8 @@ pub trait ArkivGateway: Send + Sync {
         hoveddokument: &DokumentAttributter,
     ) -> Result<OpprettJournalpostResultat, anyhow::Error>;
 
-    /// Ett vedlegg om gangen (D5). Sikris batch-API returnerer
-    /// `Vec<Option<i32>>` og partial success er ikke håndterbart.
+    /// Ett om gangen (D5). Sikris batch-API returnerer `Vec<Option<i32>>`,
+    /// der partial success ikke er håndterbart.
     async fn legg_til_vedlegg(
         &self,
         journalpost_id: i32,
@@ -88,7 +84,7 @@ pub trait ArkivGateway: Send + Sync {
     /// Kun inngående avskrives (D21). `TE` — tatt til etterretning.
     async fn avskriv_journalpost(&self, journalpost_id: i32) -> Result<(), anyhow::Error>;
 
-    /// Observasjon for `AvventJournalfort`. Muterer ingenting.
+    /// Ren observasjon.
     async fn hent_journalstatus(
         &self,
         journalpost_id: i32,
@@ -104,7 +100,7 @@ pub trait ArkivGateway: Send + Sync {
     ) -> Result<(), anyhow::Error>;
 }
 
-/// Rendring av HTML-mal til PDF, lagret på deterministisk nøkkel.
+/// Lagret på deterministisk nøkkel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderResultat {
     pub rendered_dokument_referanse: Uuid,

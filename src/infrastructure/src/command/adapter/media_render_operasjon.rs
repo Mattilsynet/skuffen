@@ -1,9 +1,7 @@
 //! Rendring av HTML-mal til PDF.
 //!
-//! Skilt fra arkivgatewayen fordi den henter mal fra object store og lagrer
-//! PDF, i stedet for å snakke med arkivet. Operasjonen er idempotent: PDF-en
-//! lagres på en deterministisk nøkkel utledet fra `dokument_id`, så et nytt
-//! forsøk overskriver samme objekt (SKU-0016 D7).
+//! PDF-en lagres på en deterministisk nøkkel utledet fra `dokument_id`, så et
+//! nytt forsøk overskriver samme objekt (SKU-0016 D7).
 
 use application::command::ports::dokument_renderer_port::{
     DokumentRenderer, RendererFeil, RendererKontekst,
@@ -17,8 +15,7 @@ use uuid::Uuid;
 
 use crate::command::media::{MediaFile, MediaMetadata, MediaStore};
 
-/// Namespace for den deterministiske PDF-nøkkelen. Endres den, mister vi
-/// idempotensen for allerede rendrede dokumenter.
+/// Endres denne, mister allerede rendrede dokumenter idempotensen sin.
 const RENDERED_DOKUMENT_NAMESPACE: Uuid = uuid::uuid!("3bc0f83e-28df-5d9b-a7e2-90a6c8f2fbb4");
 
 pub fn rendered_dokument_referanse(dokument_id: SkuffenDokumentId) -> Uuid {

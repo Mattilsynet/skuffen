@@ -35,10 +35,7 @@ pub struct Saksansvarlig {
 // Tilstander
 // ---------------------------------------------------------------------------
 
-/// Sakens tilstand i arkivet.
-///
-/// Ingen feiltilstand her med vilje: at et forsøk på å opprette saken feilet
-/// er eksekvering, ikke et faktum om saken. Det bor på `operasjon.status`.
+/// Sakens tilstand i arkivet. Eksekveringsutfall bor på `operasjon.status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SakTilstand {
     IkkeOpprettet,
@@ -46,15 +43,12 @@ pub enum SakTilstand {
     Avsluttet,
 }
 
-/// Journalpostens observerte arkivstatus.
-///
-/// Skuffen oppretter aldri en journalpost direkte i `Journalfoert`; hver
-/// statusovergang er en egen operasjon (SKU-0016 R10).
+/// Journalpostens observerte arkivstatus. Hver overgang er en egen operasjon,
+/// og Skuffen oppretter aldri direkte i `Journalfoert` (SKU-0016 R10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JournalpostTilstand {
-    /// Finnes ikke i arkivet ennå.
     IkkeOpprettet,
-    /// Opprettet. `I`/`X` i sin åpne startstatus, `U` i `R`.
+    /// `I`/`X` i sin åpne startstatus, `U` i `R`.
     Opprettet,
     /// `F` — klar for ekspedering via SvarUt.
     KlarForEkspedering,
@@ -66,14 +60,13 @@ pub enum JournalpostTilstand {
     Avskrevet,
 }
 
-/// Dokumentets livsløp fra innhold til arkiv.
+/// Fra innhold til arkiv.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DokumentTilstand {
-    /// HTML-mal som ennå ikke er rendret til PDF.
     AvventerRendring,
-    /// Innholdet finnes og er klart, men dokumentet er ikke i arkivet ennå.
+    /// Innholdet er klart, men dokumentet er ikke i arkivet.
     Klar,
-    /// Dokumentet ligger i arkivet.
+    /// Ligger i arkivet.
     Ok,
 }
 
@@ -85,11 +78,10 @@ pub enum DokumentTilstand {
 pub struct SakMedBarn {
     pub sak_id: SkuffenSakId,
     pub tilstand: SakTilstand,
-    /// Sakens arkiv-id (saksnummer). Eneste kilde er `entitet.arkiv_id`.
+    /// Saksnummer. Eneste kilde er `entitet.arkiv_id`.
     pub arkiv_id: Option<String>,
-    /// Ønsket saksansvarlig (Noark 5 M306), materialisert ved dekomponering.
+    /// Materialisert ved dekomponering.
     pub oensket_saksansvarlig: Option<Saksansvarlig>,
-    /// Nåværende saksansvarlig satt i arkivet.
     pub naavaerende_saksansvarlig: Option<Saksansvarlig>,
     pub journalposter: Vec<JournalpostMedDokumenter>,
 }
@@ -98,7 +90,7 @@ pub struct SakMedBarn {
 pub struct JournalpostMedDokumenter {
     pub journalpost_id: SkuffenJournalpostId,
     pub tilstand: JournalpostTilstand,
-    /// Journalpostens arkiv-id. Eneste kilde er `entitet.arkiv_id`.
+    /// Eneste kilde er `entitet.arkiv_id`.
     pub arkiv_id: Option<String>,
     pub journalposttype: JournalpostType,
     pub med_utsending: bool,
@@ -139,7 +131,7 @@ impl SakMedBarn {
         self.journalposter.iter().find(|jp| jp.journalpost_id == id)
     }
 
-    /// Finner dokumentet og journalposten det hører til.
+    /// Gir også journalposten dokumentet hører til.
     pub fn dokument(
         &self,
         id: SkuffenDokumentId,

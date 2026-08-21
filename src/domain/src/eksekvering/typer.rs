@@ -1,8 +1,7 @@
 //! Statuskontrakten innad (SKU-0016 R8/R9, D31–D33).
 //!
-//! Én strøm, to hendelsestyper. Dagens 3×5-matrise av `phase` × `status` med
-//! `unreachable!()` for ulovlige kombinasjoner er erstattet av flate,
-//! uttømmende enums.
+//! Én strøm, to hendelsestyper. Erstatter matrisen `phase` × `status`, som
+//! hadde kombinasjoner som aldri kunne oppstå.
 
 use chrono::Utc;
 use uuid::Uuid;
@@ -70,7 +69,7 @@ impl StatusErrorCode {
 }
 
 // ---------------------------------------------------------------------------
-// CommandEventr
+// Kommandohendelser
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,9 +94,8 @@ impl CommandEvent {
         }
     }
 
-    /// `terminal: true` betyr at utfallet er avgjort, ikke at flere eventer er
-    /// utelukket (SKU-0016 R9). Operasjonseventer kan fortsette etterpå fordi
-    /// søsken kjører videre best effort.
+    /// Utfallet er avgjort (SKU-0016 R9). Operasjonseventer kan fortsette
+    /// etterpå, fordi søsken kjører videre best effort.
     pub fn er_terminal(self) -> bool {
         matches!(self, Self::Avvist | Self::Fullfort | Self::Feilet)
     }
@@ -109,13 +107,13 @@ impl CommandEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operasjonshendelse {
-    /// Recoverable feil; nytt forsøk kommer.
+    /// Nytt forsøk kommer.
     ForsokFeilet,
     Ok,
     Feilet,
     /// Ukjent utfall etter crash i `sendt`. Krever menneske (SKU-0016 R5).
     KreverAvklaring,
-    /// Advisory 24-timersvarsel. Avbryter ingenting (D11).
+    /// Advisory 24-timersvarsel (D11).
     Varsel,
 }
 
@@ -139,7 +137,7 @@ impl Operasjonshendelse {
 // Kontekst og hendelser
 // ---------------------------------------------------------------------------
 
-/// Identifikatorer klienten kan koble mot sine egne referanser.
+/// Identifikatorer klienten kan koble mot sine egne.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Statuskontekst {
     pub sak_client_reference: Option<String>,
@@ -166,7 +164,7 @@ pub struct CommandStatus {
     pub command_type: CommandTypeCode,
     pub hendelse: CommandEvent,
     pub terminal: bool,
-    /// Statisk, klientvennlig. Aldri intern detalj eller stacktrace.
+    /// Klientvennlig. Aldri intern detalj eller stacktrace.
     pub melding: String,
     pub error_code: Option<StatusErrorCode>,
     pub kontekst: Statuskontekst,
@@ -242,8 +240,8 @@ impl Operasjonstatus {
         }
     }
 
-    /// Publiseres kun ved forsøksutfall, aldri ved `blokkert ↔ klar`-flakking
-    /// (D33). Blokkeringsårsak er spørrbar tilstand, ikke en hendelse.
+    /// Publiseres kun ved forsøksutfall (D33). Blokkeringsårsak er spørrbar
+    /// tilstand.
     pub fn message_id(&self) -> String {
         format!("{}:{}", self.operasjon_id.0, self.attempt_no)
     }
@@ -257,7 +255,6 @@ impl Operasjonstatus {
 pub enum Feiltype {
     /// Retryes for alltid med backoff (SKU-0016 R6).
     Recoverable,
-    /// Terminal `feilet`.
     Irrecoverable,
 }
 

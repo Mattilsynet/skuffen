@@ -13,10 +13,8 @@ use application::command::services::dekomponer_command::DekomponerCommandService
 
 /// Leser validerte kommandoer og dekomponerer dem til operasjoner.
 ///
-/// Dekomponering skjer **én gang**, her. Det finnes ingen re-planlegging
-/// senere; hele planen skrives i én transaksjon og er idempotent via
-/// `UNIQUE (command_id, operasjonstype, entitet_id)`, så en redelivery setter
-/// inn null rader.
+/// Skjer én gang, her. Planen skrives i én transaksjon og er idempotent, så en
+/// redelivery setter inn null rader.
 pub struct DekomponeringListener {
     client: NatsClient,
     service: DekomponerCommandService,

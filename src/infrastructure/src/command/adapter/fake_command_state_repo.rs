@@ -9,10 +9,8 @@ use application::command::ports::command_state_port::{
 
 /// Saker fake-arkivet har opprettet.
 ///
-/// Delt mellom [`FakeArkivGateway`](super::fake_arkiv_gateway::FakeArkivGateway)
-/// og denne repo-en, slik at fake-en kan svare «finnes ikke» på et ukjent
-/// saksnummer. Uten det ville enhver referanse validert grønt, og tester som
-/// hevder at en ukjent sak avvises kunne ikke feile.
+/// Delt med [`FakeArkivGateway`](super::fake_arkiv_gateway::FakeArkivGateway),
+/// så fake-en kan svare «finnes ikke» på et ukjent saksnummer.
 fn kjente_saker() -> &'static Mutex<HashSet<String>> {
     static SAKER: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     SAKER.get_or_init(|| Mutex::new(HashSet::new()))

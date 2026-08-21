@@ -6,10 +6,8 @@ use crate::command::materialisering::{
     DokumentAttributter, JournalpostAttributter, SakAttributter,
 };
 
-/// Fakta: hva som er sant nå.
-///
-/// Skilt fra eksekvering med vilje. Sletter du alle operasjonsrader, må dette
-/// laget fortsatt kunne svare på «hva er sant om denne saken?» (SKU-0016).
+/// Hva som er sant nå. Sletter du alle operasjonsrader, skal dette laget
+/// fortsatt kunne svare på «hva er sant om denne saken?» (SKU-0016).
 #[async_trait]
 pub trait FaktaRepository: Send + Sync {
     /// Faktabildet domenefunksjonene vurderer mot.
@@ -18,7 +16,7 @@ pub trait FaktaRepository: Send + Sync {
         sak_id: SkuffenSakId,
     ) -> Result<Option<SakMedBarn>, anyhow::Error>;
 
-    /// Materialiserte attributter, slik executor slipper å lese payload.
+    /// Materialiserte attributter, så executor slipper å lese payload.
     async fn hent_sak_attributter(
         &self,
         sak_id: SkuffenSakId,

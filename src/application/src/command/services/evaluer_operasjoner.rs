@@ -7,15 +7,13 @@ use domain::eksekvering::operasjon::{
 
 use crate::command::ports::{fakta_port::FaktaRepository, operasjon_port::OperasjonRepository};
 
-/// Periodisk evalueringspass over blokkerte operasjoner (SKU-0016, fase 5).
+/// Evalueringspass over blokkerte operasjoner (SKU-0016).
 ///
-/// Erstatter v2s hendelsesdrevne wake-up. Den stien hadde et hull: en
-/// `Done`-melding uten tilhørende operasjon trigget ingen wake-up, og
-/// blokkerte kommandoer ble stående for alltid fordi det ikke fantes noen
-/// periodisk rescan som reddet dem.
+/// Leser fakta og flytter `blokkert → klar` for det som nå er kjørbart. Et pass
+/// er idempotent og trygt å kjøre så ofte man vil.
 ///
-/// Et pass er idempotent og trygt å kjøre så ofte man vil: det leser fakta og
-/// flytter `blokkert → klar` for det som nå er kjørbart.
+/// Erstatter v2s hendelsesdrevne wake-up, der en `Done`-melding uten
+/// tilhørende operasjon lot blokkerte kommandoer stå for alltid.
 pub struct EvaluerOperasjonerService {
     operasjon: Arc<dyn OperasjonRepository>,
     fakta: Arc<dyn FaktaRepository>,
@@ -27,9 +25,7 @@ pub struct Evalueringsresultat {
     pub vurdert: u64,
     /// Ble kjørbare i dette passet.
     pub frigjort: u64,
-    /// Fakta viser at effekten allerede finnes; terminalt ok uten arkivkall.
     pub allerede_utfort: u64,
-    /// Kan aldri utføres; terminalt feilet.
     pub ugyldig: u64,
 }
 
@@ -74,9 +70,8 @@ impl EvaluerOperasjonerService {
                     resultat.ugyldig += 1;
                 }
                 Beslutning::Blokkert(grunn) => {
-                    // Fortsatt blokkert. Vi oppdaterer årsaken, men publiserer
-                    // ingenting — blokkeringsårsak er spørrbar tilstand, ikke
-                    // en hendelse (D33).
+                    // Årsaken oppdateres, men publiseres ikke:
+                    // blokkeringsårsak er spørrbar tilstand (D33).
                     self.operasjon
                         .marker_blokkert(op.operasjon_id, None, &grunn.safe_detail())
                         .await?;

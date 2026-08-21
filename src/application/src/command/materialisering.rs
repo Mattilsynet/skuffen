@@ -1,8 +1,7 @@
 //! Materialiserte attributter (SKU-0016 R12).
 //!
-//! Dekomponering skriver disse inn i state-tabellene. Executor leser dem
-//! derfra og rører aldri `kommando.payload`. Det fjerner den posisjonelle
-//! koblingen mellom id-liste og payload-liste som fantes i v2.
+//! Dekomponering skriver disse inn i state-tabellene, og executor leser dem
+//! derfra.
 
 use domain::eksekvering::html_template::TemplateFelt;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
@@ -34,23 +33,19 @@ pub struct SakAttributter {
     pub tilgang: Tilgang,
 }
 
-/// Korrespondanseparter, én variant per journalpostform.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Korrespondanseparter {
-    /// Inngående: nøyaktig én avsender.
+    /// Inngående: nøyaktig én.
     Avsender(Korrespondansepart),
-    /// Utgående uten utsending.
     Mottakere(Vec<Korrespondansepart>),
-    /// Utgående med utsending — krever full digital adresse.
+    /// Krever full digital adresse.
     Utsendingsmottakere(Vec<Utsendingsmottaker>),
-    /// Internt notat har ingen.
     Ingen,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalpostAttributter {
-    /// Klientens referanse. Brukes som stabil identifikator i
-    /// arkivmapping-diagnostikk.
+    /// Stabil identifikator i arkivmapping-diagnostikk.
     pub client_reference: Uuid,
     pub tittel: String,
     pub dokument_dato: String,
@@ -63,7 +58,6 @@ pub struct JournalpostAttributter {
     pub kildesystem: Option<String>,
 }
 
-/// Hvor dokumentinnholdet kommer fra, med referansene arkivkallet trenger.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dokumentkilde {
     Bytes {
@@ -78,8 +72,8 @@ pub enum Dokumentkilde {
 }
 
 impl Dokumentkilde {
-    /// Referansen arkivet skal få. For en mal er det den rendrede PDF-en;
-    /// original `mal_referanse` sendes aldri (SKU-0005).
+    /// For en mal er det den rendrede PDF-en; `mal_referanse` sendes aldri
+    /// til arkivet (SKU-0005).
     pub fn arkivreferanse(&self) -> Option<Uuid> {
         match self {
             Self::Bytes {
@@ -110,8 +104,8 @@ impl DokumentAttributter {
 // Dekomponeringsplanen
 // ---------------------------------------------------------------------------
 
-/// Alt dekomponering skal skrive, som én enhet. Skrives i én transaksjon
-/// (SKU-0016 R12) slik at en crash aldri etterlater orphan-rader.
+/// Skrives i én transaksjon (SKU-0016 R12), så en crash ikke kan etterlate
+/// orphan-rader.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dekomponeringsplan {
     pub command_id: Uuid,
@@ -121,8 +115,7 @@ pub struct Dekomponeringsplan {
     pub operasjoner: Vec<OperasjonRad>,
 }
 
-/// Sakens rad. `attributter` er `None` når kommandoen ikke oppretter saken,
-/// og raden da bare skal sikres å eksistere.
+/// `attributter` er `None` når kommandoen ikke oppretter saken.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SakRad {
     pub sak_id: SkuffenSakId,

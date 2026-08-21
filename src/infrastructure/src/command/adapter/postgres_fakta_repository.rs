@@ -282,8 +282,8 @@ fn dokument_med_tilstand(rad: &DokumentRad) -> Result<DokumentMedTilstand> {
 
 #[async_trait]
 impl FaktaRepository for PostgresFaktaRepository {
-    /// Faktabildet domenefunksjonene vurderer mot. Arkiv-id-er joines fra
-    /// `entitet`, som er eneste sted de bor (SKU-0016 R11).
+    /// Arkiv-id-er joines fra `entitet`, som er eneste sted de bor
+    /// (SKU-0016 R11).
     async fn hent_sak_med_barn(&self, sak_id: SkuffenSakId) -> Result<Option<SakMedBarn>> {
         let sak_uuid: Uuid = sak_id.into();
 
@@ -393,7 +393,7 @@ impl FaktaRepository for PostgresFaktaRepository {
             return Ok(None);
         };
 
-        // En sak som ikke ble opprettet av oss har ingen attributter.
+        // En sak vi ikke opprettet har ingen attributter.
         let (Some(sakstittel), Some(arkivdel_kode), Some(ordningsverdi)) =
             (sakstittel, arkivdel_kode, ordningsverdi)
         else {

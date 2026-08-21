@@ -1,8 +1,8 @@
 //! Operasjonsmodellen (SKU-0016).
 //!
-//! En operasjon er ett arkivkall med egen identitet. Dekomponering fra kommando
-//! til operasjoner skjer én gang og er en ren funksjon av command payload
-//! (R2). Avhengigheter utledes fra fakta, ikke fra lagrede kanter (R3).
+//! En operasjon er ett arkivkall med egen identitet. Dekomponering skjer én
+//! gang og er en ren funksjon av command payload (R2). Avhengigheter utledes
+//! fra fakta (R3).
 
 use crate::command::{Dekomponeringsinput, Dokumentkilde};
 use crate::eksekvering::html_template::{FeltVerdier, er_felter_klare};
@@ -35,8 +35,7 @@ impl EntitetType {
 
 /// Polymorf peker til entiteten operasjonen virker på.
 ///
-/// Databasen garanterer at entiteten finnes, ikke at typen passer
-/// operasjonstypen — den regelen lever her (SKU-0016 R12, D28).
+/// Databasen garanterer bare at entiteten finnes; typesjekken lever her (D28).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EntitetId {
     Sak(SkuffenSakId),
@@ -81,9 +80,8 @@ impl From<OperasjonId> for uuid::Uuid {
 // Operasjonstype
 // ---------------------------------------------------------------------------
 
-/// Én operasjonstype er ett API-kall, ikke ett endepunkt. `Journalfor`,
-/// `SettEkspedert` og `KlargjorForEkspedering` treffer samme Sikri-endepunkt,
-/// men har ulike prerequisites og ulik betydning utad (D22).
+/// `Journalfor`, `SettEkspedert` og `KlargjorForEkspedering` treffer samme
+/// Sikri-endepunkt, men har ulike prerequisites og ulik betydning utad (D22).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Operasjonstype {
     OpprettSak,
@@ -134,7 +132,6 @@ impl Operasjonstype {
         Some(value)
     }
 
-    /// Hvilken entitetstype operasjonen forventer å peke på.
     pub fn forventet_entitet_type(self) -> EntitetType {
         match self {
             Self::OpprettSak | Self::SettSaksansvarlig | Self::AvsluttSak => EntitetType::Sak,
@@ -149,13 +146,10 @@ impl Operasjonstype {
     }
 }
 
-/// Styrer om operasjonen må gjennom `sendt`-fasen før utførelse (D7).
+/// Styrer om operasjonen må gjennom `sendt`-fasen (D7).
 ///
-/// Bare operasjoner som faktisk endrer arkivet trenger at-most-once-grensen.
-/// `AvventJournalfort` er en ren observasjon, og `RenderDokument` skriver til
-/// object store på en deterministisk nøkkel — begge kan gjentas uten
-/// konsekvens og skal derfor kunne retryes fritt i stedet for å havne i
-/// `krever_avklaring` etter en crash.
+/// `AvventJournalfort` er en ren observasjon, og `RenderDokument` skriver på en
+/// deterministisk nøkkel. Begge kan gjentas, og retryes derfor fritt.
 pub fn muterer_arkivet(operasjonstype: Operasjonstype) -> bool {
     !matches!(
         operasjonstype,
@@ -167,14 +161,13 @@ pub fn muterer_arkivet(operasjonstype: Operasjonstype) -> bool {
 // Operasjonsrader
 // ---------------------------------------------------------------------------
 
-/// Det dekomponering produserer: én rad som skal skrives til `operasjon`.
+/// Det dekomponering produserer: én rad i `operasjon`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Operasjonsspesifikasjon {
     pub operasjonstype: Operasjonstype,
     pub entitet_id: EntitetId,
 }
 
-/// En persistert operasjon slik executor og evalueringspasset ser den.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Operasjon {
     pub operasjon_id: OperasjonId,
@@ -230,7 +223,7 @@ impl Operasjonsstatus {
     }
 }
 
-/// Nok informasjon om en søskenoperasjon til å avgjøre `AvsluttSak`.
+/// Nok om en søskenoperasjon til å avgjøre `AvsluttSak`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OperasjonSammendrag {
     pub operasjon_id: OperasjonId,
@@ -244,39 +237,31 @@ pub struct OperasjonSammendrag {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Beslutning {
-    /// Prerequisites er oppfylt; operasjonen kan kjøre nå.
     Utfor,
-    /// Prerequisites er ikke oppfylt ennå. Ikke terminalt.
+    /// Ikke terminalt.
     Blokkert(BlockedReason),
     /// Fakta viser at effekten allerede finnes. Terminalt ok uten arkivkall.
     AlleredeUtfort,
-    /// Operasjonen kan aldri utføres. Terminalt feilet.
+    /// Kan aldri utføres. Terminalt feilet.
     Ugyldig(DomainViolation),
 }
 
-/// Hvorfor en operasjon ikke er kjørbar ennå. Kodene er stabile og brukes i
-/// dashboards.
+/// Kodene er stabile og brukes i dashboards.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockedReason {
-    /// Entiteten operasjonen peker på finnes ikke i faktabildet.
     EntityMissing,
-    /// Saken har ikke arkiv-id ennå.
     SaksnummerMangler,
     /// HTML-malen mangler verdier den deklarerer.
     FelterIkkeKlare,
-    /// Hoveddokumentets innhold er ikke klart.
     HoveddokumentIkkeKlart,
-    /// Journalposten finnes ikke i arkivet ennå.
     JournalpostIkkeOpprettet,
     /// Ikke alle dokumenter ligger i arkivet.
     DokumenterIkkeKlare,
-    /// Journalposten er ikke satt til `E` eller `F` ennå.
+    /// Journalposten er ikke satt til `E` eller `F`.
     JournalpostIkkeEkspedert,
-    /// Journalposten er ikke journalført ennå.
     JournalpostIkkeJournalfort,
     /// Andre operasjoner på saken er ikke terminalt ok.
     SoskenIkkeFerdige,
-    /// Journalpostens fakta matcher ingen kjent kjørbar tilstand.
     JournalpostTilstandUavklart,
 }
 
