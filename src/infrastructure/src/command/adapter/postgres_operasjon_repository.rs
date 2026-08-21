@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use application::command::materialisering::Dekomponeringsplan;
 use application::command::ports::operasjon_port::{
-    CommandMetadata, CommandOutcome, Dekomponeringsresultat, Faktaoppdatering, Gjenoppretting,
-    OperasjonRepository,
+    CommandMetadata, CommandOutcome, Dekomponeringsresultat, ExecutorLease, Faktaoppdatering,
+    Gjenoppretting, OperasjonRepository,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -15,6 +15,17 @@ use domain::eksekvering::typer::{CommandTypeCode, Statuskontekst};
 use lib_sql::database_config::DbPool;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
+
+/// Fast nøkkel for executor-låsen.
+const EXECUTOR_LOCK_KEY: i64 = 4711;
+
+/// Holder sessionen som eier advisory-låsen. Droppes den, lukkes connection-en
+/// og låsen slippes.
+struct PostgresExecutorLease {
+    _connection: sqlx::PgConnection,
+}
+
+impl ExecutorLease for PostgresExecutorLease {}
 
 pub struct PostgresOperasjonRepository {
     pool: DbPool,
@@ -163,12 +174,39 @@ async fn skriv_fakta(
 
 #[async_trait]
 impl OperasjonRepository for PostgresOperasjonRepository {
-    async fn try_acquire_executor_lock(&self, _executor_id: &str) -> Result<bool> {
-        // Én aktiv executor, håndhevet med advisory lock på en fast nøkkel.
-        sqlx::query_scalar("SELECT pg_try_advisory_lock(4711)")
-            .fetch_one(&self.pool)
+    async fn try_acquire_executor_lock(
+        &self,
+        _executor_id: &str,
+    ) -> Result<Option<Box<dyn ExecutorLease>>> {
+        // Advisory locks i Postgres tilhører **sessionen**, ikke spørringen.
+        // Tas låsen på en pooled connection som leveres tilbake, slipper
+        // poolen den i stillhet når den resirkulerer connection-en — og da
+        // står workeren igjen og tror den er alene.
+        //
+        // `detach()` tar connection-en permanent ut av poolen. Da lever
+        // sessionen nøyaktig så lenge `PostgresExecutorLease` gjør, og et
+        // drop — også ved panikk eller abort — lukker socketen slik at
+        // Postgres slipper låsen umiddelbart.
+        let mut connection = self
+            .pool
+            .acquire()
             .await
-            .context("failed to acquire executor lock")
+            .context("failed to acquire connection for executor lock")?
+            .detach();
+
+        let fikk_laasen: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+            .bind(EXECUTOR_LOCK_KEY)
+            .fetch_one(&mut connection)
+            .await
+            .context("failed to acquire executor lock")?;
+
+        if fikk_laasen {
+            Ok(Some(Box::new(PostgresExecutorLease {
+                _connection: connection,
+            })))
+        } else {
+            Ok(None)
+        }
     }
 
     async fn lagre_dekomponering(

@@ -5,8 +5,11 @@ use anyhow::Result;
 use chrono::Utc;
 use domain::eksekvering::typer::{Operasjonshendelse, Operasjonstatus, StatusErrorCode};
 
+use tokio_util::sync::CancellationToken;
+
 use crate::command::ports::{
-    operasjon_port::OperasjonRepository, status_publisher_port::StatusPublisher,
+    operasjon_port::{ExecutorLease, OperasjonRepository},
+    status_publisher_port::StatusPublisher,
 };
 use crate::command::services::eksekver_operasjon::EksekverOperasjonService;
 use crate::command::services::evaluer_operasjoner::EvaluerOperasjonerService;
@@ -17,6 +20,8 @@ pub struct WorkerInnstillinger {
     pub varselintervall: Duration,
     /// Hvor lenge workeren sover når køen er tom.
     pub tomgangspause: Duration,
+    /// Hvor ofte en instans som ikke er leder prøver å overta.
+    pub lederforsok_intervall: Duration,
     /// Hvor lenge en operasjon kan være ikke-terminal før den varsles (D11).
     pub varselfrist: chrono::Duration,
     /// Hvor mange operasjoner ett evalueringspass ser på.
@@ -28,6 +33,7 @@ impl Default for WorkerInnstillinger {
         Self {
             varselintervall: Duration::from_secs(30),
             tomgangspause: Duration::from_secs(2),
+            lederforsok_intervall: Duration::from_secs(5),
             varselfrist: chrono::Duration::hours(24),
             evalueringsgrense: 200,
         }
@@ -45,6 +51,7 @@ pub struct OperasjonWorker {
     publisher: Arc<dyn StatusPublisher>,
     executor_id: String,
     innstillinger: WorkerInnstillinger,
+    shutdown: CancellationToken,
 }
 
 impl OperasjonWorker {
@@ -55,6 +62,7 @@ impl OperasjonWorker {
         publisher: Arc<dyn StatusPublisher>,
         executor_id: impl Into<String>,
         innstillinger: WorkerInnstillinger,
+        shutdown: CancellationToken,
     ) -> Self {
         Self {
             executor,
@@ -63,19 +71,19 @@ impl OperasjonWorker {
             publisher,
             executor_id: executor_id.into(),
             innstillinger,
+            shutdown,
         }
     }
 
-    /// Tar eierskap og kjører til prosessen stoppes.
+    /// Venter på lederskap, og kjører til nedstenging blir bedt om.
+    ///
+    /// Returnerer `Ok(())` bare når nedstenging er signalisert. Feil
+    /// propagerer, slik at supervisoren kan restarte med backoff — da slippes
+    /// også leasen, og en annen instans kan overta i mellomtiden.
     pub async fn run(&self) -> Result<()> {
-        if !self
-            .operasjon
-            .try_acquire_executor_lock(&self.executor_id)
-            .await?
-        {
-            // En annen instans eier køen. Ikke en feil.
+        let Some(_lease) = self.vent_paa_lederskap().await? else {
             return Ok(());
-        }
+        };
 
         // Startup recovery før noe annet: `kjorer → klar` er trygt å prøve
         // igjen, `sendt → krever_avklaring` har ukjent utfall (SKU-0016 R5).
@@ -87,8 +95,13 @@ impl OperasjonWorker {
         let mut siste_varsel = std::time::Instant::now();
 
         loop {
+            if self.shutdown.is_cancelled() {
+                return Ok(());
+            }
+
             // Evalueringspasset *er* readiness-mekanismen: en nydekomponert
             // operasjon står `blokkert` til et pass flytter den til `klar`.
+            // Passet må derfor gå på pollefrekvensen, ikke på varselintervallet.
             self.evaluator.run_evaluation_pass().await?;
 
             // Tøm køen før vi sover. Hver fullførte operasjon kan gjøre søsken
@@ -96,6 +109,14 @@ impl OperasjonWorker {
             let mut arbeidet = false;
             while self.executor.run_next().await? {
                 arbeidet = true;
+
+                // Nedstenging sjekkes **mellom** operasjoner, aldri under.
+                // En operasjon som er avbrutt etter `sendt` har ukjent utfall
+                // og krever manuell opprydding; en som får fullføre koster
+                // ingenting.
+                if self.shutdown.is_cancelled() {
+                    return Ok(());
+                }
                 self.evaluator.run_evaluation_pass().await?;
             }
 
@@ -105,8 +126,42 @@ impl OperasjonWorker {
             }
 
             if !arbeidet {
-                tokio::time::sleep(self.innstillinger.tomgangspause).await;
+                self.sov(self.innstillinger.tomgangspause).await;
             }
+        }
+    }
+
+    /// Venter til denne instansen blir eneste executor.
+    ///
+    /// At en annen instans er leder er en normal, midlertidig tilstand — ikke
+    /// en feil, og ikke en grunn til å gi opp. Ved utrulling starter ny
+    /// instans mens den gamle fortsatt holder låsen, og skal overta av seg selv
+    /// når den gamle slipper den.
+    ///
+    /// `None` betyr at nedstenging kom før vi rakk å bli leder.
+    async fn vent_paa_lederskap(&self) -> Result<Option<Box<dyn ExecutorLease>>> {
+        loop {
+            if self.shutdown.is_cancelled() {
+                return Ok(None);
+            }
+
+            if let Some(lease) = self
+                .operasjon
+                .try_acquire_executor_lock(&self.executor_id)
+                .await?
+            {
+                return Ok(Some(lease));
+            }
+
+            self.sov(self.innstillinger.lederforsok_intervall).await;
+        }
+    }
+
+    /// Sover, men våkner med én gang hvis nedstenging blir signalisert.
+    async fn sov(&self, varighet: Duration) {
+        tokio::select! {
+            _ = tokio::time::sleep(varighet) => {}
+            _ = self.shutdown.cancelled() => {}
         }
     }
 

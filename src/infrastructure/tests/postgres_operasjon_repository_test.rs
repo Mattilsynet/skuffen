@@ -29,6 +29,7 @@ const OPPTATT_SAKSNUMMER: &str = "2026/1";
 struct Fixture {
     _container: testcontainers::ContainerAsync<Postgres>,
     pool: DbPool,
+    connect_options: PgConnectOptions,
 }
 
 /// Bygges fra deler, ikke som URL-streng — testcontainers-URL-er ser ut som
@@ -48,9 +49,11 @@ async fn start() -> Fixture {
         .get_host_port_ipv4(5432)
         .await
         .expect("postgres port");
+    let connect_options = connect_options(port);
+
     let pool = PgPoolOptions::new()
         .max_connections(4)
-        .connect_with(connect_options(port))
+        .connect_with(connect_options.clone())
         .await
         .expect("koblet til postgres");
 
@@ -61,6 +64,7 @@ async fn start() -> Fixture {
     Fixture {
         _container: container,
         pool,
+        connect_options,
     }
 }
 
@@ -295,4 +299,142 @@ async fn status_kan_leses_tilbake_som_domenetype() {
         repo.hent_status(OperasjonId(OPERASJON_ID)).await.unwrap(),
         Some(Operasjonsstatus::Sendt)
     );
+}
+
+// ---------------------------------------------------------------------------
+// Executor-låsen (SKU-0016 R5, single executor)
+// ---------------------------------------------------------------------------
+
+/// Låsen skal utelukke en annen instans så lenge leasen lever.
+#[tokio::test]
+async fn andre_instans_far_ikke_laasen_mens_forste_holder_den() {
+    let fixture = start().await;
+    let a = PostgresOperasjonRepository::new(fixture.pool.clone());
+    let b = PostgresOperasjonRepository::new(fixture.pool.clone());
+
+    let lease = a
+        .try_acquire_executor_lock("a")
+        .await
+        .unwrap()
+        .expect("første instans blir leder");
+
+    assert!(
+        b.try_acquire_executor_lock("b").await.unwrap().is_none(),
+        "to instanser kan ikke være executor samtidig"
+    );
+
+    drop(lease);
+}
+
+/// Låsen slippes når leasen droppes, slik at en annen instans kan overta.
+/// Dette er deploy-overtakelsen: gammel instans dør, ny skal kunne bli leder.
+#[tokio::test]
+async fn laasen_slippes_naar_leasen_droppes() {
+    let fixture = start().await;
+    let a = PostgresOperasjonRepository::new(fixture.pool.clone());
+    let b = PostgresOperasjonRepository::new(fixture.pool.clone());
+
+    let lease = a.try_acquire_executor_lock("a").await.unwrap().unwrap();
+    drop(lease);
+
+    // Connection-en er detached, så droppet lukker sessionen. Postgres kan
+    // bruke et øyeblikk på å rive den ned.
+    let mut overtok = false;
+    for _ in 0..50 {
+        if b.try_acquire_executor_lock("b").await.unwrap().is_some() {
+            overtok = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    assert!(
+        overtok,
+        "en ny instans må kunne overta lederskapet når den gamle slipper det"
+    );
+}
+
+/// Låsen må ikke ligge igjen på en pooled connection. Holder vi den på en
+/// connection som leveres tilbake, kan poolen dele den ut til andre spørringer
+/// og resirkulere den — og da forsvinner låsen i stillhet.
+#[tokio::test]
+async fn laasen_overlever_at_poolen_brukes_til_annet_arbeid() {
+    let fixture = start().await;
+    let a = PostgresOperasjonRepository::new(fixture.pool.clone());
+    let b = PostgresOperasjonRepository::new(fixture.pool.clone());
+
+    let _lease = a.try_acquire_executor_lock("a").await.unwrap().unwrap();
+
+    // Bruk opp poolen på vanlige spørringer.
+    for _ in 0..20 {
+        let _: i32 = sqlx::query_scalar("SELECT 1")
+            .fetch_one(&fixture.pool)
+            .await
+            .unwrap();
+    }
+
+    assert!(
+        b.try_acquire_executor_lock("b").await.unwrap().is_none(),
+        "låsen skal fortsatt holdes etter at poolen har servet annet arbeid"
+    );
+}
+// Måler om detach() reduserer poolens kapasitet permanent.
+#[tokio::test]
+async fn detach_stjeler_ikke_plass_i_poolen() {
+    let fixture = start().await;
+    // Egen pool med kjent, liten kapasitet.
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(std::time::Duration::from_secs(3))
+        .connect_with(fixture.connect_options.clone())
+        .await
+        .unwrap();
+
+    let detached = pool.acquire().await.unwrap().detach();
+
+    // Hvis detach frigjør plassen, skal vi fortsatt få 2 samtidige.
+    let a = pool.acquire().await.expect("første plass");
+    let b = pool
+        .acquire()
+        .await
+        .expect("andre plass — detach skal ha frigjort permit");
+
+    drop((a, b, detached));
+}
+
+// ---------------------------------------------------------------------------
+// Lederskap ved utrulling
+// ---------------------------------------------------------------------------
+
+/// Ved utrulling starter ny instans mens den gamle fortsatt holder låsen. Den
+/// nye skal vente og overta — ikke gi opp. Før fiksen returnerte workeren
+/// `Ok(())` med én gang og lot instansen stå uten executor resten av levetiden.
+#[tokio::test]
+async fn ny_instans_overtar_lederskapet_naar_den_gamle_slipper_det() {
+    let fixture = start().await;
+    let gammel = PostgresOperasjonRepository::new(fixture.pool.clone());
+    let ny = PostgresOperasjonRepository::new(fixture.pool.clone());
+
+    let lease = gammel.try_acquire_executor_lock("gammel").await.unwrap();
+    assert!(lease.is_some(), "gammel instans er leder");
+
+    // Ny instans prøver mens den gamle lever.
+    assert!(
+        ny.try_acquire_executor_lock("ny").await.unwrap().is_none(),
+        "ny instans må vente mens den gamle er leder"
+    );
+
+    // Gammel instans avslutter.
+    drop(lease);
+
+    // Ny instans skal kunne overta ved neste forsøk.
+    let mut overtok = false;
+    for _ in 0..50 {
+        if ny.try_acquire_executor_lock("ny").await.unwrap().is_some() {
+            overtok = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(overtok, "ny instans må overta når den gamle slipper låsen");
 }

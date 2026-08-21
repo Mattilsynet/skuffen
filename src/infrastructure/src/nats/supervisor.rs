@@ -7,9 +7,16 @@ pub struct TaskSupervisor {
     max_backoff: Duration,
     stable_run_window: Duration,
     max_restart_attempts: Option<u32>,
+    shutdown: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl TaskSupervisor {
+    fn er_nedstengt(&self) -> bool {
+        self.shutdown
+            .as_ref()
+            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+    }
+
     pub fn critical(name: impl Into<String>, max_restart_attempts: u32) -> Self {
         Self {
             name: name.into(),
@@ -17,6 +24,7 @@ impl TaskSupervisor {
             max_backoff: Duration::from_secs(30),
             stable_run_window: Duration::from_secs(30),
             max_restart_attempts: Some(max_restart_attempts),
+            shutdown: None,
         }
     }
 
@@ -27,7 +35,18 @@ impl TaskSupervisor {
             max_backoff: Duration::from_secs(30),
             stable_run_window: Duration::from_secs(30),
             max_restart_attempts: None,
+            shutdown: None,
         }
+    }
+
+    /// Gjør supervisoren nedstengingsbevisst.
+    ///
+    /// Uten dette ville en task som avslutter pent ved SIGTERM blitt restartet
+    /// umiddelbart — supervisoren kan ikke se forskjell på «stoppet fordi den
+    /// skal» og «stoppet uventet».
+    pub fn with_shutdown(mut self, shutdown: tokio_util::sync::CancellationToken) -> Self {
+        self.shutdown = Some(shutdown);
+        self
     }
 
     pub async fn run<F, Fut>(&self, mut run_once: F) -> anyhow::Result<()>
@@ -39,9 +58,17 @@ impl TaskSupervisor {
         let mut backoff = self.initial_backoff;
 
         loop {
+            if self.er_nedstengt() {
+                return Ok(());
+            }
+
             let started_at = Instant::now();
             let result = run_once().await;
             let run_duration = started_at.elapsed();
+
+            if self.er_nedstengt() {
+                return result;
+            }
 
             if run_duration >= self.stable_run_window && attempt > 0 {
                 tracing::info!(

@@ -107,6 +107,29 @@ pub fn build_query_listener(nats: NatsClient, use_fake_sikri: bool) -> QueryList
     )
 }
 
+/// Lytter på SIGTERM og SIGINT og signaliserer nedstenging.
+///
+/// Cloud Run sender SIGTERM og dreper containeren etter 10 sekunder. Uten
+/// dette blir executoren avbrutt der den står — og står den mellom `sendt` og
+/// `fullfor_ok`, er utfallet ukjent og operasjonen må ryddes manuelt.
+pub async fn vent_paa_nedstengingssignal(
+    shutdown: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut interrupt = signal(SignalKind::interrupt())?;
+
+    let signalnavn = tokio::select! {
+        _ = terminate.recv() => "SIGTERM",
+        _ = interrupt.recv() => "SIGINT",
+    };
+
+    info!(signal = signalnavn, "nedstenging signalisert");
+    shutdown.cancel();
+    Ok(())
+}
+
 pub fn build_ready_replier(nats: NatsClient) -> NatsReplier<String, String> {
     NatsReplier::<String, String>::new(nats, "skuffen.ready", Box::new(ReadyUseCase))
 }
@@ -147,6 +170,7 @@ pub fn build_eksekvering_components(
     db_pool: lib_sql::database_config::DbPool,
     media_store: std::sync::Arc<ObjectStoreMediaStore>,
     use_fake_sikri: bool,
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<(
     DekomponeringListener,
     application::command::services::operasjon_worker::OperasjonWorker,
@@ -192,6 +216,7 @@ pub fn build_eksekvering_components(
         publisher,
         EXECUTOR_ID,
         WorkerInnstillinger::default(),
+        shutdown,
     );
 
     Ok((DekomponeringListener::new(nats, dekomponer_service), worker))

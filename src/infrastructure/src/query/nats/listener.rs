@@ -137,7 +137,16 @@ where
     #[tracing::instrument(skip_all)]
     pub async fn run(&self) -> anyhow::Result<()> {
         info!("Lytter etter meldinger på subject '{}'", self.subject);
-        let mut sub = self.client.inner().subscribe(self.subject.clone()).await?;
+        // Queue group, ikke vanlig subscribe: uten den svarer *alle* instanser
+        // på samme forespørsel. Det skjer ved deploy-overlapp, når ny og gammel
+        // revisjon lever samtidig. Alle de andre lytterne er allerede arbitrert
+        // slik — denne var den eneste som ikke var det.
+        let queue_group = format!("skuffen-query-{}", self.subject);
+        let mut sub = self
+            .client
+            .inner()
+            .queue_subscribe(self.subject.clone(), queue_group)
+            .await?;
 
         while let Some(msg) = sub.next().await {
             self.process_message(msg).await;

@@ -35,6 +35,7 @@ pub async fn run() -> anyhow::Result<()> {
     init_process_once();
 
     let runtime = infrastructure::bootstrap::prepare_runtime().await?;
+    let shutdown = tokio_util::sync::CancellationToken::new();
 
     let query_listener = infrastructure::bootstrap::build_query_listener(
         runtime.nats.clone(),
@@ -62,9 +63,14 @@ pub async fn run() -> anyhow::Result<()> {
             runtime.db_pool,
             runtime.media_store,
             runtime.use_fake_sikri,
+            shutdown.clone(),
         )?;
 
     let mut tasks = JoinSet::new();
+    spawn_named_task(&mut tasks, "signal_handler", TaskCriticality::Degraded, {
+        let shutdown = shutdown.clone();
+        async move { infrastructure::bootstrap::vent_paa_nedstengingssignal(shutdown).await }
+    });
     spawn_named_task(
         &mut tasks,
         "health_check",
@@ -127,17 +133,19 @@ pub async fn run() -> anyhow::Result<()> {
                 .context("execution listener failed")
         },
     );
-    spawn_named_task(
-        &mut tasks,
-        "execution_worker",
-        TaskCriticality::Degraded,
+    spawn_named_task(&mut tasks, "execution_worker", TaskCriticality::Degraded, {
+        let shutdown = shutdown.clone();
         async move {
-            eksekvering_worker
-                .run()
+            // Degraded betyr «prøv igjen». Én forbigående DB-feil skal ikke
+            // etterlate prosessen uten executor for alltid — den skal restarte
+            // med backoff, og da også slippe og gjenerobre lederskapet.
+            infrastructure::nats::supervisor::TaskSupervisor::background("execution_worker")
+                .with_shutdown(shutdown)
+                .run(|| eksekvering_worker.run())
                 .await
                 .context("execution worker failed")
-        },
-    );
+        }
+    });
 
     while let Some(join_result) = tasks.join_next().await {
         let outcome = match join_result {
