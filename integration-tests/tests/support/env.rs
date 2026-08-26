@@ -83,6 +83,7 @@ async fn setup_nats() -> Result<(ContainerAsync<GenericImage>, String)> {
 fn start_skuffen_process(
     nats_url: &str,
     db_options: &DbConnectOptions,
+    arkivfeil: Option<&'static str>,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
     let base_url_sikri = "http://127.0.0.1:1";
     let project_id = "local-test";
@@ -100,6 +101,12 @@ fn start_skuffen_process(
             std::env::set_var("APP_ENV", "local");
             std::env::set_var("APP_APPLICATION__ENVIRONMENT", "local");
             std::env::set_var("SKUFFEN_FAKE_SIKRI", "1");
+            // Lar en test be fake-arkivet feile på hvert kall, så
+            // klassifiseringen kan observeres gjennom hele kjeden.
+            match arkivfeil {
+                Some(modus) => std::env::set_var("SKUFFEN_FAKE_SIKRI_FEIL", modus),
+                None => std::env::remove_var("SKUFFEN_FAKE_SIKRI_FEIL"),
+            }
             std::env::set_var("DATABASE_HOST", db_host);
             std::env::set_var("DATABASE_PORT", db_port);
             std::env::set_var("DATABASE_USER", db_user);
@@ -125,6 +132,18 @@ fn start_skuffen_process(
 }
 
 pub async fn start_runtime() -> Result<TestEnv> {
+    start_runtime_med(None).await
+}
+
+/// Runtime der hvert arkivkall feiler med den gitte klassifiseringen.
+///
+/// `modus` er `"irrecoverable"` eller `"recoverable"`, jf.
+/// `infrastructure::command::adapter::fake_arkiv_gateway::FAKE_SIKRI_FEIL_ENV`.
+pub async fn start_runtime_med_arkivfeil(modus: &'static str) -> Result<TestEnv> {
+    start_runtime_med(Some(modus)).await
+}
+
+async fn start_runtime_med(arkivfeil: Option<&'static str>) -> Result<TestEnv> {
     let guard = runtime_lock().clone().lock_owned().await;
 
     eprintln!("start_runtime: starting postgres container");
@@ -140,7 +159,7 @@ pub async fn start_runtime() -> Result<TestEnv> {
     eprintln!("start_runtime: nats ready at {}", nats_url);
 
     eprintln!("start_runtime: spawning skuffen process");
-    let skuffen = start_skuffen_process(&nats_url, &db_options);
+    let skuffen = start_skuffen_process(&nats_url, &db_options, arkivfeil);
     eprintln!("start_runtime: waiting for skuffen ready");
     wait_for_skuffen_ready(&nats_url).await?;
     eprintln!("start_runtime: skuffen ready");

@@ -1,8 +1,5 @@
 use reqwest::StatusCode;
 
-pub const IRRECOVERABLE_MARKER: &str = "sikri_recoverability=irrecoverable";
-pub const RECOVERABLE_MARKER: &str = "sikri_recoverability=recoverable";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Recoverability {
     Recoverable,
@@ -17,6 +14,87 @@ impl Recoverability {
         }
     }
 }
+
+/// Feilen slik `sikri_client` klassifiserer den.
+///
+/// `kode` er stabil og greppbar; `melding` er trygg ved konstruksjon og går
+/// videre til klienten uendret. Ingen av dem bærer bruker-id, tilgangskode
+/// eller URL — det låses av testene nederst i denne filen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SikriFeil {
+    pub recoverability: Recoverability,
+    pub kode: &'static str,
+    pub melding: String,
+}
+
+impl SikriFeil {
+    pub fn new(
+        recoverability: Recoverability,
+        kode: &'static str,
+        melding: impl Into<String>,
+    ) -> Self {
+        Self {
+            recoverability,
+            kode,
+            melding: melding.into(),
+        }
+    }
+
+    pub fn recoverable(kode: &'static str, melding: impl Into<String>) -> Self {
+        Self::new(Recoverability::Recoverable, kode, melding)
+    }
+
+    pub fn irrecoverable(kode: &'static str, melding: impl Into<String>) -> Self {
+        Self::new(Recoverability::Irrecoverable, kode, melding)
+    }
+
+    /// Klassifiserer et HTTP-feilsvar der bodyen er lest.
+    pub fn fra_http(status: StatusCode, body: Option<&str>) -> Self {
+        Self::new(
+            classify_http_error(status, body),
+            safe_detail_for_http_error(status, body),
+            user_message_for_http_error(status, body),
+        )
+    }
+
+    /// Sikri er ikke nåbar. Alltid recoverable — det er ingenting Skuffen kan
+    /// rette ved å gi opp.
+    pub fn utilgjengelig() -> Self {
+        Self::recoverable(
+            "sikri_upstream_unavailable",
+            "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere.",
+        )
+    }
+
+    /// Credentials kunne ikke hentes fra Secret Manager.
+    pub fn secret_utilgjengelig() -> Self {
+        Self::recoverable(
+            "sikri_secret_unavailable",
+            "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere.",
+        )
+    }
+
+    /// Sikri svarte 2xx med en form vi ikke kjenner igjen. Recoverable fordi
+    /// et formatavvik hos leverandøren ikke er noe Skuffen kan rette.
+    pub fn uparsbart_svar() -> Self {
+        Self::recoverable(
+            "sikri_response_unparsable",
+            "Uventet svar fra Sikri/Elements. Prøv igjen senere.",
+        )
+    }
+
+    pub fn er_recoverable(&self) -> bool {
+        self.recoverability == Recoverability::Recoverable
+    }
+}
+
+impl std::fmt::Display for SikriFeil {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.kode, self.melding)
+    }
+}
+
+impl std::error::Error for SikriFeil {}
 
 pub fn user_message_for_http_error(status: StatusCode, body: Option<&str>) -> String {
     if let Some(body_text) = body
@@ -99,12 +177,39 @@ pub fn safe_detail_for_http_error(status: StatusCode, body: Option<&str>) -> &'s
     "sikri_unknown_error"
 }
 
+/// Hver kode `safe_detail_for_http_error` og `SikriFeil` kan produsere.
+///
+/// Adapterne i `infrastructure` oversetter disse til klientvendte feilkoder,
+/// og har en test som går gjennom listen. Legger du til en kode uten å legge
+/// den inn her, fanges det ikke — legger du den inn her uten å mappe den,
+/// feiler adaptertesten. Det er den veien vi vil ha det.
+pub const ALLE_SIKRI_KODER: &[&str] = &[
+    "sikri_unknown_user",
+    "sikri_access_control_rejected",
+    "sikri_validation_failed",
+    "sikri_missing_document_content",
+    "sikri_resource_not_found",
+    "sikri_rate_limited",
+    "sikri_upstream_error",
+    "sikri_upstream_unavailable",
+    "sikri_invalid_request",
+    "sikri_unknown_error",
+    "sikri_secret_unavailable",
+    "sikri_response_unparsable",
+    "sikri_request_validation_failed",
+];
+
 struct ErrorRule {
     status: Option<StatusCode>,
     body_contains_all: &'static [&'static str],
     recoverability: Recoverability,
 }
 
+/// Regelsettet leses ovenfra og ned, og første treff vinner.
+///
+/// Body-reglene ligger først. Statusreglene til slutt stiller ingen krav til
+/// bodyen og treffer derfor alt med den statuskoden — lagt først ville de
+/// skygget for body-reglene over.
 const ERROR_RULES: &[ErrorRule] = &[
     ErrorRule {
         status: Some(StatusCode::INTERNAL_SERVER_ERROR),
@@ -174,46 +279,66 @@ const ERROR_RULES: &[ErrorRule] = &[
         body_contains_all: &["validering", "feil"],
         recoverability: Recoverability::Irrecoverable,
     },
+    // --- Statusregler. Ingen body-krav; må ligge sist. ---
+    ErrorRule {
+        status: Some(StatusCode::NOT_FOUND),
+        body_contains_all: &[],
+        recoverability: Recoverability::Irrecoverable,
+    },
+    // Sikri autentiseres med brukernavn/passord uten token-refresh. Et rotert
+    // passord eller en hikke i Secret Manager skal gi retry, ikke terminere
+    // hver operasjon som er underveis — `feilet` kan ikke trekkes tilbake.
+    ErrorRule {
+        status: Some(StatusCode::UNAUTHORIZED),
+        body_contains_all: &[],
+        recoverability: Recoverability::Recoverable,
+    },
+    ErrorRule {
+        status: Some(StatusCode::FORBIDDEN),
+        body_contains_all: &[],
+        recoverability: Recoverability::Recoverable,
+    },
+    ErrorRule {
+        status: Some(StatusCode::TOO_MANY_REQUESTS),
+        body_contains_all: &[],
+        recoverability: Recoverability::Recoverable,
+    },
 ];
 
-pub fn classify_http_error(status: StatusCode, body: Option<&str>) -> Recoverability {
-    if let Some(body_text) = body {
-        let normalized_body = body_text.to_lowercase();
-        for rule in ERROR_RULES {
-            if rule.status.is_some_and(|expected| expected != status) {
-                continue;
-            }
+fn rule_matches(rule: &ErrorRule, status: StatusCode, normalized_body: Option<&str>) -> bool {
+    if rule.status.is_some_and(|expected| expected != status) {
+        return false;
+    }
 
-            if rule
-                .body_contains_all
-                .iter()
-                .all(|needle| normalized_body.contains(needle))
-            {
-                return rule.recoverability;
-            }
+    if rule.body_contains_all.is_empty() {
+        return true;
+    }
+
+    let Some(body) = normalized_body else {
+        return false;
+    };
+
+    rule.body_contains_all
+        .iter()
+        .all(|needle| body.contains(needle))
+}
+
+/// Terminal feil krever positivt treff i regelsettet.
+///
+/// Bunnen er `Recoverable`: en ukjent feil retryes til noen legger inn en
+/// regel for den. Å retrye en ekte klientfeil er billig og reversibelt, mens
+/// `feilet` er monotont og publiseres til klienten uten vei tilbake (SKU-0016
+/// R8). Kodene i `siste_detalj` gjør de ukartlagte tilfellene synlige.
+pub fn classify_http_error(status: StatusCode, body: Option<&str>) -> Recoverability {
+    let normalized_body = body.map(|body_text| body_text.to_lowercase());
+
+    for rule in ERROR_RULES {
+        if rule_matches(rule, status, normalized_body.as_deref()) {
+            return rule.recoverability;
         }
     }
 
-    if status == StatusCode::NOT_FOUND {
-        return Recoverability::Irrecoverable;
-    }
-
-    if status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
-        return Recoverability::Recoverable;
-    }
-
-    if status.is_client_error() {
-        return Recoverability::Irrecoverable;
-    }
-
     Recoverability::Recoverable
-}
-
-pub fn marker_for(recoverability: Recoverability) -> &'static str {
-    match recoverability {
-        Recoverability::Recoverable => RECOVERABLE_MARKER,
-        Recoverability::Irrecoverable => IRRECOVERABLE_MARKER,
-    }
 }
 
 fn contains_missing_user_pattern(body: &str) -> bool {
@@ -285,9 +410,89 @@ mod tests {
     }
 
     #[test]
-    fn keeps_client_errors_irrecoverable_by_default() {
-        let result = classify_http_error(StatusCode::BAD_REQUEST, Some("invalid request"));
-        assert_eq!(result, Recoverability::Irrecoverable);
+    fn ukjente_klientfeil_er_recoverable() {
+        // Terminal feil krever positivt treff. En ukjent 4xx retryes til noen
+        // legger inn en regel for den.
+        for status in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::CONFLICT,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ] {
+            assert_eq!(
+                classify_http_error(status, Some("invalid request")),
+                Recoverability::Recoverable,
+                "{status} uten kjent body skal være recoverable"
+            );
+            assert_eq!(
+                classify_http_error(status, None),
+                Recoverability::Recoverable,
+                "{status} uten body skal være recoverable"
+            );
+        }
+    }
+
+    #[test]
+    fn autentiseringsfeil_er_recoverable() {
+        // Det viktigste enkelttilfellet: et rotert passord skal ikke
+        // terminere hver operasjon som er underveis.
+        for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+            assert_eq!(
+                classify_http_error(status, None),
+                Recoverability::Recoverable
+            );
+            assert_eq!(
+                classify_http_error(status, Some("access denied")),
+                Recoverability::Recoverable
+            );
+        }
+    }
+
+    #[test]
+    fn not_found_er_irrecoverable_uten_body() {
+        // Valideringen er avhengig av dette: et saksnummer som ikke finnes
+        // skal avvises, ikke retryes i en varm løkke mot arkivet.
+        //
+        // Merk at AvventJournalfort også poller mot 404-veien. Ser vi at
+        // polling begynner å terminere, er det denne regelen som skal
+        // revurderes — ikke bunnen i classify_http_error.
+        assert_eq!(
+            classify_http_error(StatusCode::NOT_FOUND, None),
+            Recoverability::Irrecoverable
+        );
+        assert_eq!(
+            classify_http_error(StatusCode::NOT_FOUND, Some("finnes ikke")),
+            Recoverability::Irrecoverable
+        );
+    }
+
+    #[test]
+    fn body_regler_gaar_foran_statusregler() {
+        // 400 er recoverable som bunn, men et positivt treff på tilgangskode
+        // skal fortsatt terminere. Rekkefølgen i ERROR_RULES er det som
+        // holder dette oppe.
+        assert_eq!(
+            classify_http_error(StatusCode::BAD_REQUEST, Some("Ugyldig tilgangskode UO")),
+            Recoverability::Irrecoverable
+        );
+        assert_eq!(
+            classify_http_error(StatusCode::BAD_REQUEST, Some("tilgangshjemmel mangler")),
+            Recoverability::Irrecoverable
+        );
+    }
+
+    #[test]
+    fn serverfeil_er_recoverable() {
+        for status in [
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::GATEWAY_TIMEOUT,
+        ] {
+            assert_eq!(
+                classify_http_error(status, None),
+                Recoverability::Recoverable
+            );
+        }
     }
 
     #[test]
@@ -447,5 +652,128 @@ mod tests {
     fn exposes_recoverability_as_safe_label() {
         assert_eq!(Recoverability::Recoverable.as_str(), "recoverable");
         assert_eq!(Recoverability::Irrecoverable.as_str(), "irrecoverable");
+    }
+
+    #[test]
+    fn alle_produserbare_koder_staar_i_listen() {
+        // Listen er kontrakten adapterne oversetter fra. Produserer
+        // klassifiseringen en kode som ikke står der, er den usynlig for
+        // dekningstestene i infrastructure.
+        let statuser = [
+            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
+            StatusCode::CONFLICT,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::MOVED_PERMANENTLY,
+        ];
+        let bodyer = [
+            None,
+            Some("ukjent feil"),
+            Some("Feil ved identifisering av bruker Z1. ble ikke funnet i ePhorte Person-tabell!"),
+            Some("Feil ved identifisering av bruker X. (502) Bad Gateway"),
+            Some("Ny journalpost har dokument-filer som mangler innhold"),
+            Some("Ugyldig tilgangskode"),
+            Some("Mangler tilgangshjemmel"),
+            Some("Brukeren ikke har rettighet"),
+            Some("Validering feilet"),
+        ];
+
+        for status in statuser {
+            for body in bodyer {
+                let kode = safe_detail_for_http_error(status, body);
+                assert!(
+                    ALLE_SIKRI_KODER.contains(&kode),
+                    "{kode} (fra {status}) mangler i ALLE_SIKRI_KODER"
+                );
+            }
+        }
+
+        for feil in [
+            SikriFeil::utilgjengelig(),
+            SikriFeil::secret_utilgjengelig(),
+            SikriFeil::uparsbart_svar(),
+        ] {
+            assert!(
+                ALLE_SIKRI_KODER.contains(&feil.kode),
+                "{} mangler i ALLE_SIKRI_KODER",
+                feil.kode
+            );
+        }
+    }
+
+    #[test]
+    fn sikri_feil_baerer_klassifisering_kode_og_melding() {
+        let body = "Feil ved identifisering av bruker Z12345. Person.Brukernavn Z12345 ble ikke funnet i ePhorte Person-tabell!";
+        let feil = SikriFeil::fra_http(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+
+        assert_eq!(feil.recoverability, Recoverability::Irrecoverable);
+        assert!(!feil.er_recoverable());
+        assert_eq!(feil.kode, "sikri_unknown_user");
+        assert_eq!(
+            feil.melding,
+            "Ugyldig saksbehandler/systembruker: brukeren finnes ikke i ePhorte."
+        );
+    }
+
+    #[test]
+    fn sikri_feil_lekker_ikke_bruker_id_tilgangskode_eller_url() {
+        let bodyer = [
+            "Feil ved identifisering av bruker Z12345. Person.Brukernavn Z12345 ble ikke funnet i ePhorte Person-tabell!",
+            "Tilgangskode UO er ugyldig for denne saken og bruker Z12345",
+            "Mangler tilgang til skjermet sak for bruker Z12345",
+            "temporary backend issue at https://internal.example.invalid/api",
+        ];
+
+        for body in bodyer {
+            let feil = SikriFeil::fra_http(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+            for lekkasje in ["Z12345", "UO", "http", "internal.example.invalid"] {
+                assert!(
+                    !feil.kode.contains(lekkasje),
+                    "kode {} lekker {lekkasje}",
+                    feil.kode
+                );
+                assert!(
+                    !feil.melding.contains(lekkasje),
+                    "melding {} lekker {lekkasje}",
+                    feil.melding
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ikke_http_feil_er_klassifisert_eksplisitt() {
+        // Ingenting skal falle gjennom til en implisitt default. Alle tre er
+        // recoverable: verken en utilgjengelig Sikri, en hikke i Secret
+        // Manager eller et formatavvik hos leverandøren er noe Skuffen kan
+        // rette ved å gi opp.
+        for feil in [
+            SikriFeil::utilgjengelig(),
+            SikriFeil::secret_utilgjengelig(),
+            SikriFeil::uparsbart_svar(),
+        ] {
+            assert!(feil.er_recoverable(), "{} skal være recoverable", feil.kode);
+            assert!(feil.kode.starts_with("sikri_"));
+            assert!(!feil.melding.is_empty());
+        }
+
+        assert_eq!(
+            SikriFeil::utilgjengelig().kode,
+            "sikri_upstream_unavailable"
+        );
+        assert_eq!(
+            SikriFeil::secret_utilgjengelig().kode,
+            "sikri_secret_unavailable"
+        );
+        assert_eq!(
+            SikriFeil::uparsbart_svar().kode,
+            "sikri_response_unparsable"
+        );
     }
 }

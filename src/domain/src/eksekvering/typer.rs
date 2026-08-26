@@ -258,24 +258,88 @@ pub enum Feiltype {
     Irrecoverable,
 }
 
+/// En feil under eksekvering, med alt de tre konsumentene trenger.
+///
+/// Feltene har hver sin mottaker, og de blandes aldri:
+///
+/// - `kode` er stabil og greppbar, og går til `operasjon.siste_detalj`.
+/// - `melding` og `error_code` går til klienten i statusstrømmen.
+/// - `intern_detalj` går **kun** til `siste_detalj`. Her hører underliggende
+///   feiltekst hjemme — sqlx-feil og lignende som ingen andre logger, men som
+///   klienten ikke skal se.
+///
+/// Adapteren som konstruerer feilen bestemmer alle fire; executoren
+/// videreformidler dem uten å tolke.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EksekveringFeil {
     pub feiltype: Feiltype,
+    pub kode: &'static str,
     pub melding: String,
+    pub error_code: StatusErrorCode,
+    pub intern_detalj: Option<String>,
 }
 
+/// Klienten skal ikke se innsiden av Skuffen.
+const INTERN_MELDING: &str = "Intern feil i behandlingen.";
+const INTERN_MIDLERTIDIG_MELDING: &str = "Midlertidig intern feil. Nytt forsøk kommer.";
+
 impl EksekveringFeil {
-    pub fn recoverable(melding: impl Into<String>) -> Self {
+    pub fn recoverable(
+        kode: &'static str,
+        melding: impl Into<String>,
+        error_code: StatusErrorCode,
+    ) -> Self {
         Self {
             feiltype: Feiltype::Recoverable,
+            kode,
             melding: melding.into(),
+            error_code,
+            intern_detalj: None,
         }
     }
 
-    pub fn irrecoverable(melding: impl Into<String>) -> Self {
+    pub fn irrecoverable(
+        kode: &'static str,
+        melding: impl Into<String>,
+        error_code: StatusErrorCode,
+    ) -> Self {
         Self {
             feiltype: Feiltype::Irrecoverable,
+            kode,
             melding: melding.into(),
+            error_code,
+            intern_detalj: None,
+        }
+    }
+
+    /// Feil i Skuffen selv, ikke i arkivet. Koden bærer detaljen for logg og
+    /// `siste_detalj`; klienten får en generisk tekst fordi det ikke er noe
+    /// den kan rette.
+    pub fn intern(kode: &'static str) -> Self {
+        Self::irrecoverable(kode, INTERN_MELDING, StatusErrorCode::ProcessingFailed)
+    }
+
+    /// Intern feil som går over av seg selv — typisk en databasehikke.
+    pub fn intern_midlertidig(kode: &'static str) -> Self {
+        Self::recoverable(
+            kode,
+            INTERN_MIDLERTIDIG_MELDING,
+            StatusErrorCode::TemporaryUnavailable,
+        )
+    }
+
+    /// Underliggende feiltekst for `siste_detalj`. Går aldri til klienten.
+    pub fn med_intern_detalj(mut self, detalj: impl Into<String>) -> Self {
+        self.intern_detalj = Some(detalj.into());
+        self
+    }
+
+    /// Det som skrives til `operasjon.siste_detalj`. Koden først, så den er
+    /// greppbar med prefiks selv når en detalj henger på.
+    pub fn siste_detalj(&self) -> String {
+        match &self.intern_detalj {
+            Some(detalj) => format!("{} {detalj}", self.kode),
+            None => self.kode.to_string(),
         }
     }
 
@@ -345,5 +409,52 @@ mod tests {
             Some(StatusErrorCode::TemporaryUnavailable),
         );
         assert_eq!(operasjon.message_id(), format!("{}:3", operasjon_id.0));
+    }
+
+    #[test]
+    fn interne_feil_lekker_ikke_detaljen_til_klienten() {
+        let feil = EksekveringFeil::intern("intern_sak_attributter_mangler");
+
+        // Detaljen er greppbar i koden, som går til siste_detalj ...
+        assert_eq!(feil.kode, "intern_sak_attributter_mangler");
+        // ... men klienten får ingen innsikt i Skuffens innside.
+        assert_eq!(feil.melding, "Intern feil i behandlingen.");
+        assert_eq!(feil.error_code, StatusErrorCode::ProcessingFailed);
+        assert!(!feil.er_recoverable());
+    }
+
+    #[test]
+    fn intern_midlertidig_er_recoverable() {
+        let feil = EksekveringFeil::intern_midlertidig("intern_fakta_utilgjengelig");
+
+        assert!(feil.er_recoverable());
+        assert_eq!(feil.error_code, StatusErrorCode::TemporaryUnavailable);
+    }
+
+    #[test]
+    fn intern_detalj_gaar_til_siste_detalj_men_aldri_til_klienten() {
+        let feil = EksekveringFeil::intern_midlertidig("intern_fakta_utilgjengelig")
+            .med_intern_detalj("pool timed out while connecting");
+
+        assert_eq!(
+            feil.siste_detalj(),
+            "intern_fakta_utilgjengelig pool timed out while connecting"
+        );
+        // Klientmeldingen er urørt av detaljen.
+        assert_eq!(feil.melding, "Midlertidig intern feil. Nytt forsøk kommer.");
+    }
+
+    #[test]
+    fn siste_detalj_er_bare_koden_uten_detalj() {
+        // Arkivfeil trenger ingen detalj: sikri_client har allerede logget
+        // status, endepunkt og body. Da skal siste_detalj være ren og
+        // greppbar.
+        let feil = EksekveringFeil::irrecoverable(
+            "sikri_unknown_user",
+            "Ugyldig saksbehandler.",
+            StatusErrorCode::InvalidRequest,
+        );
+
+        assert_eq!(feil.siste_detalj(), "sikri_unknown_user");
     }
 }

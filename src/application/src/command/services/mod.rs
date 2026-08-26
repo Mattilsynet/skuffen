@@ -7,6 +7,9 @@ pub mod operasjon_worker;
 pub mod validate_command;
 
 #[cfg(test)]
+mod eksekver_operasjon_test;
+
+#[cfg(test)]
 mod ingest_command_test;
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ pub mod nats;
 #[allow(unused_imports)]
 pub use commands::CommandScenario;
 #[allow(unused_imports)]
-pub use env::start_runtime;
+pub use env::{start_runtime, start_runtime_med_arkivfeil};
 #[allow(unused_imports)]
 pub use nats::{
     extract_saksnummer, hent_bruker_mt_enheter_via_nats, hent_journalpost_via_nats,

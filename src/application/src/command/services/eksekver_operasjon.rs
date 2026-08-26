@@ -175,27 +175,27 @@ impl EksekverOperasjonService {
                     attempt_no.max(1) as u32 - 1,
                 );
                 self.operasjon
-                    .marker_retry(op.operasjon_id, attempt_no, &feil.melding, neste)
+                    .marker_retry(op.operasjon_id, attempt_no, &feil.siste_detalj(), neste)
                     .await?;
                 self.publiser(
                     op,
                     Operasjonshendelse::ForsokFeilet,
                     attempt_no,
-                    "Midlertidig feil. Nytt forsøk kommer.",
-                    Some(StatusErrorCode::TemporaryUnavailable),
+                    &feil.melding,
+                    Some(feil.error_code),
                 )
                 .await?;
             }
             Err(feil) => {
                 self.operasjon
-                    .marker_feilet(op.operasjon_id, attempt_no, &feil.melding)
+                    .marker_feilet(op.operasjon_id, attempt_no, &feil.siste_detalj())
                     .await?;
                 self.publiser(
                     op,
                     Operasjonshendelse::Feilet,
                     attempt_no,
-                    "Operasjonen kunne ikke fullføres.",
-                    Some(StatusErrorCode::ProcessingFailed),
+                    &feil.melding,
+                    Some(feil.error_code),
                 )
                 .await?;
             }
@@ -255,14 +255,13 @@ impl EksekverOperasjonService {
             .fakta
             .hent_sak_attributter(op.sak_id)
             .await
-            .map_err(intern)?
-            .ok_or_else(|| EksekveringFeil::irrecoverable("sak attributes missing"))?;
+            .map_err(|err| {
+                EksekveringFeil::intern_midlertidig("intern_sak_attributter_utilgjengelig")
+                    .med_intern_detalj(err.to_string())
+            })?
+            .ok_or_else(|| EksekveringFeil::intern("intern_sak_attributter_mangler"))?;
 
-        let resultat = self
-            .gateway
-            .opprett_sak(&attributter)
-            .await
-            .map_err(recoverable)?;
+        let resultat = self.gateway.opprett_sak(&attributter).await?;
 
         Ok(Utfall::Ferdig(Faktaoppdatering::SakOpprettet {
             arkiv_id: resultat.saksnummer,
@@ -270,16 +269,15 @@ impl EksekverOperasjonService {
     }
 
     async fn sett_saksansvarlig(&self, facts: &SakMedBarn) -> Result<Utfall, EksekveringFeil> {
-        let saksnummer = krev_arkiv_id(facts.arkiv_id.as_deref(), "sak")?;
+        let saksnummer = krev_arkiv_id(facts.arkiv_id.as_deref(), "intern_sak_arkiv_id_mangler")?;
         let oensket = facts
             .oensket_saksansvarlig
             .as_ref()
-            .ok_or_else(|| EksekveringFeil::irrecoverable("oensket saksansvarlig missing"))?;
+            .ok_or_else(|| EksekveringFeil::intern("intern_oensket_saksansvarlig_mangler"))?;
 
         self.gateway
             .sett_saksansvarlig(saksnummer, &oensket.saksbehandler_id, &oensket.enhet)
-            .await
-            .map_err(recoverable)?;
+            .await?;
 
         Ok(Utfall::Ferdig(Faktaoppdatering::SaksansvarligSatt {
             saksbehandler_id: oensket.saksbehandler_id.clone(),
@@ -288,11 +286,8 @@ impl EksekverOperasjonService {
     }
 
     async fn avslutt_sak(&self, facts: &SakMedBarn) -> Result<Utfall, EksekveringFeil> {
-        let saksnummer = krev_arkiv_id(facts.arkiv_id.as_deref(), "sak")?;
-        self.gateway
-            .avslutt_sak(saksnummer)
-            .await
-            .map_err(recoverable)?;
+        let saksnummer = krev_arkiv_id(facts.arkiv_id.as_deref(), "intern_sak_arkiv_id_mangler")?;
+        self.gateway.avslutt_sak(saksnummer).await?;
         Ok(Utfall::Ferdig(Faktaoppdatering::SakAvsluttet))
     }
 
@@ -308,8 +303,11 @@ impl EksekverOperasjonService {
             .fakta
             .hent_dokument_attributter(dokument_id)
             .await
-            .map_err(intern)?
-            .ok_or_else(|| EksekveringFeil::irrecoverable("dokument attributes missing"))?;
+            .map_err(|err| {
+                EksekveringFeil::intern_midlertidig("intern_dokument_attributter_utilgjengelig")
+                    .med_intern_detalj(err.to_string())
+            })?
+            .ok_or_else(|| EksekveringFeil::intern("intern_dokument_attributter_mangler"))?;
 
         let Dokumentkilde::HtmlTemplate {
             mal_referanse,
@@ -317,7 +315,7 @@ impl EksekverOperasjonService {
             rendered_dokument_referanse,
         } = &attributter.kilde
         else {
-            return Err(EksekveringFeil::irrecoverable("dokument is not a template"));
+            return Err(EksekveringFeil::intern("intern_dokument_er_ikke_mal"));
         };
 
         // Avbrutt forsøk kan ha lagret PDF-en allerede (SKU-0005 R10).
@@ -352,21 +350,23 @@ impl EksekverOperasjonService {
         let dokument_id = krev_dokument(op)?;
         let (journalpost, _) = facts
             .dokument(dokument_id)
-            .ok_or_else(|| EksekveringFeil::irrecoverable("dokument facts missing"))?;
+            .ok_or_else(|| EksekveringFeil::intern("intern_dokument_fakta_mangler"))?;
         let journalpost_arkiv_id = krev_journalpost_arkiv_id(journalpost.arkiv_id.as_deref())?;
 
         let attributter = self
             .fakta
             .hent_dokument_attributter(dokument_id)
             .await
-            .map_err(intern)?
-            .ok_or_else(|| EksekveringFeil::irrecoverable("dokument attributes missing"))?;
+            .map_err(|err| {
+                EksekveringFeil::intern_midlertidig("intern_dokument_attributter_utilgjengelig")
+                    .med_intern_detalj(err.to_string())
+            })?
+            .ok_or_else(|| EksekveringFeil::intern("intern_dokument_attributter_mangler"))?;
 
         let vedlegg_id = self
             .gateway
             .legg_til_vedlegg(journalpost_arkiv_id, &attributter)
-            .await
-            .map_err(recoverable)?;
+            .await?;
 
         Ok(Utfall::Ferdig(Faktaoppdatering::VedleggArkivert {
             dokument_id,
@@ -382,30 +382,35 @@ impl EksekverOperasjonService {
         facts: &SakMedBarn,
     ) -> Result<Utfall, EksekveringFeil> {
         let journalpost_id = krev_journalpost(op)?;
-        let saksnummer = krev_arkiv_id(facts.arkiv_id.as_deref(), "sak")?;
+        let saksnummer = krev_arkiv_id(facts.arkiv_id.as_deref(), "intern_sak_arkiv_id_mangler")?;
 
         let attributter = self
             .fakta
             .hent_journalpost_attributter(journalpost_id)
             .await
-            .map_err(intern)?
-            .ok_or_else(|| EksekveringFeil::irrecoverable("journalpost attributes missing"))?;
+            .map_err(|err| {
+                EksekveringFeil::intern_midlertidig("intern_journalpost_attributter_utilgjengelig")
+                    .med_intern_detalj(err.to_string())
+            })?
+            .ok_or_else(|| EksekveringFeil::intern("intern_journalpost_attributter_mangler"))?;
 
         let dokumenter = self
             .fakta
             .hent_dokumenter_for_journalpost(journalpost_id)
             .await
-            .map_err(intern)?;
+            .map_err(|err| {
+                EksekveringFeil::intern_midlertidig("intern_dokumenter_utilgjengelig")
+                    .med_intern_detalj(err.to_string())
+            })?;
         let (hoveddokument_id, hoveddokument) = dokumenter
             .into_iter()
             .find(|(_, dok)| dok.er_hoveddokument())
-            .ok_or_else(|| EksekveringFeil::irrecoverable("hoveddokument missing"))?;
+            .ok_or_else(|| EksekveringFeil::intern("intern_hoveddokument_mangler"))?;
 
         let resultat = self
             .gateway
             .opprett_journalpost(saksnummer, &attributter, &hoveddokument)
-            .await
-            .map_err(recoverable)?;
+            .await?;
 
         Ok(Utfall::Ferdig(Faktaoppdatering::JournalpostOpprettet {
             journalpost_id,
@@ -426,8 +431,7 @@ impl EksekverOperasjonService {
 
         self.gateway
             .sett_journalpost_status(arkiv_id, status)
-            .await
-            .map_err(recoverable)?;
+            .await?;
 
         Ok(Utfall::Ferdig(Faktaoppdatering::JournalpostStatus {
             journalpost_id,
@@ -439,10 +443,7 @@ impl EksekverOperasjonService {
         let journalpost_id = krev_journalpost(op)?;
         let arkiv_id = self.journalpost_arkiv_id(facts, op)?;
 
-        self.gateway
-            .avskriv_journalpost(arkiv_id)
-            .await
-            .map_err(recoverable)?;
+        self.gateway.avskriv_journalpost(arkiv_id).await?;
 
         Ok(Utfall::Ferdig(Faktaoppdatering::JournalpostStatus {
             journalpost_id,
@@ -460,11 +461,7 @@ impl EksekverOperasjonService {
         let journalpost_id = krev_journalpost(op)?;
         let arkiv_id = self.journalpost_arkiv_id(facts, op)?;
 
-        let observert = self
-            .gateway
-            .hent_journalstatus(arkiv_id)
-            .await
-            .map_err(recoverable)?;
+        let observert = self.gateway.hent_journalstatus(arkiv_id).await?;
 
         match observert {
             ObservertJournalstatus::Journalfoert => {
@@ -495,7 +492,7 @@ impl EksekverOperasjonService {
         let journalpost_id = krev_journalpost(op)?;
         let journalpost = facts
             .journalpost(journalpost_id)
-            .ok_or_else(|| EksekveringFeil::irrecoverable("journalpost facts missing"))?;
+            .ok_or_else(|| EksekveringFeil::intern("intern_journalpost_fakta_mangler"))?;
         krev_journalpost_arkiv_id(journalpost.arkiv_id.as_deref())
     }
 
@@ -573,8 +570,8 @@ fn krev_journalpost(
 ) -> Result<domain::eksekvering::id::SkuffenJournalpostId, EksekveringFeil> {
     match op.entitet_id {
         EntitetId::Journalpost(id) => Ok(id),
-        _ => Err(EksekveringFeil::irrecoverable(
-            "expected journalpost entity",
+        _ => Err(EksekveringFeil::intern(
+            "intern_forventet_journalpost_entitet",
         )),
     }
 }
@@ -582,26 +579,19 @@ fn krev_journalpost(
 fn krev_dokument(op: &Operasjon) -> Result<SkuffenDokumentId, EksekveringFeil> {
     match op.entitet_id {
         EntitetId::Dokument(id) => Ok(id),
-        _ => Err(EksekveringFeil::irrecoverable("expected dokument entity")),
+        _ => Err(EksekveringFeil::intern("intern_forventet_dokument_entitet")),
     }
 }
 
-fn krev_arkiv_id<'a>(arkiv_id: Option<&'a str>, hva: &str) -> Result<&'a str, EksekveringFeil> {
-    arkiv_id.ok_or_else(|| EksekveringFeil::irrecoverable(format!("{hva} arkiv id missing")))
+fn krev_arkiv_id<'a>(
+    arkiv_id: Option<&'a str>,
+    kode: &'static str,
+) -> Result<&'a str, EksekveringFeil> {
+    arkiv_id.ok_or_else(|| EksekveringFeil::intern(kode))
 }
 
 fn krev_journalpost_arkiv_id(arkiv_id: Option<&str>) -> Result<i32, EksekveringFeil> {
-    krev_arkiv_id(arkiv_id, "journalpost")?
+    krev_arkiv_id(arkiv_id, "intern_journalpost_arkiv_id_mangler")?
         .parse::<i32>()
-        .map_err(|_| EksekveringFeil::irrecoverable("journalpost arkiv id is not numeric"))
-}
-
-/// Ukjente gateway-feil behandles som recoverable: de retryes for alltid med
-/// backoff, og bare eksplisitt irrecoverable feil blir terminale (R6).
-fn recoverable(error: anyhow::Error) -> EksekveringFeil {
-    EksekveringFeil::recoverable(error.to_string())
-}
-
-fn intern(error: anyhow::Error) -> EksekveringFeil {
-    EksekveringFeil::recoverable(error.to_string())
+        .map_err(|_| EksekveringFeil::intern("intern_journalpost_arkiv_id_ikke_numerisk"))
 }

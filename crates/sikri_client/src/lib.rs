@@ -11,11 +11,11 @@ use crate::dto::elements_dokument_response::ElementsDokumentRespons;
 use crate::dto::elements_journalpost::{ElementsJournalpost, ElementsJournalpostRespons};
 use crate::dto::elements_sak::ElementsSak;
 pub use error_mapping::{
-    IRRECOVERABLE_MARKER, RECOVERABLE_MARKER, Recoverability, classify_http_error,
-    safe_detail_for_http_error, user_message_for_http_error,
+    ALLE_SIKRI_KODER, Recoverability, SikriFeil, classify_http_error, safe_detail_for_http_error,
+    user_message_for_http_error,
 };
 
-pub async fn alive() -> anyhow::Result<()> {
+pub async fn alive() -> Result<(), SikriFeil> {
     api::alive().await
 }
 
@@ -24,12 +24,12 @@ pub async fn hent_sak(
     saksnummer: &str,
     kildesystem: &str,
     inkluder_journalposter: bool,
-) -> anyhow::Result<SakRespons> {
+) -> Result<SakRespons, SikriFeil> {
     let resp = api::get_sak(saksnummer, kildesystem, inkluder_journalposter).await?;
     Ok(SakRespons::from(resp))
 }
 
-pub async fn opprett_sak(data: NySak) -> anyhow::Result<SakRespons> {
+pub async fn opprett_sak(data: NySak) -> Result<SakRespons, SikriFeil> {
     let sak = api::create_sak(ElementsSak::from(data)).await?;
     Ok(SakRespons::from(sak))
 }
@@ -37,33 +37,35 @@ pub async fn opprett_sak(data: NySak) -> anyhow::Result<SakRespons> {
 pub async fn opprett_journalpost(
     journalpost: ElementsJournalpost,
     saksnummer: &str,
-) -> anyhow::Result<ElementsJournalpostRespons> {
+) -> Result<ElementsJournalpostRespons, SikriFeil> {
     api::opprett_journalpost(journalpost, saksnummer).await
 }
 
 pub async fn legg_til_vedlegg(
     journalpost_id: i32,
     dokumenter: Vec<ElementsDokument>,
-) -> anyhow::Result<Vec<ElementsDokumentRespons>> {
+) -> Result<Vec<ElementsDokumentRespons>, SikriFeil> {
     api::legg_til_vedlegg(journalpost_id, dokumenter).await
 }
 
-pub async fn hent_journalpost(journalpost_id: i32) -> anyhow::Result<ElementsJournalpostRespons> {
+pub async fn hent_journalpost(
+    journalpost_id: i32,
+) -> Result<ElementsJournalpostRespons, SikriFeil> {
     api::hent_journalpost(journalpost_id).await
 }
 
-pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> anyhow::Result<()> {
+pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Result<(), SikriFeil> {
     api::sett_journalpost_status(journalpost_id, status).await
 }
 
 pub async fn avskriv_journalpost(
     journalpost_id: i32,
     avskrivingsmaate: &str,
-) -> anyhow::Result<()> {
+) -> Result<(), SikriFeil> {
     api::avskriv_journalpost(journalpost_id, avskrivingsmaate).await
 }
 
-pub async fn avslutt_sak(saksnummer: &str) -> anyhow::Result<()> {
+pub async fn avslutt_sak(saksnummer: &str) -> Result<(), SikriFeil> {
     api::avslutt_sak(saksnummer).await
 }
 
@@ -71,6 +73,6 @@ pub async fn sett_saksansvarlig(
     saksnummer: &str,
     saksbehandler: &str,
     saksbehandler_enhet: &str,
-) -> anyhow::Result<()> {
+) -> Result<(), SikriFeil> {
     api::sett_saksansvarlig(saksnummer, saksbehandler, saksbehandler_enhet).await
 }

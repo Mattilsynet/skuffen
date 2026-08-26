@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use application::command::ports::command_state_port::{
     ArkivSakTilstand, ArkivSakTilstandError, ArkivSakTilstandErrorKind, ArkivSakTilstandRepository,
 };
+use domain::eksekvering::typer::StatusErrorCode;
 
 /// Saker fake-arkivet har opprettet.
 ///
@@ -42,10 +43,14 @@ impl ArkivSakTilstandRepository for FakeArkivSakTilstandRepository {
         if fake_sak_finnes(saksnummer) {
             Ok(ArkivSakTilstand { avsluttet: false })
         } else {
-            Err(ArkivSakTilstandError {
-                kind: ArkivSakTilstandErrorKind::Irrecoverable,
-                message: format!("Sak {saksnummer} finnes ikke i arkivet"),
-            })
+            // Speiler 404 fra Sikri: samme kode, samme klientvendte
+            // feilkode som SikriCommandStateRepository ville gitt.
+            Err(ArkivSakTilstandError::new(
+                ArkivSakTilstandErrorKind::Irrecoverable,
+                "sikri_resource_not_found",
+                format!("Fant ikke sak {saksnummer} i arkivet."),
+                StatusErrorCode::NotFound,
+            ))
         }
     }
 }

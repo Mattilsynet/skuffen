@@ -45,7 +45,7 @@ Log level rules:
 - `error!`: irrecoverable failures, terminal command drops, infrastructure errors
 - `debug!`: detailed diagnostics (Sikri response parsing, query replies)
 - Raw Sikri error-body logges KUN på `debug!`-nivå, aldri på `info!`/`error!`; ellers brukes safe code (`sikri_unknown_error` fallback fra `safe_detail_for_http_error`)
-- Rå Sikri error-body skal aldri til NATS replies, public status events, `command_execution.last_detail` eller `tilstand_historikk.feil_detalj`
+- Rå Sikri error-body skal aldri til NATS replies, public status events, `operasjon.siste_detalj`
 - Bounded safe error messages (koder + Norwegian user messages) er greit i internal logs for debugging og monitoring
 - Never log request payloads sent to external systems at `info!`/`error!`, because they may contain client-submitted sensitive data
 - PII in structured domain/command types may be rendered via `Debug` at `debug!` level only. `debug!` is off by default in prod, so this is acceptable; the hard rule is that raw external response text and request payloads must never appear at `info!`/`error!`
@@ -102,15 +102,24 @@ Cloud Logging list rows use scan-friendly command outcome headlines while retain
 Application-rendered document failures propagate stable safe detail codes:
 - `render_dokument_mangler` — Target document missing from the command facts
 - `render_journalpost_mangler` — Target journalpost missing from the command facts
-- `render_ikke_html_template` — Render operation targeted a non-template document
-- `render_saksnummer_mangler` — Sak number is not available for substitution
-- `render_html_mal_mangler` — HTML document content unavailable
-- `render_html_mal_lager_unavailable` — HTML document storage layer unavailable
-- `render_token_substitution_failed` — Template token substitution error
-- `rendered_dokument_save_failed` — Rendered document persist to storage failed
-- `render_state_update_failed` — Render state update to database failed
+- `render_utilgjengelig` — Renderer temporarily unavailable (recoverable)
+- `render_avvist` — Renderer rejected the document (irrecoverable)
+- `render_mal_mangler` — Referenced HTML template does not exist
+- `render_mal_substitusjon_feilet` — Template token substitution error
+- `intern_mal_utilgjengelig` — Template storage layer unavailable (recoverable)
+- `intern_lagring_av_rendret_dokument_feilet` — Rendered document persist failed (recoverable)
 
-These codes appear in `last_detail` on `command_execution` and structured logs. They are safe to surface in dashboards and alerts. `detail` and `last_error` are duplicated in command-outcome logs as a compatibility bridge for existing log queries while dashboards migrate to `diagnostic_code`.
+Mapping failures in the Sikri adapter use the `arkivmapping_` prefix
+(`arkivmapping_mottaker_mangler`, `arkivmapping_ufullstendig_skjerming`,
+`arkivmapping_postadresse_mangler`). These are our own mapping errors, always
+irrecoverable, and the client-facing message carries the `client_reference` so the
+caller knows which document or correspondence party to fix.
+
+Failures originating inside Skuffen use the `intern_` prefix, which makes them easy to
+separate from `sikri_` codes in a log query.
+
+These codes appear in `operasjon.siste_detalj` and structured logs. They are safe to
+surface in dashboards and alerts.
 
 ## Media store logs
 
@@ -131,10 +140,10 @@ Never logged:
 
 Acceptable and encouraged in internal logs:
 - Safe error codes and bounded status details from external responses when useful for debugging and monitoring
-- Raw Sikri error-body only at `debug!` level; never at `info!`/`error!`, and never echoed to NATS replies, public status events, `command_execution.last_detail`, or `tilstand_historikk.feil_detalj`
+- Raw Sikri error-body only at `debug!` level; never at `info!`/`error!`, and never echoed to NATS replies, public status events, `operasjon.siste_detalj`
 - `command_id` and `correlation_id` wherever command context is available
 
-The public outward status remains static and safe. Command execution internal details are for operators only.
+The public outward status is safe but no longer static: it carries the mapped, sanitised message for the failure, so the client learns what went wrong. Internal detail — sqlx errors, raw Sikri bodies — stays in logs and `operasjon.siste_detalj`, which are for operators only.
 
 ## Error reply sanitization
 
@@ -145,7 +154,7 @@ NATS error replies to callers must not echo internal details:
   not echo response bodies to callers. Raw Sikri error-body is logged only at `debug!`
   level; safe codes (`safe_detail_for_http_error`, `sikri_unknown_error` fallback) are
   used everywhere else and are the only Sikri error detail allowed on NATS replies,
-  public status events, `command_execution.last_detail`, and `tilstand_historikk.feil_detalj`
+  public status events, `operasjon.siste_detalj`
 
 This section governs what is echoed back to callers over NATS. Internal logs may include useful external response error messages as long as request payloads, HTML/PDF contents, secrets, and auth material are not logged.
 
@@ -175,7 +184,7 @@ Never logged:
 - PDF bytes or generated content
 - Secrets, credentials, or PII
 
-The public outward status remains static and safe. Command execution internal details are for operators only.
+The public outward status is safe but no longer static: it carries the mapped, sanitised message for the failure, so the client learns what went wrong. Internal detail — sqlx errors, raw Sikri bodies — stays in logs and `operasjon.siste_detalj`, which are for operators only.
 
 ## Test logging
 
@@ -190,22 +199,35 @@ If ingestion created an ArkivId mapping and validation fails irrecoverably, dele
 
 ## Sikri safe error detail codes
 
-`safe_detail_for_http_error` in `crates/sikri_client/src/error_mapping.rs` maps Sikri HTTP responses to stable, safe `&'static str` codes with no PII, URLs, or raw response body text. These codes appear in `last_detail` on `command_execution` and in structured logs. They are stable identifiers safe to surface in dashboards and alerts.
+`safe_detail_for_http_error` in `crates/sikri_client/src/error_mapping.rs` maps Sikri HTTP responses to stable, safe `&'static str` codes with no PII, URLs, or raw response body text. `SikriFeil` pairs each code with its classification and a pre-mapped user-facing message. The codes appear in `operasjon.siste_detalj` and in structured logs, and are stable identifiers safe to surface in dashboards and alerts.
+
+Terminal failure requires a positive match (SKU-0017): the classifier's floor is
+`Recoverable`, so an unmapped error retries until someone adds a rule for it.
 
 | Code | Meaning | Recoverability |
 |---|---|---|
 | `sikri_unknown_user` | Saksbehandler/systembruker not found in ePhorte | Irrecoverable |
-| `sikri_upstream_unavailable` | Sikri upstream returned 502 Bad Gateway | Recoverable |
+| `sikri_access_control_rejected` | Tilgangskode/tilgangshjemmel rejected | Irrecoverable |
+| `sikri_validation_failed` | Sikri rejected the content as invalid | Irrecoverable |
 | `sikri_missing_document_content` | Journalpost document files have no content | Irrecoverable |
 | `sikri_resource_not_found` | HTTP 404 from Sikri | Irrecoverable |
+| `sikri_request_validation_failed` | Local pre-flight validation rejected the payload | Irrecoverable |
+| `sikri_upstream_unavailable` | 502 Bad Gateway, or no response at all | Recoverable |
 | `sikri_rate_limited` | HTTP 429 — Sikri throttling | Recoverable |
 | `sikri_upstream_error` | Generic 5xx from Sikri | Recoverable |
-| `sikri_invalid_request` | Generic 4xx client error | Irrecoverable |
+| `sikri_invalid_request` | Generic 4xx client error | Recoverable |
+| `sikri_secret_unavailable` | Credentials could not be read from Secret Manager | Recoverable |
+| `sikri_response_unparsable` | 2xx in a shape we do not recognise | Recoverable |
 | `sikri_unknown_error` | Unclassified error | Recoverable |
 
-The companion `user_message_for_http_error` function returns a Norwegian human-readable message for status events. It shares the same classification logic. Neither function echoes raw Sikri response bodies or user identifiers.
+`sikri_invalid_request` is deliberately recoverable. `401`/`403` most often mean a rotated
+credential rather than a bad request, and terminating is irreversible while retrying is not.
+`ALLE_SIKRI_KODER` lists every producible code; the adapters have a coverage test that fails
+if a code has no client-facing error code.
 
-Logging policy: raw Sikri error-body is logged only at `debug!` level (never `error!`/`info!`). Everywhere else the safe code applies, with `sikri_unknown_error` as fallback. Raw bodies must never reach NATS replies, public status events, `command_execution.last_detail`, or `tilstand_historikk.feil_detalj`. Raw error bodies may contain sensitive archive details; the previous risk acceptance permitting full 4xx/5xx body logging on `error!`/`info!` is withdrawn.
+The companion `user_message_for_http_error` function returns a Norwegian human-readable message that is forwarded to the client on the status stream. It shares the same classification logic. Neither function echoes raw Sikri response bodies or user identifiers.
+
+Logging policy: raw Sikri error-body is logged only at `debug!` level (never `error!`/`info!`). The same split applies to transport and parse failures, whose `reqwest::Error` renders the full URL including query parameters; the `error!` line carries `sikri_transport_arsak` instead. Everywhere else the safe code applies, with `sikri_unknown_error` as fallback. Raw bodies must never reach NATS replies, public status events, or `operasjon.siste_detalj`. Raw error bodies may contain sensitive archive details; the previous risk acceptance permitting full 4xx/5xx body logging on `error!`/`info!` is withdrawn.
 
 ## NATS server URL redaction
 

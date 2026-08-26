@@ -10,7 +10,7 @@ use application::command::services::eksekver_operasjon::RenderOperasjon;
 use async_trait::async_trait;
 use domain::eksekvering::html_template::{FeltVerdier, TemplateFelt, substituer_tokens};
 use domain::eksekvering::id::SkuffenDokumentId;
-use domain::eksekvering::typer::EksekveringFeil;
+use domain::eksekvering::typer::{EksekveringFeil, StatusErrorCode};
 use uuid::Uuid;
 
 use crate::command::media::{MediaFile, MediaMetadata, MediaStore};
@@ -42,11 +42,23 @@ impl MediaRenderOperasjon {
     }
 }
 
+/// Rendreren har allerede klassifisert feilen og gitt den en trygg tekst;
+/// her legges kun kode og klientvendt feilkode på.
 fn feil(err: RendererFeil) -> EksekveringFeil {
     if err.is_recoverable() {
-        EksekveringFeil::recoverable(err.safe_message().to_string())
+        EksekveringFeil::recoverable(
+            "render_utilgjengelig",
+            "Dokumentproduksjonen er midlertidig utilgjengelig. Prøv igjen senere.",
+            StatusErrorCode::TemporaryUnavailable,
+        )
+        .med_intern_detalj(err.safe_message().to_string())
     } else {
-        EksekveringFeil::irrecoverable(err.safe_message().to_string())
+        EksekveringFeil::irrecoverable(
+            "render_avvist",
+            "Dokumentet kunne ikke produseres fra malen.",
+            StatusErrorCode::InvalidRequest,
+        )
+        .med_intern_detalj(err.safe_message().to_string())
     }
 }
 
@@ -63,15 +75,28 @@ impl RenderOperasjon for MediaRenderOperasjon {
             .media_store
             .get(mal_referanse)
             .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?
+            .map_err(|err| {
+                EksekveringFeil::intern_midlertidig("intern_mal_utilgjengelig")
+                    .med_intern_detalj(err.to_string())
+            })?
             .ok_or_else(|| {
-                EksekveringFeil::irrecoverable(format!(
-                    "html_mal_mangler mal_referanse={mal_referanse}"
-                ))
+                EksekveringFeil::irrecoverable(
+                    "render_mal_mangler",
+                    "Malen det vises til finnes ikke.",
+                    StatusErrorCode::InvalidRequest,
+                )
+                .med_intern_detalj(format!("mal_referanse={mal_referanse}"))
             })?;
 
         let substituert = substituer_tokens(&mal.data, felter, &FeltVerdier { saksnummer })
-            .map_err(|err| EksekveringFeil::irrecoverable(err.to_string()))?;
+            .map_err(|err| {
+                EksekveringFeil::irrecoverable(
+                    "render_mal_substitusjon_feilet",
+                    "Malen kunne ikke fylles ut med de oppgitte feltene.",
+                    StatusErrorCode::InvalidRequest,
+                )
+                .med_intern_detalj(err.to_string())
+            })?;
 
         let pdf = self
             .renderer
@@ -103,7 +128,10 @@ impl RenderOperasjon for MediaRenderOperasjon {
                 },
             })
             .await
-            .map_err(|err| EksekveringFeil::recoverable(err.to_string()))?;
+            .map_err(|err| {
+                EksekveringFeil::intern_midlertidig("intern_lagring_av_rendret_dokument_feilet")
+                    .med_intern_detalj(err.to_string())
+            })?;
 
         Ok(referanse)
     }

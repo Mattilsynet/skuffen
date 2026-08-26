@@ -70,7 +70,14 @@ struct FakeArkivSakTilstandRepository {
 #[derive(Clone)]
 enum ArkivSakTilstandResponse {
     Ok(ArkivSakTilstand),
-    Err(ArkivSakTilstandErrorKind, String),
+    /// Kode, melding og feilkode kommer fra adapteren i produksjon. Fake-en
+    /// bærer dem uendret, så testene ser det klienten faktisk ville fått.
+    Err(
+        ArkivSakTilstandErrorKind,
+        &'static str,
+        String,
+        StatusErrorCode,
+    ),
 }
 
 impl Default for ArkivSakTilstandResponse {
@@ -94,8 +101,8 @@ impl ArkivSakTilstandRepository for FakeArkivSakTilstandRepository {
         self.calls.lock().unwrap().push(saksnummer.to_string());
         match self.response.lock().unwrap().clone() {
             ArkivSakTilstandResponse::Ok(state) => Ok(state),
-            ArkivSakTilstandResponse::Err(kind, message) => {
-                Err(ArkivSakTilstandError::new(kind, message))
+            ArkivSakTilstandResponse::Err(kind, kode, message, error_code) => {
+                Err(ArkivSakTilstandError::new(kind, kode, message, error_code))
             }
         }
     }
@@ -495,7 +502,9 @@ async fn test_validate_arkiv_id_recoverable_error_retries() {
 
     state_repo.set_response(ArkivSakTilstandResponse::Err(
         ArkivSakTilstandErrorKind::Recoverable,
-        "Sikri timeout".to_string(),
+        "sikri_upstream_unavailable",
+        "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere.".to_string(),
+        StatusErrorCode::TemporaryUnavailable,
     ));
 
     let service = build_service(
@@ -517,7 +526,10 @@ async fn test_validate_arkiv_id_recoverable_error_retries() {
             message,
             error_code,
         } => {
-            assert_eq!(message, "Sikri timeout");
+            assert_eq!(
+                message,
+                "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere."
+            );
             assert_eq!(error_code, StatusErrorCode::TemporaryUnavailable);
         }
         _ => panic!("Expected recoverable validation outcome"),
@@ -537,9 +549,13 @@ async fn test_validate_arkiv_id_irrecoverable_error_is_error() {
     let dispatcher = FakeValidatedCommandDispatcher::default();
     let status_publisher = FakeCommandStatusPublisher::default();
 
+    // Et ukjent saksnummer er 404 fra Sikri, som gir NotFound — ikke
+    // InvalidRequest, som valideringen tidligere hardkodet for alt.
     state_repo.set_response(ArkivSakTilstandResponse::Err(
         ArkivSakTilstandErrorKind::Irrecoverable,
-        "Sak finnes ikke i Sikri (2025/404)".to_string(),
+        "sikri_resource_not_found",
+        "Fant ikke sak 2025/404 i arkivet.".to_string(),
+        StatusErrorCode::NotFound,
     ));
 
     let service = build_service(
@@ -561,8 +577,8 @@ async fn test_validate_arkiv_id_irrecoverable_error_is_error() {
             message,
             error_code,
         } => {
-            assert_eq!(message, "Sak finnes ikke i Sikri (2025/404)");
-            assert_eq!(error_code, StatusErrorCode::InvalidRequest);
+            assert_eq!(message, "Fant ikke sak 2025/404 i arkivet.");
+            assert_eq!(error_code, StatusErrorCode::NotFound);
         }
         _ => panic!("Expected irrecoverable validation outcome"),
     }
@@ -574,8 +590,14 @@ async fn test_validate_arkiv_id_irrecoverable_error_is_error() {
         &events,
         command_id,
         CommandEvent::Avvist,
-        Some(StatusErrorCode::InvalidRequest),
+        Some(StatusErrorCode::NotFound),
     );
+    // Klienten får den faktiske grunnen, ikke «Forespørselen ble avvist.».
+    let avvist = events
+        .iter()
+        .find(|event| event.hendelse == CommandEvent::Avvist)
+        .expect("Avvist-event mangler");
+    assert_eq!(avvist.melding, "Fant ikke sak 2025/404 i arkivet.");
     assert_eq!(entitet.calls.lock().unwrap().write_calls, 0);
 }
 

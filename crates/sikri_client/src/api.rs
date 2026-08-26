@@ -3,9 +3,8 @@ use crate::dto::elements_dokument_response::ElementsDokumentRespons;
 use crate::dto::elements_journalpost::{ElementsJournalpost, ElementsJournalpostRespons};
 use crate::dto::elements_sak::ElementsSak;
 use crate::dto::elements_sak_response::ElementsSakMedJournalposterResponse;
-use crate::error_mapping::{classify_http_error, marker_for, safe_detail_for_http_error};
+use crate::error_mapping::SikriFeil;
 use crate::secret::get_secret;
-use anyhow::{Context, Result};
 use reqwest::Client;
 use std::env;
 use tracing::{debug, error, info};
@@ -27,11 +26,71 @@ fn safe_endpoint_label(url: &str) -> &str {
         .unwrap_or("unknown")
 }
 
+/// Hvorfor kallet feilet, uten URL.
+///
+/// `reqwest::Error` sitt `Display` inneholder full URL med query-parametre, og
+/// der ligger saksnummer. Etiketten her bærer årsaken — timeout, connect, DNS
+/// — som er det man faktisk trenger for å skille en nede-Sikri fra en treg
+/// Sikri fra en feilkonfigurert URL.
+fn transport_arsak(err: &reqwest::Error) -> &'static str {
+    if err.is_timeout() {
+        "timeout"
+    } else if err.is_connect() {
+        "connect"
+    } else if err.is_redirect() {
+        "redirect"
+    } else if err.is_body() {
+        "body"
+    } else if err.is_decode() {
+        "decode"
+    } else if err.is_builder() {
+        "builder"
+    } else {
+        "unknown"
+    }
+}
+
+/// Sikri svarte aldri.
+fn transportfeil(method: &str, url: &str, err: reqwest::Error) -> SikriFeil {
+    let feil = SikriFeil::utilgjengelig();
+    let endpoint = safe_endpoint_label(url);
+    error!(
+        target: "sikri.http",
+        method,
+        endpoint,
+        sikri_error_code = feil.kode,
+        sikri_recoverability = feil.recoverability.as_str(),
+        sikri_transport_arsak = transport_arsak(&err),
+        "Sikri request failed before a response was received"
+    );
+    // Rå feiltekst bærer URL med query-parametre og logges derfor kun på
+    // debug, som den rå error-bodyen ellers i denne filen.
+    debug!(target: "sikri.http", method, endpoint, error = %err, "Sikri transport error detail");
+    feil
+}
+
+/// Sikri svarte 2xx, men i en form vi ikke kjenner igjen.
+fn parsefeil(method: &str, url: &str, err: reqwest::Error) -> SikriFeil {
+    let feil = SikriFeil::uparsbart_svar();
+    let endpoint = safe_endpoint_label(url);
+    error!(
+        target: "sikri.http",
+        method,
+        endpoint,
+        sikri_error_code = feil.kode,
+        sikri_recoverability = feil.recoverability.as_str(),
+        sikri_transport_arsak = transport_arsak(&err),
+        "Sikri response could not be parsed"
+    );
+    debug!(target: "sikri.http", method, endpoint, error = %err, "Sikri parse error detail");
+    feil
+}
+
 async fn ensure_success(
     response: reqwest::Response,
     method: &str,
     url: &str,
-) -> Result<reqwest::Response> {
+) -> Result<reqwest::Response, SikriFeil> {
     let status = response.status();
     let endpoint = safe_endpoint_label(url);
     if status.is_success() {
@@ -44,9 +103,7 @@ async fn ensure_success(
         .await
         .unwrap_or_else(|_| "<klarte ikke lese respons-body>".to_string());
     let body = body.trim();
-    let recoverability = classify_http_error(status, Some(body));
-    let marker = marker_for(recoverability);
-    let safe_detail = safe_detail_for_http_error(status, Some(body));
+    let feil = SikriFeil::fra_http(status, Some(body));
 
     error!(
         target: "sikri.http",
@@ -54,8 +111,8 @@ async fn ensure_success(
         endpoint,
         status = %status,
         response_length = body.len(),
-        sikri_error_code = safe_detail,
-        sikri_recoverability = recoverability.as_str(),
+        sikri_error_code = feil.kode,
+        sikri_recoverability = feil.recoverability.as_str(),
         "Sikri response returned error status"
     );
     log_sikri_error_response_chunks(
@@ -63,11 +120,11 @@ async fn ensure_success(
         endpoint,
         status,
         body,
-        safe_detail,
-        recoverability.as_str(),
+        feil.kode,
+        feil.recoverability.as_str(),
     );
 
-    anyhow::bail!("{marker} {safe_detail}");
+    Err(feil)
 }
 
 fn log_sikri_error_response_chunks(
@@ -131,22 +188,42 @@ fn chunk_text_by_bytes(text: &str, max_chunk_bytes: usize) -> Vec<&str> {
     chunks
 }
 
-async fn hent_brukernavn_passord_sikri() -> Result<(String, String)> {
-    let project_id = env::var("APP_APPLICATION__PROJECT_ID")?;
+/// Credentials hentes per kall. Feil her er alltid recoverable: en manglende
+/// eller utilgjengelig secret er en driftsfeil, og å terminere klientens
+/// kommandoer på grunn av vår egen konfigurasjon ville vært verre enn å vente
+/// på at noen retter den.
+async fn hent_brukernavn_passord_sikri() -> Result<(String, String), SikriFeil> {
+    let project_id = env::var("APP_APPLICATION__PROJECT_ID").map_err(|_| {
+        error!(
+            target: "sikri.secret",
+            sikri_error_code = "sikri_secret_unavailable",
+            "APP_APPLICATION__PROJECT_ID er ikke satt"
+        );
+        SikriFeil::secret_utilgjengelig()
+    })?;
 
     let (username, password) = tokio::try_join!(
         get_secret(&project_id, "sikri-api-cloud-username", None),
         get_secret(&project_id, "sikri-api-cloud-password", None),
-    )?;
+    )
+    .map_err(|err| {
+        let feil = SikriFeil::secret_utilgjengelig();
+        error!(
+            target: "sikri.secret",
+            sikri_error_code = feil.kode,
+            sikri_recoverability = feil.recoverability.as_str(),
+            "Klarte ikke hente Sikri-credentials fra Secret Manager"
+        );
+        debug!(target: "sikri.secret", error = ?err, "Secret Manager error detail");
+        feil
+    })?;
 
     Ok((username, password))
 }
 
 #[tracing::instrument(skip_all, name = "sikri.alive")]
-pub async fn alive() -> Result<()> {
-    let (username, password) = hent_brukernavn_passord_sikri()
-        .await
-        .context("Feil ved henting av Sikri-brukernavn/passord (GCP secret)")?;
+pub async fn alive() -> Result<(), SikriFeil> {
+    let (username, password) = hent_brukernavn_passord_sikri().await?;
 
     let url = format!("{}/api/Archive/Test", base_url());
     info!(target: "sikri.http", method = "GET", endpoint = safe_endpoint_label(&url), "Sending request to Sikri");
@@ -155,10 +232,8 @@ pub async fn alive() -> Result<()> {
         .basic_auth(username, Some(password))
         .send()
         .await
-        .with_context(|| "Klarte ikke å sende Sikri request")?;
-    let _ = ensure_success(resp, "GET", &url)
-        .await
-        .with_context(|| "Sikri server svarte med feil for GET")?;
+        .map_err(|err| transportfeil("GET", &url, err))?;
+    let _ = ensure_success(resp, "GET", &url).await?;
 
     Ok(())
 }
@@ -168,10 +243,8 @@ pub async fn get_sak(
     saksnummer: &str,
     kildesystem: &str,
     inkluder_journalposter: bool,
-) -> Result<ElementsSakMedJournalposterResponse> {
-    let (username, password) = hent_brukernavn_passord_sikri()
-        .await
-        .context("Feil ved henting av Sikri-brukernavn/passord (GCP secret)")?;
+) -> Result<ElementsSakMedJournalposterResponse, SikriFeil> {
+    let (username, password) = hent_brukernavn_passord_sikri().await?;
 
     let url = format!("{}/api/Archive/HentArkivsak", base_url());
 
@@ -194,16 +267,14 @@ pub async fn get_sak(
         .basic_auth(username, Some(password))
         .send()
         .await
-        .with_context(|| "Klarte ikke å sende Sikri get_sak request")?;
-    let resp = ensure_success(resp, "GET", &url)
-        .await
-        .with_context(|| "Sikri server svarte med feil for get_sak")?;
+        .map_err(|err| transportfeil("GET", &url, err))?;
+    let resp = ensure_success(resp, "GET", &url).await?;
 
     //FIXME bør definere en egen DTO som er vår interne modell
     let parsed = resp
         .json::<ElementsSakMedJournalposterResponse>()
         .await
-        .with_context(|| "Feil ved parsing av JSON-respons for get_sak()")?;
+        .map_err(|err| parsefeil("GET", &url, err))?;
     debug!(
         target: "sikri.http",
         method = "GET",
@@ -219,7 +290,9 @@ pub async fn get_sak(
 /// Ren observasjon. Brukes av `AvventJournalfort` for å se når RPA har satt
 /// journalstatus til `J` (SKU-0016).
 #[tracing::instrument(skip_all, name = "sikri.hent_journalpost")]
-pub async fn hent_journalpost(journalpost_id: i32) -> Result<ElementsJournalpostRespons> {
+pub async fn hent_journalpost(
+    journalpost_id: i32,
+) -> Result<ElementsJournalpostRespons, SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/HentJournalpost", base_url());
 
@@ -236,23 +309,29 @@ pub async fn hent_journalpost(journalpost_id: i32) -> Result<ElementsJournalpost
         .basic_auth(username, Some(password))
         .send()
         .await
-        .with_context(|| "Klarte ikke å sende Sikri hent_journalpost request")?;
-    let resp = ensure_success(resp, "GET", &url)
-        .await
-        .with_context(|| "Sikri server svarte med feil for hent_journalpost")?;
+        .map_err(|err| transportfeil("GET", &url, err))?;
+    let resp = ensure_success(resp, "GET", &url).await?;
 
     let parsed = resp
         .json::<ElementsJournalpostRespons>()
         .await
-        .with_context(|| "Feil ved parsing av JSON-respons for hent_journalpost()")?;
+        .map_err(|err| parsefeil("GET", &url, err))?;
 
     Ok(parsed)
 }
 
 #[tracing::instrument(skip_all, name = "sikri.create_sak")]
-pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposterResponse> {
-    data.validate()
-        .map_err(|feil| anyhow::anyhow!("Ugyldig ElementsSak: {feil}"))?;
+pub async fn create_sak(
+    data: ElementsSak,
+) -> Result<ElementsSakMedJournalposterResponse, SikriFeil> {
+    // Vår egen forhåndsvalidering. Ekte irrecoverable: samme payload vil bli
+    // avvist likt hver gang. Meldingen bærer kun lengder, ikke innhold.
+    data.validate().map_err(|feil| {
+        SikriFeil::irrecoverable(
+            "sikri_request_validation_failed",
+            format!("Sikri/Elements avviste forespørselen: {feil}"),
+        )
+    })?;
 
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/OpprettArkivsak", base_url());
@@ -268,13 +347,13 @@ pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposter
         .json(&data)
         .send()
         .await
-        .with_context(|| "Klarte ikke å sende Sikri request")?;
+        .map_err(|err| transportfeil("POST", &url, err))?;
     let resp = ensure_success(resp, "POST", &url).await?;
 
     let parsed = resp
         .json::<ElementsSakMedJournalposterResponse>()
         .await
-        .with_context(|| "Feil ved parsing av JSON-respons for create_sak()")?;
+        .map_err(|err| parsefeil("POST", &url, err))?;
     debug!(
         target: "sikri.http",
         method = "POST",
@@ -288,7 +367,7 @@ pub async fn create_sak(data: ElementsSak) -> Result<ElementsSakMedJournalposter
 pub async fn opprett_journalpost(
     journalpost: ElementsJournalpost,
     saksnummer: &str,
-) -> Result<ElementsJournalpostRespons> {
+) -> Result<ElementsJournalpostRespons, SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/OpprettJournalpost", base_url());
     info!(
@@ -304,13 +383,13 @@ pub async fn opprett_journalpost(
         .json(&journalpost)
         .send()
         .await
-        .with_context(|| "Klarte ikke å sende Sikri request")?;
+        .map_err(|err| transportfeil("POST", &url, err))?;
     let resp = ensure_success(resp, "POST", &url).await?;
 
     let parsed = resp
         .json::<ElementsJournalpostRespons>()
         .await
-        .with_context(|| "Feil ved parsing av JSON-respons for opprett_journalpost()")?;
+        .map_err(|err| parsefeil("POST", &url, err))?;
     debug!(
         target: "sikri.http",
         method = "POST",
@@ -324,7 +403,7 @@ pub async fn opprett_journalpost(
 pub async fn legg_til_vedlegg(
     journalpost_id: i32,
     dokumenter: Vec<ElementsDokument>,
-) -> Result<Vec<ElementsDokumentRespons>> {
+) -> Result<Vec<ElementsDokumentRespons>, SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/LeggTilVedleggPaaJournalpost", base_url());
     info!(
@@ -341,13 +420,13 @@ pub async fn legg_til_vedlegg(
         .json(&dokumenter)
         .send()
         .await
-        .with_context(|| "Klarte ikke å sende Sikri request")?;
+        .map_err(|err| transportfeil("POST", &url, err))?;
     let resp = ensure_success(resp, "POST", &url).await?;
 
     let parsed = resp
         .json::<Vec<ElementsDokumentRespons>>()
         .await
-        .with_context(|| "Feil ved parsing av JSON-respons for legg_til_vedlegg()")?;
+        .map_err(|err| parsefeil("POST", &url, err))?;
     debug!(
         target: "sikri.http",
         method = "POST",
@@ -359,7 +438,7 @@ pub async fn legg_til_vedlegg(
 }
 
 #[tracing::instrument(skip_all, name = "sikri.sett_journalpost_status", fields(journalpost_status = status))]
-pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Result<()> {
+pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Result<(), SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/SetJournalpostStatus", base_url());
     info!(
@@ -378,13 +457,16 @@ pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Resul
         ])
         .send()
         .await
-        .with_context(|| "Klarte ikke å sende Sikri request")?;
+        .map_err(|err| transportfeil("PUT", &url, err))?;
     let _ = ensure_success(resp, "PUT", &url).await?;
     Ok(())
 }
 
 #[tracing::instrument(skip_all, name = "sikri.avskriv_journalpost", fields(avskrivingsmaate))]
-pub async fn avskriv_journalpost(journalpost_id: i32, avskrivingsmaate: &str) -> Result<()> {
+pub async fn avskriv_journalpost(
+    journalpost_id: i32,
+    avskrivingsmaate: &str,
+) -> Result<(), SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/AvskrivJournalpost", base_url());
     info!(
@@ -402,13 +484,13 @@ pub async fn avskriv_journalpost(journalpost_id: i32, avskrivingsmaate: &str) ->
         ])
         .send()
         .await
-        .with_context(|| "Klarte ikke å sende Sikri request")?;
+        .map_err(|err| transportfeil("POST", &url, err))?;
     let _ = ensure_success(resp, "POST", &url).await?;
     Ok(())
 }
 
 #[tracing::instrument(skip_all, name = "sikri.avslutt_sak")]
-pub async fn avslutt_sak(saksnummer: &str) -> Result<()> {
+pub async fn avslutt_sak(saksnummer: &str) -> Result<(), SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/SetStatusForArkivSak", base_url());
     info!(
@@ -423,7 +505,7 @@ pub async fn avslutt_sak(saksnummer: &str) -> Result<()> {
         .query(&[("saksnr", saksnummer), ("nySaksstatus", "A")])
         .send()
         .await
-        .with_context(|| "Klarte ikke å sende Sikri request")?;
+        .map_err(|err| transportfeil("PUT", &url, err))?;
     let _ = ensure_success(resp, "PUT", &url).await?;
     Ok(())
 }
@@ -433,7 +515,7 @@ pub async fn sett_saksansvarlig(
     saksnummer: &str,
     saksbehandler: &str,
     saksbehandler_enhet: &str,
-) -> Result<()> {
+) -> Result<(), SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/SetSaksansvarligIdForArkivSak", base_url());
     info!(
@@ -452,7 +534,7 @@ pub async fn sett_saksansvarlig(
         ])
         .send()
         .await
-        .with_context(|| "Klarte ikke å sende Sikri request")?;
+        .map_err(|err| transportfeil("PUT", &url, err))?;
     let _ = ensure_success(resp, "PUT", &url).await?;
     Ok(())
 }

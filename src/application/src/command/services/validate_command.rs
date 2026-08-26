@@ -123,13 +123,11 @@ impl ValidateCommandService {
                 message,
                 error_code,
             } => {
-                self.emit(
-                    &envelope,
-                    CommandEvent::Avvist,
-                    "Forespørselen ble avvist.",
-                    Some(error_code),
-                )
-                .await?;
+                // Klienten får den faktiske grunnen, ikke «Forespørselen ble
+                // avvist.». Meldingene er allerede sanitiserte: de sier hva
+                // som er galt uten å gjenta innholdet som var galt.
+                self.emit(&envelope, CommandEvent::Avvist, &message, Some(error_code))
+                    .await?;
                 Ok(ValidationOutcome::Irrecoverable {
                     message,
                     error_code,
@@ -199,17 +197,20 @@ impl ValidateCommandService {
                     ValidationOutcome::Ok
                 }
             }
+            // Melding og error_code kommer fra adapteren, som er der
+            // klassifiseringen faktisk finnes. Et ukjent saksnummer skal gi
+            // NotFound, ikke InvalidRequest for alt.
             Err(err) => match err.kind {
                 crate::command::ports::command_state_port::ArkivSakTilstandErrorKind::Irrecoverable => {
                     ValidationOutcome::Irrecoverable {
                         message: err.message,
-                        error_code: StatusErrorCode::InvalidRequest,
+                        error_code: err.error_code,
                     }
                 }
                 crate::command::ports::command_state_port::ArkivSakTilstandErrorKind::Recoverable => {
                     ValidationOutcome::Recoverable {
                         message: err.message,
-                        error_code: StatusErrorCode::TemporaryUnavailable,
+                        error_code: err.error_code,
                     }
                 }
             },

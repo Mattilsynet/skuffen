@@ -308,9 +308,14 @@ arkivkall, med egen id, egen status, egen retry og egen statuslinje utad.
   faktaoppdatering i én transaksjon etterpå. En operasjon funnet i `sendt` ved oppstart har ukjent
   utfall og går til `krever_avklaring` for manuell opprydding.
 - Recoverable feil retryes for alltid med eksponentiell backoff opp til én gang per døgn. Kun
-  irrecoverable feil blir terminalt `feilet`.
-- Worker tar lås med `FOR UPDATE SKIP LOCKED` slik at flere workere ikke tar samme kommando.
-- `command_execution.payload` er den varige kilden; planen bygges på nytt for hvert forsøk.
+  irrecoverable feil blir terminalt `feilet`. Terminal feil krever positivt treff i regelsettet;
+  se [SKU-0017](docs/adr/skuffen/SKU-0017-terminal-feil-krever-positivt-treff.md) og
+  «Feilhåndtering» lenger ned.
+- Eksekvering er enleder: én instans holder en Postgres advisory lock og plukker operasjoner.
+  Låsen ligger på en connection som er tatt ut av poolen, så den slippes først når leasen droppes.
+- Dekomponering skjer én gang. Operasjonslisten er en ren funksjon av command payload, og det
+  finnes ingen re-planlegging. Executor leser materialiserte attributter fra tilstandstabellene og
+  rører aldri payloaden.
 
 ## Runtime-prioritering
 
@@ -431,6 +436,22 @@ Skuffen følger best effort.
 Feil klassifiseres som:
 	•	Recoverable (Prøves på nytt)
 	•	Irrecoverable (Gir feilmelding tilbake til client, og stopper retries)
+
+**Terminal feil krever positivt treff** (SKU-0017). `sikri_client` klassifiserer mot et eksplisitt
+regelsett, og bunnen er `Recoverable`: en feil vi ikke har en regel for, retryes til noen legger
+inn en. `401` og `403` er recoverable — et rotert passord skal ikke terminere hver operasjon som er
+underveis, siden `feilet` er monotont og ikke kan trekkes tilbake. `404` er irrecoverable.
+Body-regler går foran statusregler, så kjent feiltekst terminerer selv der statuskoden alene ville
+gitt retry.
+
+Klassifiseringen bæres som en typet feil hele veien. `sikri_client` eier kode og klientvendt
+melding; adapterne i `infrastructure` legger på klientvendt feilkode; `application` videreformidler
+uten å tolke. Feilens felter har hver sin mottaker: `kode` og intern detalj går til
+`operasjon.siste_detalj`, mens `melding` og `error_code` går til klienten på statusstrømmen.
+Underliggende feiltekst — sqlx-feil, rå Sikri-body — når aldri klienten.
+
+Nye `sikri_*`-koder fanges av en dekningstest: hver kode må ha en oversettelse til en klientvendt
+feilkode før den kan nå en klient.
 
 
 

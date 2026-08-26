@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use domain::eksekvering::typer::EksekveringFeil;
 use uuid::Uuid;
 
 use crate::command::materialisering::{
@@ -58,14 +59,14 @@ pub trait ArkivGateway: Send + Sync {
     async fn opprett_sak(
         &self,
         attributter: &SakAttributter,
-    ) -> Result<OpprettSakResultat, anyhow::Error>;
+    ) -> Result<OpprettSakResultat, EksekveringFeil>;
 
     async fn opprett_journalpost(
         &self,
         saksnummer: &str,
         journalpost: &JournalpostAttributter,
         hoveddokument: &DokumentAttributter,
-    ) -> Result<OpprettJournalpostResultat, anyhow::Error>;
+    ) -> Result<OpprettJournalpostResultat, EksekveringFeil>;
 
     /// Ett om gangen (D5). Sikris batch-API returnerer `Vec<Option<i32>>`,
     /// der partial success ikke er håndterbart.
@@ -73,31 +74,31 @@ pub trait ArkivGateway: Send + Sync {
         &self,
         journalpost_id: i32,
         vedlegg: &DokumentAttributter,
-    ) -> Result<Option<i32>, anyhow::Error>;
+    ) -> Result<Option<i32>, EksekveringFeil>;
 
     async fn sett_journalpost_status(
         &self,
         journalpost_id: i32,
         status: Journalstatus,
-    ) -> Result<(), anyhow::Error>;
+    ) -> Result<(), EksekveringFeil>;
 
     /// Kun inngående avskrives (D21). `TE` — tatt til etterretning.
-    async fn avskriv_journalpost(&self, journalpost_id: i32) -> Result<(), anyhow::Error>;
+    async fn avskriv_journalpost(&self, journalpost_id: i32) -> Result<(), EksekveringFeil>;
 
     /// Ren observasjon.
     async fn hent_journalstatus(
         &self,
         journalpost_id: i32,
-    ) -> Result<ObservertJournalstatus, anyhow::Error>;
+    ) -> Result<ObservertJournalstatus, EksekveringFeil>;
 
-    async fn avslutt_sak(&self, saksnummer: &str) -> Result<(), anyhow::Error>;
+    async fn avslutt_sak(&self, saksnummer: &str) -> Result<(), EksekveringFeil>;
 
     async fn sett_saksansvarlig(
         &self,
         saksnummer: &str,
         saksbehandler_id: &str,
         saksbehandler_enhet: &str,
-    ) -> Result<(), anyhow::Error>;
+    ) -> Result<(), EksekveringFeil>;
 }
 
 /// Lagret på deterministisk nøkkel.

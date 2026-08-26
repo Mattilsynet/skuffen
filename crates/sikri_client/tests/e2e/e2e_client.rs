@@ -72,15 +72,14 @@ async fn hent_sak_e2e_henter_secrets_og_kaller_api_med_saksnummer_som_ikke_finne
     assert!(!project_id.is_empty());
     assert!(!base_url.is_empty());
 
-    // Kall API med et saksnummer som ikke finnes og verifiser at vi får 404
-    let err = sikri_client::hent_sak("0000/00000", "MATS", false)
+    // Kall API med et saksnummer som ikke finnes og verifiser klassifiseringen.
+    let feil = sikri_client::hent_sak("0000/00000", "MATS", false)
         .await
         .expect_err("Forventet 404 for not found");
-    if let Some(req_err) = err.downcast_ref::<reqwest::Error>() {
-        println!("downcasted status: {:#?}", req_err.status().clone());
-        let status = req_err.status();
-        assert_eq!(status, Some(reqwest::StatusCode::NOT_FOUND));
-    } else {
-        panic!("Forventet reqwest::Error pakket i anyhow, fikk: {err:?}");
-    }
+
+    assert_eq!(feil.kode, "sikri_resource_not_found");
+    assert!(
+        !feil.er_recoverable(),
+        "et ukjent saksnummer skal avvises terminalt, ikke retryes"
+    );
 }

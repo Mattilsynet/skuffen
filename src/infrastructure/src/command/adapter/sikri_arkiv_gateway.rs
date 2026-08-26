@@ -13,10 +13,66 @@ use application::command::{
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use domain::eksekvering::tilstand::JournalpostType;
+use domain::eksekvering::typer::{EksekveringFeil, StatusErrorCode};
 use sikri_client::domain::ny_sak::NySak;
 use sikri_client::dto::elements_avsender_mottaker::ElementsAvsenderMottaker;
 use sikri_client::dto::elements_dokument::ElementsDokument;
 use sikri_client::dto::elements_journalpost::ElementsJournalpost;
+use sikri_client::{Recoverability, SikriFeil};
+
+/// Leverandørvokabularet stopper her.
+///
+/// `SikriFeil` bærer allerede klassifisering, stabil kode og en trygg,
+/// ferdigmappet brukertekst. Denne funksjonen legger kun til hvilken
+/// klientvendt feilkode koden svarer til — det er den ene oversettelsen
+/// `sikri_client` ikke kan gjøre selv, siden `StatusErrorCode` bor i `domain`.
+fn fra_sikri(feil: SikriFeil) -> EksekveringFeil {
+    let error_code = error_code_for(feil.kode).unwrap_or(StatusErrorCode::ProcessingFailed);
+    match feil.recoverability {
+        Recoverability::Recoverable => {
+            EksekveringFeil::recoverable(feil.kode, feil.melding, error_code)
+        }
+        Recoverability::Irrecoverable => {
+            EksekveringFeil::irrecoverable(feil.kode, feil.melding, error_code)
+        }
+    }
+}
+
+/// `None` betyr at koden ikke er tatt stilling til. Kalleren faller til
+/// `ProcessingFailed`, og dekningstesten nederst fanger hullet.
+fn error_code_for(kode: &str) -> Option<StatusErrorCode> {
+    let error_code = match kode {
+        "sikri_unknown_user"
+        | "sikri_access_control_rejected"
+        | "sikri_validation_failed"
+        | "sikri_missing_document_content"
+        | "sikri_invalid_request"
+        | "sikri_request_validation_failed" => StatusErrorCode::InvalidRequest,
+        "sikri_resource_not_found" => StatusErrorCode::NotFound,
+        "sikri_rate_limited"
+        | "sikri_upstream_unavailable"
+        | "sikri_upstream_error"
+        | "sikri_secret_unavailable" => StatusErrorCode::TemporaryUnavailable,
+        "sikri_response_unparsable" | "sikri_unknown_error" => StatusErrorCode::ProcessingFailed,
+        _ => return None,
+    };
+    Some(error_code)
+}
+
+/// Våre egne mappingfeil. Ekte irrecoverable — samme payload gir samme feil
+/// hver gang — og `client_reference` peker på nøyaktig hvilket dokument eller
+/// hvilken korrespondansepart klienten må rette.
+fn arkivmapping_feil(
+    kode: &'static str,
+    melding: &str,
+    client_reference: uuid::Uuid,
+) -> EksekveringFeil {
+    EksekveringFeil::irrecoverable(
+        kode,
+        format!("{melding} (client_reference={client_reference})"),
+        StatusErrorCode::InvalidRequest,
+    )
+}
 
 #[derive(Clone)]
 pub struct SikriArkivGateway {
@@ -34,7 +90,7 @@ impl ArkivGateway for SikriArkivGateway {
     async fn opprett_sak(
         &self,
         attributter: &SakAttributter,
-    ) -> Result<OpprettSakResultat, anyhow::Error> {
+    ) -> Result<OpprettSakResultat, EksekveringFeil> {
         let ny_sak = NySak {
             sakstittel: attributter.sakstittel.clone(),
             arkivdel: match attributter.arkivdel {
@@ -61,10 +117,14 @@ impl ArkivGateway for SikriArkivGateway {
             virksomhetsmappe_id: None,
         };
 
-        let resp = sikri_client::opprett_sak(ny_sak).await?;
-        let saksnummer = resp
-            .saksnr
-            .ok_or_else(|| anyhow::anyhow!("Saksnummer mangler i respons"))?;
+        let resp = sikri_client::opprett_sak(ny_sak).await.map_err(fra_sikri)?;
+        let saksnummer = resp.saksnr.ok_or_else(|| {
+            EksekveringFeil::recoverable(
+                "sikri_response_unparsable",
+                "Uventet svar fra Sikri/Elements. Prøv igjen senere.",
+                StatusErrorCode::TemporaryUnavailable,
+            )
+        })?;
         Ok(OpprettSakResultat { saksnummer })
     }
 
@@ -73,12 +133,18 @@ impl ArkivGateway for SikriArkivGateway {
         saksnummer: &str,
         journalpost: &JournalpostAttributter,
         hoveddokument: &DokumentAttributter,
-    ) -> Result<OpprettJournalpostResultat, anyhow::Error> {
+    ) -> Result<OpprettJournalpostResultat, EksekveringFeil> {
         let elements_journalpost = self.map_journalpost(journalpost, hoveddokument).await?;
-        let resp = sikri_client::opprett_journalpost(elements_journalpost, saksnummer).await?;
-        let journalpost_id = resp
-            .journalpost_id
-            .ok_or_else(|| anyhow::anyhow!("JournalpostId mangler i respons"))?;
+        let resp = sikri_client::opprett_journalpost(elements_journalpost, saksnummer)
+            .await
+            .map_err(fra_sikri)?;
+        let journalpost_id = resp.journalpost_id.ok_or_else(|| {
+            EksekveringFeil::recoverable(
+                "sikri_response_unparsable",
+                "Uventet svar fra Sikri/Elements. Prøv igjen senere.",
+                StatusErrorCode::TemporaryUnavailable,
+            )
+        })?;
         Ok(OpprettJournalpostResultat { journalpost_id })
     }
 
@@ -88,9 +154,11 @@ impl ArkivGateway for SikriArkivGateway {
         &self,
         journalpost_id: i32,
         vedlegg: &DokumentAttributter,
-    ) -> Result<Option<i32>, anyhow::Error> {
+    ) -> Result<Option<i32>, EksekveringFeil> {
         let dokument = self.map_dokument(vedlegg, false).await?;
-        let resp = sikri_client::legg_til_vedlegg(journalpost_id, vec![dokument]).await?;
+        let resp = sikri_client::legg_til_vedlegg(journalpost_id, vec![dokument])
+            .await
+            .map_err(fra_sikri)?;
         Ok(resp.into_iter().next().and_then(|d| d.dokument_id))
     }
 
@@ -98,20 +166,26 @@ impl ArkivGateway for SikriArkivGateway {
         &self,
         journalpost_id: i32,
         status: Journalstatus,
-    ) -> Result<(), anyhow::Error> {
-        sikri_client::sett_journalpost_status(journalpost_id, status.as_arkivkode()).await
+    ) -> Result<(), EksekveringFeil> {
+        sikri_client::sett_journalpost_status(journalpost_id, status.as_arkivkode())
+            .await
+            .map_err(fra_sikri)
     }
 
     /// Kun inngående avskrives (D21). `TE` — tatt til etterretning.
-    async fn avskriv_journalpost(&self, journalpost_id: i32) -> Result<(), anyhow::Error> {
-        sikri_client::avskriv_journalpost(journalpost_id, "TE").await
+    async fn avskriv_journalpost(&self, journalpost_id: i32) -> Result<(), EksekveringFeil> {
+        sikri_client::avskriv_journalpost(journalpost_id, "TE")
+            .await
+            .map_err(fra_sikri)
     }
 
     async fn hent_journalstatus(
         &self,
         journalpost_id: i32,
-    ) -> Result<ObservertJournalstatus, anyhow::Error> {
-        let journalpost = sikri_client::hent_journalpost(journalpost_id).await?;
+    ) -> Result<ObservertJournalstatus, EksekveringFeil> {
+        let journalpost = sikri_client::hent_journalpost(journalpost_id)
+            .await
+            .map_err(fra_sikri)?;
         Ok(match journalpost.journalstatus.as_deref() {
             Some("R") => ObservertJournalstatus::Reservert,
             Some("F") => ObservertJournalstatus::KlarForEkspedering,
@@ -121,8 +195,10 @@ impl ArkivGateway for SikriArkivGateway {
         })
     }
 
-    async fn avslutt_sak(&self, saksnummer: &str) -> Result<(), anyhow::Error> {
-        sikri_client::avslutt_sak(saksnummer).await
+    async fn avslutt_sak(&self, saksnummer: &str) -> Result<(), EksekveringFeil> {
+        sikri_client::avslutt_sak(saksnummer)
+            .await
+            .map_err(fra_sikri)
     }
 
     async fn sett_saksansvarlig(
@@ -130,8 +206,10 @@ impl ArkivGateway for SikriArkivGateway {
         saksnummer: &str,
         saksbehandler_id: &str,
         saksbehandler_enhet: &str,
-    ) -> Result<(), anyhow::Error> {
-        sikri_client::sett_saksansvarlig(saksnummer, saksbehandler_id, saksbehandler_enhet).await
+    ) -> Result<(), EksekveringFeil> {
+        sikri_client::sett_saksansvarlig(saksnummer, saksbehandler_id, saksbehandler_enhet)
+            .await
+            .map_err(fra_sikri)
     }
 }
 
@@ -147,7 +225,7 @@ impl SikriArkivGateway {
         &self,
         journalpost: &JournalpostAttributter,
         hoveddokument: &DokumentAttributter,
-    ) -> Result<ElementsJournalpost, anyhow::Error> {
+    ) -> Result<ElementsJournalpost, EksekveringFeil> {
         let client_reference = journalpost.client_reference;
         let skjerming = skjerming_fra_tilgang(&journalpost.tilgang, client_reference)?;
         let dokumenter = vec![self.map_dokument(hoveddokument, true).await?];
@@ -185,7 +263,7 @@ impl SikriArkivGateway {
         journalpost: &JournalpostAttributter,
         skjerming: &Skjerming,
         client_reference: uuid::Uuid,
-    ) -> Result<Option<Vec<ElementsAvsenderMottaker>>, anyhow::Error> {
+    ) -> Result<Option<Vec<ElementsAvsenderMottaker>>, EksekveringFeil> {
         // GENERELL trigger SvarUt; DIG brukes når utsending ikke benyttes.
         let forsendelsesmetode = if journalpost.med_utsending {
             "GENERELL"
@@ -207,18 +285,20 @@ impl SikriArkivGateway {
                     am.forsendelsesmetode = Some(forsendelsesmetode.to_string());
                     Ok(am)
                 })
-                .collect::<Result<Vec<_>, anyhow::Error>>()?,
+                .collect::<Result<Vec<_>, EksekveringFeil>>()?,
             Korrespondanseparter::Utsendingsmottakere(mottakere) => mottakere
                 .iter()
                 .map(|mottaker| {
                     utsendingsmottaker_avsender_mottaker(mottaker, skjerming, client_reference)
                 })
-                .collect::<Result<Vec<_>, anyhow::Error>>()?,
+                .collect::<Result<Vec<_>, EksekveringFeil>>()?,
         };
 
         if parter.is_empty() {
-            return Err(anyhow::anyhow!(
-                "arkivmapping_mottaker_mangler client_reference={client_reference} sikri_recoverability=irrecoverable"
+            return Err(arkivmapping_feil(
+                "arkivmapping_mottaker_mangler",
+                "Mottaker mangler.",
+                client_reference,
             ));
         }
 
@@ -229,7 +309,7 @@ impl SikriArkivGateway {
         &self,
         dokument: &DokumentAttributter,
         hoveddokument: bool,
-    ) -> Result<ElementsDokument, anyhow::Error> {
+    ) -> Result<ElementsDokument, EksekveringFeil> {
         // For en mal er det den rendrede PDF-en som skal til arkivet; original
         // mal_referanse sendes aldri (SKU-0005).
         let (referanse, filtype) = match &dokument.kilde {
@@ -241,9 +321,8 @@ impl SikriArkivGateway {
                 rendered_dokument_referanse,
                 ..
             } => {
-                let referanse = rendered_dokument_referanse.ok_or_else(|| {
-                    anyhow::anyhow!("arkivmapping_urendret_mal sikri_recoverability=irrecoverable")
-                })?;
+                let referanse = rendered_dokument_referanse
+                    .ok_or_else(|| EksekveringFeil::intern("arkivmapping_urendret_mal"))?;
                 (referanse, "PDF".to_string())
             }
         };
@@ -260,13 +339,18 @@ impl SikriArkivGateway {
     async fn hent_media_base64(
         &self,
         dokument_referanse: uuid::Uuid,
-    ) -> Result<String, anyhow::Error> {
+    ) -> Result<String, EksekveringFeil> {
         let media = self
             .media_store
             .get(dokument_referanse)
-            .await?
+            .await
+            .map_err(|err| {
+                EksekveringFeil::intern_midlertidig("intern_media_utilgjengelig")
+                    .med_intern_detalj(err.to_string())
+            })?
             .ok_or_else(|| {
-                anyhow::anyhow!("Media mangler for dokument_referanse={dokument_referanse}")
+                EksekveringFeil::intern("intern_media_mangler")
+                    .med_intern_detalj(format!("dokument_referanse={dokument_referanse}"))
             })?;
         Ok(STANDARD.encode(media.data))
     }
@@ -305,7 +389,7 @@ impl Skjerming {
 fn skjerming_fra_tilgang(
     tilgang: &Tilgang,
     client_reference: uuid::Uuid,
-) -> Result<Skjerming, anyhow::Error> {
+) -> Result<Skjerming, EksekveringFeil> {
     match (
         tilgang.tilgangskode.as_ref(),
         tilgang.tilgangshjemmel.as_ref(),
@@ -317,8 +401,10 @@ fn skjerming_fra_tilgang(
         }),
         // Skjemet krever begge; halv skjerming er en mappingfeil, ikke noe å
         // gjette på (SKU-0015).
-        _ => Err(anyhow::anyhow!(
-            "arkivmapping_ufullstendig_skjerming client_reference={client_reference} sikri_recoverability=irrecoverable"
+        _ => Err(arkivmapping_feil(
+            "arkivmapping_ufullstendig_skjerming",
+            "Ufullstendig skjerming: tilgangskode og tilgangshjemmel må settes sammen.",
+            client_reference,
         )),
     }
 }
@@ -338,7 +424,7 @@ fn korrespondansepart_avsender_mottaker(
     part: &Korrespondansepart,
     er_mottaker: bool,
     skjerming: &Skjerming,
-) -> Result<ElementsAvsenderMottaker, anyhow::Error> {
+) -> Result<ElementsAvsenderMottaker, EksekveringFeil> {
     Ok(ElementsAvsenderMottaker {
         er_mottaker: Some(er_mottaker),
         navn: Some(part.navn.clone()),
@@ -363,12 +449,14 @@ fn utsendingsmottaker_avsender_mottaker(
     mottaker: &Utsendingsmottaker,
     skjerming: &Skjerming,
     client_reference: uuid::Uuid,
-) -> Result<ElementsAvsenderMottaker, anyhow::Error> {
+) -> Result<ElementsAvsenderMottaker, EksekveringFeil> {
     // postnummer er en validert Postnummer-newtype (4 siffer), så kun de rå
     // String-feltene må sjekkes for tomhet her.
     if mottaker.adresse.adresse.trim().is_empty() || mottaker.adresse.poststed.trim().is_empty() {
-        return Err(anyhow::anyhow!(
-            "arkivmapping_postadresse_mangler client_reference={client_reference} sikri_recoverability=irrecoverable"
+        return Err(arkivmapping_feil(
+            "arkivmapping_postadresse_mangler",
+            "Postadresse mangler.",
+            client_reference,
         ));
     }
 
@@ -407,7 +495,7 @@ fn verifiser_skjerming(
     journalpost: &ElementsJournalpost,
     skjerming: &Skjerming,
     client_reference: uuid::Uuid,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), EksekveringFeil> {
     if skjerming.er_skjermet() {
         let kode_satt = journalpost
             .tilgangskode
@@ -429,8 +517,9 @@ fn verifiser_skjerming(
             });
 
         if !(kode_satt && hjemmel_satt && alle_unntatt) {
-            return Err(anyhow::anyhow!(
-                "arkivmapping_skjerming_postcondition_brutt client_reference={client_reference} sikri_recoverability=irrecoverable"
+            // Postcondition i vår egen mapping, ikke noe klienten kan rette.
+            return Err(EksekveringFeil::intern(
+                "arkivmapping_skjerming_postcondition_brutt",
             ));
         }
     }
@@ -441,4 +530,52 @@ fn verifiser_skjerming(
         "arkivmapping_skjerming_verifisert"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alle_sikri_koder_har_en_klientvendt_feilkode() {
+        // En ny kode uten oppføring faller til ProcessingFailed i drift.
+        // Denne testen tvinger noen til å ta stilling til hva klienten skal
+        // se før koden rekker å nå dit.
+        for kode in sikri_client::ALLE_SIKRI_KODER {
+            assert!(
+                error_code_for(kode).is_some(),
+                "{kode} mangler oversettelse til en klientvendt feilkode"
+            );
+        }
+    }
+
+    #[test]
+    fn arkivmapping_feil_peker_paa_client_reference() {
+        // Uten referansen vet ikke klienten hvilket dokument eller hvilken
+        // korrespondansepart som er feil.
+        let client_reference = uuid::Uuid::from_u128(7);
+        let feil = arkivmapping_feil(
+            "arkivmapping_mottaker_mangler",
+            "Mottaker mangler.",
+            client_reference,
+        );
+
+        assert!(!feil.er_recoverable());
+        assert_eq!(feil.kode, "arkivmapping_mottaker_mangler");
+        assert_eq!(feil.error_code, StatusErrorCode::InvalidRequest);
+        assert!(feil.melding.contains(&client_reference.to_string()));
+    }
+
+    #[test]
+    fn sikri_feil_beholder_klassifisering_kode_og_melding() {
+        let feil = fra_sikri(SikriFeil::irrecoverable(
+            "sikri_resource_not_found",
+            "Fant ikke ressursen.",
+        ));
+
+        assert!(!feil.er_recoverable());
+        assert_eq!(feil.kode, "sikri_resource_not_found");
+        assert_eq!(feil.error_code, StatusErrorCode::NotFound);
+        assert_eq!(feil.melding, "Fant ikke ressursen.");
+    }
 }

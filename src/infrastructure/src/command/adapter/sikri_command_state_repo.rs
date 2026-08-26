@@ -2,7 +2,8 @@ use application::command::ports::command_state_port::{
     ArkivSakTilstand, ArkivSakTilstandError, ArkivSakTilstandErrorKind, ArkivSakTilstandRepository,
 };
 use async_trait::async_trait;
-use sikri_client::Recoverability;
+use domain::eksekvering::typer::StatusErrorCode;
+use sikri_client::{Recoverability, SikriFeil};
 
 #[derive(Clone)]
 pub struct SikriCommandStateRepository;
@@ -23,109 +24,146 @@ impl ArkivSakTilstandRepository for SikriCommandStateRepository {
                         == Some('A');
                 Ok(ArkivSakTilstand { avsluttet })
             }
-            Err(err) => {
-                if let Some(req_err) = err.downcast_ref::<reqwest::Error>() {
-                    let status = req_err.status();
-                    let kind = map_status_to_kind(status);
-                    let message = map_status_to_safe_code(status);
-                    return Err(ArkivSakTilstandError::new(kind, message));
-                }
-
-                Err(ArkivSakTilstandError::new(
-                    ArkivSakTilstandErrorKind::Recoverable,
-                    "sikri_upstream_unavailable",
-                ))
-            }
+            // Klassifiseringen er allerede gjort, der bodyen fantes.
+            Err(feil) => Err(fra_sikri(feil)),
         }
     }
 }
 
-fn map_status_to_kind(status: Option<reqwest::StatusCode>) -> ArkivSakTilstandErrorKind {
-    match status {
-        Some(status) => match sikri_client::classify_http_error(status, None) {
-            Recoverability::Recoverable => ArkivSakTilstandErrorKind::Recoverable,
-            Recoverability::Irrecoverable => ArkivSakTilstandErrorKind::Irrecoverable,
-        },
-        None => ArkivSakTilstandErrorKind::Recoverable,
-    }
+/// `SikriFeil` bærer klassifisering, stabil kode og en trygg brukertekst.
+/// Her legges kun den klientvendte feilkoden på.
+fn fra_sikri(feil: SikriFeil) -> ArkivSakTilstandError {
+    let kind = match feil.recoverability {
+        Recoverability::Recoverable => ArkivSakTilstandErrorKind::Recoverable,
+        Recoverability::Irrecoverable => ArkivSakTilstandErrorKind::Irrecoverable,
+    };
+    ArkivSakTilstandError::new(
+        kind,
+        feil.kode,
+        feil.melding,
+        error_code_for(feil.kode).unwrap_or(StatusErrorCode::ProcessingFailed),
+    )
 }
 
-fn map_status_to_safe_code(status: Option<reqwest::StatusCode>) -> &'static str {
-    match status {
-        Some(status) => sikri_client::safe_detail_for_http_error(status, None),
-        None => "sikri_upstream_unavailable",
-    }
+fn error_code_for(kode: &str) -> Option<StatusErrorCode> {
+    let error_code = match kode {
+        "sikri_unknown_user"
+        | "sikri_access_control_rejected"
+        | "sikri_validation_failed"
+        | "sikri_missing_document_content"
+        | "sikri_invalid_request"
+        | "sikri_request_validation_failed" => StatusErrorCode::InvalidRequest,
+        "sikri_resource_not_found" => StatusErrorCode::NotFound,
+        "sikri_rate_limited"
+        | "sikri_upstream_unavailable"
+        | "sikri_upstream_error"
+        | "sikri_secret_unavailable" => StatusErrorCode::TemporaryUnavailable,
+        "sikri_response_unparsable" | "sikri_unknown_error" => StatusErrorCode::ProcessingFailed,
+        _ => return None,
+    };
+    Some(error_code)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::StatusCode;
 
-    #[test]
-    fn maps_404_to_irrecoverable_and_safe_code() {
-        let kind = map_status_to_kind(Some(reqwest::StatusCode::NOT_FOUND));
-        let code = map_status_to_safe_code(Some(reqwest::StatusCode::NOT_FOUND));
-        assert_eq!(kind, ArkivSakTilstandErrorKind::Irrecoverable);
-        assert_eq!(code, "sikri_resource_not_found");
+    /// Testene går gjennom `SikriFeil::fra_http`, altså samme vei som
+    /// produksjonskoden. Den forrige utgaven kalte mappingfunksjonen direkte
+    /// og var grønn mens kallveien var brutt.
+    fn klassifiser(status: StatusCode, body: Option<&str>) -> ArkivSakTilstandError {
+        fra_sikri(SikriFeil::fra_http(status, body))
     }
 
     #[test]
-    fn maps_503_to_recoverable_and_safe_code() {
-        let kind = map_status_to_kind(Some(reqwest::StatusCode::SERVICE_UNAVAILABLE));
-        let code = map_status_to_safe_code(Some(reqwest::StatusCode::SERVICE_UNAVAILABLE));
-        assert_eq!(kind, ArkivSakTilstandErrorKind::Recoverable);
-        assert_eq!(code, "sikri_upstream_error");
-    }
-
-    #[test]
-    fn maps_429_to_recoverable_and_safe_code() {
-        let kind = map_status_to_kind(Some(reqwest::StatusCode::TOO_MANY_REQUESTS));
-        let code = map_status_to_safe_code(Some(reqwest::StatusCode::TOO_MANY_REQUESTS));
-        assert_eq!(kind, ArkivSakTilstandErrorKind::Recoverable);
-        assert_eq!(code, "sikri_rate_limited");
-    }
-
-    #[test]
-    fn maps_400_to_irrecoverable_and_safe_code() {
-        let kind = map_status_to_kind(Some(reqwest::StatusCode::BAD_REQUEST));
-        let code = map_status_to_safe_code(Some(reqwest::StatusCode::BAD_REQUEST));
-        assert_eq!(kind, ArkivSakTilstandErrorKind::Irrecoverable);
-        assert_eq!(code, "sikri_invalid_request");
-    }
-
-    #[test]
-    fn maps_none_status_to_recoverable_and_safe_code() {
-        let kind = map_status_to_kind(None);
-        let code = map_status_to_safe_code(None);
-        assert_eq!(kind, ArkivSakTilstandErrorKind::Recoverable);
-        assert_eq!(code, "sikri_upstream_unavailable");
-    }
-
-    #[test]
-    fn safe_codes_never_contain_sensitive_data() {
-        let statuses = vec![
-            reqwest::StatusCode::NOT_FOUND,
-            reqwest::StatusCode::BAD_REQUEST,
-            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
-            reqwest::StatusCode::SERVICE_UNAVAILABLE,
-            reqwest::StatusCode::TOO_MANY_REQUESTS,
-        ];
-        for status in statuses {
-            let code = map_status_to_safe_code(Some(status));
-            assert!(!code.contains("http"), "Code for {} contains http", status);
-            assert!(!code.contains("http"), "Code for {} contains https", status);
+    fn alle_sikri_koder_har_en_klientvendt_feilkode() {
+        // En ny kode uten oppføring faller til ProcessingFailed i drift.
+        // Denne testen tvinger noen til å ta stilling til hva klienten skal
+        // se før koden rekker å nå dit.
+        for kode in sikri_client::ALLE_SIKRI_KODER {
             assert!(
-                !code.contains("/"),
-                "Code for {} contains path separator",
-                status
+                error_code_for(kode).is_some(),
+                "{kode} mangler oversettelse til en klientvendt feilkode"
             );
         }
     }
 
     #[test]
-    fn safe_codes_are_stable_identifier_strings() {
-        let code = map_status_to_safe_code(Some(reqwest::StatusCode::NOT_FOUND));
-        assert!(code.starts_with("sikri_"));
-        assert!(code.chars().all(|c| c.is_alphanumeric() || c == '_'));
+    fn ukjent_saksnummer_avvises_terminalt() {
+        let feil = klassifiser(StatusCode::NOT_FOUND, Some("Fant ikke arkivsak"));
+
+        assert_eq!(feil.kind, ArkivSakTilstandErrorKind::Irrecoverable);
+        assert_eq!(feil.kode, "sikri_resource_not_found");
+        assert_eq!(feil.error_code, StatusErrorCode::NotFound);
+    }
+
+    #[test]
+    fn ukjent_klientfeil_retryes() {
+        // Bunnen i klassifiseringen: terminal feil krever positivt treff.
+        for status in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::CONFLICT,
+        ] {
+            let feil = klassifiser(status, None);
+            assert_eq!(
+                feil.kind,
+                ArkivSakTilstandErrorKind::Recoverable,
+                "{status} skal retryes"
+            );
+        }
+    }
+
+    #[test]
+    fn arkivet_nede_retryes() {
+        for status in [
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            let feil = klassifiser(status, None);
+            assert_eq!(feil.kind, ArkivSakTilstandErrorKind::Recoverable);
+            assert_eq!(feil.error_code, StatusErrorCode::TemporaryUnavailable);
+        }
+    }
+
+    #[test]
+    fn body_baserte_regler_naar_frem_i_valideringen() {
+        // Den gamle koden kalte classify_http_error(status, None) — uten
+        // body — så ingen av body-reglene kunne slå til her i det hele tatt.
+        let body = "Feil ved identifisering av bruker Z12345. Person.Brukernavn Z12345 ble ikke funnet i ePhorte Person-tabell!";
+        let feil = klassifiser(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+
+        assert_eq!(feil.kind, ArkivSakTilstandErrorKind::Irrecoverable);
+        assert_eq!(feil.kode, "sikri_unknown_user");
+        assert_eq!(feil.error_code, StatusErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn transportfeil_retryes() {
+        let feil = fra_sikri(SikriFeil::utilgjengelig());
+
+        assert_eq!(feil.kind, ArkivSakTilstandErrorKind::Recoverable);
+        assert_eq!(feil.error_code, StatusErrorCode::TemporaryUnavailable);
+    }
+
+    #[test]
+    fn koder_er_stabile_identifikatorer_uten_sensitiv_data() {
+        let bodyer = [
+            Some("Tilgangskode UO er ugyldig for bruker Z12345"),
+            Some("temporary backend issue at https://internal.example.invalid/api"),
+            None,
+        ];
+
+        for body in bodyer {
+            let feil = klassifiser(StatusCode::INTERNAL_SERVER_ERROR, body);
+            assert!(feil.kode.starts_with("sikri_"));
+            assert!(feil.kode.chars().all(|c| c.is_alphanumeric() || c == '_'));
+            for lekkasje in ["Z12345", "UO", "http", "/"] {
+                assert!(!feil.kode.contains(lekkasje));
+            }
+        }
     }
 }
