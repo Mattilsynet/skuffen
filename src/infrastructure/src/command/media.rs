@@ -3,11 +3,16 @@ use application::command::ports::dokument_lager_port::{
 };
 use async_nats::jetstream::object_store::{InfoErrorKind, ObjectStore, UpdateMetadata};
 use async_trait::async_trait;
-use tokio::io::AsyncReadExt;
-use uuid::Uuid;
-
+use aws_lc_rs::digest::{SHA256, digest};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+};
 use bytes::Bytes;
+use lib_nats::chunked_upload::{CompletedUpload, StoredUpload, UploadStore, UploadStoreError};
+use tokio::io::AsyncReadExt;
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MediaMetadata {
@@ -209,6 +214,126 @@ impl MediaStore for ObjectStoreMediaStore {
     }
 }
 
+#[async_trait]
+impl UploadStore for ObjectStoreMediaStore {
+    async fn inspect(&self, upload_id: &str) -> Result<Option<StoredUpload>, UploadStoreError> {
+        let id = parse_upload_id(upload_id)?;
+        self.inspect_uuid(id).await
+    }
+
+    async fn store(&self, upload: CompletedUpload) -> Result<(), UploadStoreError> {
+        let id = parse_upload_id(&upload.descriptor.upload_id)?;
+        let expected = StoredUpload {
+            size: upload.descriptor.size,
+            sha256: upload.descriptor.sha256.clone(),
+        };
+
+        match self.inspect_uuid(id).await? {
+            Some(stored) if stored == expected => return Ok(()),
+            Some(_) => return Err(UploadStoreError::Conflict),
+            None => {}
+        }
+
+        MediaStore::save(self, media_file_from_upload(id, upload))
+            .await
+            .map_err(|err| UploadStoreError::Unavailable(err.into_boxed_dyn_error()))?;
+
+        match self.inspect_uuid(id).await? {
+            Some(stored) if stored == expected => Ok(()),
+            Some(_) => Err(UploadStoreError::Conflict),
+            None => Err(UploadStoreError::unavailable(std::io::Error::other(
+                "stored media was missing after write",
+            ))),
+        }
+    }
+}
+
+impl ObjectStoreMediaStore {
+    async fn inspect_uuid(&self, id: Uuid) -> Result<Option<StoredUpload>, UploadStoreError> {
+        let object_name = id.to_string();
+        let info = match self.store.info(&object_name).await {
+            Ok(info) if info.deleted => return Ok(None),
+            Ok(info) => info,
+            Err(err) if matches!(err.kind(), InfoErrorKind::NotFound) => return Ok(None),
+            Err(err) => return Err(UploadStoreError::unavailable(err)),
+        };
+
+        if let Some(sha256) = info.digest.as_deref().and_then(object_store_sha256_to_hex) {
+            let size = u64::try_from(info.size).map_err(UploadStoreError::unavailable)?;
+            return Ok(Some(StoredUpload { size, sha256 }));
+        }
+
+        self.inspect_bytes(id).await
+    }
+
+    async fn inspect_bytes(&self, id: Uuid) -> Result<Option<StoredUpload>, UploadStoreError> {
+        let mut object = match self.store.get(id.to_string()).await {
+            Ok(object) => object,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    async_nats::jetstream::object_store::GetErrorKind::NotFound
+                ) =>
+            {
+                return Ok(None);
+            }
+            Err(err) => return Err(UploadStoreError::unavailable(err)),
+        };
+        let mut bytes = Vec::new();
+        object
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(UploadStoreError::unavailable)?;
+        let size = u64::try_from(bytes.len()).map_err(UploadStoreError::unavailable)?;
+        Ok(Some(StoredUpload {
+            size,
+            sha256: sha256_hex(&bytes),
+        }))
+    }
+}
+
+fn parse_upload_id(upload_id: &str) -> Result<Uuid, UploadStoreError> {
+    Uuid::parse_str(upload_id).map_err(|_| UploadStoreError::Conflict)
+}
+
+fn media_file_from_upload(id: Uuid, upload: CompletedUpload) -> MediaFile {
+    MediaFile {
+        id,
+        data: upload.bytes.to_vec(),
+        filename: upload.descriptor.filename,
+        content_type: upload.descriptor.content_type,
+        metadata: MediaMetadata::default(),
+    }
+}
+
+fn object_store_sha256_to_hex(value: &str) -> Option<String> {
+    let encoded = value.strip_prefix("SHA-256=")?;
+    let decoded = URL_SAFE
+        .decode(encoded)
+        .or_else(|_| URL_SAFE_NO_PAD.decode(encoded))
+        .ok()?;
+    if decoded.len() != 32
+        || (URL_SAFE.encode(&decoded) != encoded && URL_SAFE_NO_PAD.encode(&decoded) != encoded)
+    {
+        return None;
+    }
+    Some(lower_hex(&decoded))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    lower_hex(digest(&SHA256, bytes).as_ref())
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[usize::from(byte >> 4)] as char);
+        encoded.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    encoded
+}
+
 fn format_optional_uuid(id: Option<Uuid>) -> String {
     id.map(|value| value.to_string())
         .unwrap_or_else(|| "unknown".to_string())
@@ -375,5 +500,67 @@ impl DokumentLager for ObjectStoreMediaStore {
                 render_timestamp: file.metadata.render_timestamp,
             },
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lib_nats::chunked_upload::UploadDescriptor;
+
+    const ABC_SHA256_HEX: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    const ABC_SHA256_BASE64URL: &str = "ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0=";
+
+    #[test]
+    fn converts_object_store_sha256_to_lowercase_hex() {
+        assert_eq!(
+            object_store_sha256_to_hex(&format!("SHA-256={ABC_SHA256_BASE64URL}")),
+            Some(ABC_SHA256_HEX.to_string())
+        );
+        assert_eq!(
+            object_store_sha256_to_hex(&format!(
+                "SHA-256={}",
+                ABC_SHA256_BASE64URL.trim_end_matches('=')
+            )),
+            Some(ABC_SHA256_HEX.to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_ambiguous_object_store_digests() {
+        assert_eq!(object_store_sha256_to_hex(ABC_SHA256_BASE64URL), None);
+        assert_eq!(object_store_sha256_to_hex("SHA-256=not-a-digest"), None);
+        assert_eq!(object_store_sha256_to_hex("SHA-512=dGVzdA=="), None);
+    }
+
+    #[test]
+    fn invalid_upload_id_maps_to_conflict() {
+        assert!(matches!(
+            parse_upload_id("not-a-uuid"),
+            Err(UploadStoreError::Conflict)
+        ));
+    }
+
+    #[test]
+    fn completed_upload_maps_to_media_file() {
+        let id = Uuid::new_v4();
+        let upload = CompletedUpload {
+            descriptor: UploadDescriptor {
+                upload_id: id.to_string(),
+                size: 3,
+                sha256: ABC_SHA256_HEX.to_string(),
+                filename: Some("document.txt".to_string()),
+                content_type: Some("text/plain".to_string()),
+            },
+            bytes: Bytes::from_static(b"abc"),
+        };
+
+        let file = media_file_from_upload(id, upload);
+
+        assert_eq!(file.id, id);
+        assert_eq!(file.data, b"abc");
+        assert_eq!(file.filename.as_deref(), Some("document.txt"));
+        assert_eq!(file.content_type.as_deref(), Some("text/plain"));
+        assert_eq!(file.metadata, MediaMetadata::default());
     }
 }

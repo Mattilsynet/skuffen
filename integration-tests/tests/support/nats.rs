@@ -5,61 +5,43 @@ use anyhow::Result;
 use async_nats::jetstream;
 use bytes::Bytes;
 use futures::StreamExt;
-use lib_nats::chunked_upload::protocol::{
-    ChunkedUploadConfig, UploadMetadata, build_chunk_headers, split_payload,
-};
+use lib_nats::chunked_upload::{ChunkedUploadClient, ChunkedUploadClientConfig, UploadRequest};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::journalpost::JournalpostKey as DtoJournalpostKey;
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::query::queries::{HentJournalpostQuery, HentSakQuery};
 use lib_schemas::skuffen::status::{SkuffenCommandEvent, SkuffenCommandStatusV1};
+use tokio::io::AsyncReadExt;
 use tokio::time::Instant;
 
 pub async fn publish_media(nats_url: &str, dokument_id: uuid::Uuid) -> Result<()> {
     let client = async_nats::connect(nats_url).await?;
-    let payload = b"Skuffen testvedlegg".to_vec();
-    let metadata = UploadMetadata {
-        filename: Some("vedlegg.txt".to_string()),
-        content_type: Some("text/plain".to_string()),
-    };
-    let config = ChunkedUploadConfig::default();
-    let chunks = split_payload(&payload, config.chunk_size)?;
+    let payload: Vec<u8> = (0..2_000_001).map(|index| (index % 251) as u8).collect();
     let upload_id = dokument_id.to_string();
-    let chunk_count = chunks.len() as u32;
-    let total_size = payload.len();
-
-    let inbox = client.new_inbox();
-    let mut sub = client.subscribe(inbox.clone()).await?;
-
-    for (index, chunk) in chunks.into_iter().enumerate() {
-        let headers =
-            build_chunk_headers(&upload_id, index as u32, chunk_count, total_size, &metadata);
-        client
-            .publish_with_reply_and_headers(
-                "arkiv.arkiver.media",
-                inbox.clone(),
-                headers,
-                Bytes::from(chunk),
-            )
-            .await?;
-    }
-
-    let message = tokio::time::timeout(Duration::from_secs(5), sub.next()).await?;
-    let message = message.ok_or_else(|| anyhow::anyhow!("Missing media upload response"))?;
-    let response_json: serde_json::Value = serde_json::from_slice(&message.payload)?;
-    assert_eq!(
-        response_json.get("status").and_then(|s| s.as_str()),
-        Some("Ok")
+    let uploader = ChunkedUploadClient::new(
+        client.clone(),
+        ChunkedUploadClientConfig {
+            base_subject: "arkiv.arkiver.media".to_string(),
+            ..ChunkedUploadClientConfig::default()
+        },
     );
-    assert_eq!(
-        response_json.get("payload").and_then(|p| p.as_str()),
-        Some(upload_id.as_str())
-    );
+    let receipt = uploader
+        .upload(UploadRequest {
+            upload_id: upload_id.clone(),
+            bytes: Bytes::from(payload.clone()),
+            filename: Some("vedlegg.txt".to_string()),
+            content_type: Some("text/plain".to_string()),
+        })
+        .await?;
+    assert_eq!(receipt.upload_id, upload_id);
 
     let store = jetstream::new(client)
         .get_object_store("arkiv_media")
         .await?;
-    let _ = store.info(&upload_id).await?;
+    let mut object = store.get(&upload_id).await?;
+    let mut stored = Vec::new();
+    object.read_to_end(&mut stored).await?;
+    assert_eq!(stored, payload);
     Ok(())
 }
 

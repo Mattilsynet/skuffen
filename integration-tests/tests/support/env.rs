@@ -46,6 +46,8 @@ fn runtime_lock() -> &'static std::sync::Arc<Mutex<()>> {
 fn default_nats_args() -> Vec<String> {
     vec![
         "-js".to_string(),
+        "-c".to_string(),
+        "/etc/nats-test.conf".to_string(),
         "-p".to_string(),
         NATS_PORT.to_string(),
         "-m".to_string(),
@@ -58,6 +60,7 @@ fn nats_image() -> ContainerRequest<GenericImage> {
         .with_exposed_port(ContainerPort::Tcp(NATS_PORT))
         .with_exposed_port(ContainerPort::Tcp(NATS_MONITOR_PORT))
         .with_cmd(default_nats_args())
+        .with_copy_to("/etc/nats-test.conf", b"max_payload: 8000000\n".to_vec())
 }
 
 async fn setup_postgres() -> Result<(ContainerAsync<Postgres>, DbConnectOptions)> {

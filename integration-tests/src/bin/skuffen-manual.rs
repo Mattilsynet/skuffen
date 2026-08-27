@@ -7,9 +7,7 @@ use anyhow::Result;
 use async_nats::{Client, ConnectOptions, jetstream};
 use bytes::Bytes;
 use futures::StreamExt;
-use lib_nats::chunked_upload::protocol::{
-    ChunkedUploadConfig, UploadMetadata, build_chunk_headers, split_payload,
-};
+use lib_nats::chunked_upload::{ChunkedUploadClient, ChunkedUploadClientConfig, UploadRequest};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
@@ -832,38 +830,22 @@ async fn publish_media(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| anyhow::anyhow!("Invalid filename for {}", path.display()))?;
-    let metadata = UploadMetadata {
-        filename: Some(filename.to_string()),
-        content_type: Some(content_type.to_string()),
-    };
-    let config = ChunkedUploadConfig::default();
-    let chunks = split_payload(&payload, config.chunk_size)?;
     let upload_id = upload_reference.to_string();
-    let chunk_count = chunks.len() as u32;
-    let total_size = payload.len();
-
-    let inbox = client.new_inbox();
-    let mut sub = client.subscribe(inbox.clone()).await?;
-
-    for (index, chunk) in chunks.into_iter().enumerate() {
-        let headers =
-            build_chunk_headers(&upload_id, index as u32, chunk_count, total_size, &metadata);
-        client
-            .publish_with_reply_and_headers(
-                "arkiv.arkiver.media",
-                inbox.clone(),
-                headers,
-                Bytes::from(chunk),
-            )
-            .await?;
-    }
-
-    let message = tokio::time::timeout(Duration::from_secs(5), sub.next()).await?;
-    let message = message.ok_or_else(|| anyhow::anyhow!("Missing media upload response"))?;
-    let response_json: serde_json::Value = serde_json::from_slice(&message.payload)?;
-    if response_json.get("status").and_then(|s| s.as_str()) != Some("Ok") {
-        anyhow::bail!("Media upload failed: {response_json}");
-    }
+    let uploader = ChunkedUploadClient::new(
+        client,
+        ChunkedUploadClientConfig {
+            base_subject: "arkiv.arkiver.media".to_string(),
+            ..ChunkedUploadClientConfig::default()
+        },
+    );
+    uploader
+        .upload(UploadRequest {
+            upload_id,
+            bytes: Bytes::from(payload),
+            filename: Some(filename.to_string()),
+            content_type: Some(content_type.to_string()),
+        })
+        .await?;
 
     Ok(())
 }

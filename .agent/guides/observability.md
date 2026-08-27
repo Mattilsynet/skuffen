@@ -4,6 +4,8 @@
 
 Subjects and flows:
 - `arkiv.arkiver` (NATS core): receives command batch, reply required as `ArkiveringKvittering` (`Ok.command_ids` or `Error.message`)
+- `arkiv.arkiver.media.begin` (NATS core): starts a media upload session
+- `arkiv.arkiver.media.receiver.<receiver_id>.session.<session_id>.chunk.<index>` and `.commit` (NATS core): receiver-bound media upload traffic
 - `arkiv.request.sak.hent` (NATS core): read/query request-reply for sak
 - `arkiv.request.journalpost.hent` (NATS core): read/query request-reply for journalpost
 - `arkiv.request.bruker.mt_enheter` (NATS core): live read/query stub returning `Not implemented`
@@ -16,7 +18,7 @@ Durability and availability:
 - `arkiv_command_inbox`, `arkiv_command_ready`, `arkiv_command_done`, `arkiv_status` and `arkiv_media` are configured with `num_replicas = 3`.
 - Durable consumers `validator` and `executor` use explicit ack and `num_replicas = 3`.
 - `validation_listener` and `eksekvering_listener` run in restart loops that recreate stream/consumer state after NATS disruptions.
-- `command_listener` and `media_listener` are intake-critical and will crash the process after exhausting a restart budget, so Cloud Run can replace the instance.
+- `command_listener` and `media_listener` are intake-critical. The command listener has a bounded restart budget; the session-based media server remains critical without an outer restart loop, so a stopped server crashes the process and Cloud Run can replace the instance. During shutdown it stops begin intake and keeps receiver sessions available for a five-second grace period.
 
 Database state:
 - `id_mapping`: client_reference -> skuffen_id (+ optional arkiv_id)
@@ -59,10 +61,10 @@ Use error classification consistently across layers:
 
 ## Trace context propagation
 
-All NATS listeners extract the incoming `traceparent` header into the OpenTelemetry
-context using `set_parent_from_nats_headers()` in `telemetry.rs`. This must be
-the first statement in each `#[instrument]`-annotated message handler, before any
-nested spans or log statements.
+Skuffen-owned NATS message handlers extract the incoming `traceparent` header into the
+OpenTelemetry context using `set_parent_from_nats_headers()` in `telemetry.rs`. This must be
+the first statement in each `#[instrument]`-annotated message handler, before any nested spans
+or log statements. The `lib-nats` media server owns its protocol handlers and is not included.
 
 The pattern:
 1. Inbound: `crate::telemetry::set_parent_from_nats_headers(headers)` — extracts
@@ -78,7 +80,6 @@ Listeners using this pattern:
 - `command_listener` (`nats.command_batch`)
 - `validation_listener` (`command.validate`)
 - `eksekvering_listener` (`command.register_execution`)
-- `media_listener` (`media.assemble`)
 - `NatsReplier` (`query.handle`)
 
 ## Span coverage
