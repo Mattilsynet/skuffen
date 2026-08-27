@@ -157,7 +157,12 @@ impl ArkivGateway for FakeArkivGateway {
         Ok(())
     }
 
-    async fn avskriv_journalpost(&self, _journalpost_id: i32) -> Result<(), EksekveringFeil> {
+    async fn avskriv_journalpost(
+        &self,
+        _journalpost_id: i32,
+        _kildesystem: Option<&str>,
+        _merknad: Option<&str>,
+    ) -> Result<(), EksekveringFeil> {
         self.sjekk_feilmodus()?;
         Ok(())
     }

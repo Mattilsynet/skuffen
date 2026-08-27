@@ -20,6 +20,8 @@ use sikri_client::dto::elements_dokument::ElementsDokument;
 use sikri_client::dto::elements_journalpost::ElementsJournalpost;
 use sikri_client::{Recoverability, SikriFeil};
 
+const TATT_TIL_ETTERRETNING: &str = "TE";
+
 /// Leverandørvokabularet stopper her.
 ///
 /// `SikriFeil` bærer allerede klassifisering, stabil kode og en trygg,
@@ -135,9 +137,13 @@ impl ArkivGateway for SikriArkivGateway {
         hoveddokument: &DokumentAttributter,
     ) -> Result<OpprettJournalpostResultat, EksekveringFeil> {
         let elements_journalpost = self.map_journalpost(journalpost, hoveddokument).await?;
-        let resp = sikri_client::opprett_journalpost(elements_journalpost, saksnummer)
-            .await
-            .map_err(fra_sikri)?;
+        let resp = sikri_client::opprett_journalpost(
+            elements_journalpost,
+            saksnummer,
+            journalpost.kildesystem.as_deref(),
+        )
+        .await
+        .map_err(fra_sikri)?;
         let journalpost_id = resp.journalpost_id.ok_or_else(|| {
             EksekveringFeil::recoverable(
                 "sikri_response_unparsable",
@@ -173,10 +179,20 @@ impl ArkivGateway for SikriArkivGateway {
     }
 
     /// Kun inngående avskrives (D21). `TE` — tatt til etterretning.
-    async fn avskriv_journalpost(&self, journalpost_id: i32) -> Result<(), EksekveringFeil> {
-        sikri_client::avskriv_journalpost(journalpost_id, "TE")
-            .await
-            .map_err(fra_sikri)
+    async fn avskriv_journalpost(
+        &self,
+        journalpost_id: i32,
+        kildesystem: Option<&str>,
+        merknad: Option<&str>,
+    ) -> Result<(), EksekveringFeil> {
+        sikri_client::avskriv_journalpost(sikri_client::AvskrivJournalpost {
+            journalpost_id,
+            avskrivingsmaate: TATT_TIL_ETTERRETNING,
+            kildesystem,
+            merknad,
+        })
+        .await
+        .map_err(fra_sikri)
     }
 
     async fn hent_journalstatus(

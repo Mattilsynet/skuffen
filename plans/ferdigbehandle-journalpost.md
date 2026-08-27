@@ -140,24 +140,18 @@ faktisk kan lese innholdet gjennom den avtalte klientintegrasjonen.
 Disse punktene krever ground truth, ikke antakelser. De blokkerer ikke schema-
 og domainarbeid, men må være avklart før feature regnes som produksjonsklar.
 
-### 4.1 Sikri-avskrivingsendepunkt
+### 4.1 Sikri-avskrivingsendepunkt (avklart)
 
-Koden bruker i dag:
-
-```text
-POST /api/Archive/AvskrivJournalpost
-```
-
-i `crates/sikri_client/src/api.rs`, mens checked-in canonical Swagger viser:
+Implementasjonen følger checked-in canonical Swagger:
 
 ```text
 PUT /api/Archive/SetAvskrivRestanseJournalpost
 ```
 
-med `kildesystem`, `journalpostId`, `avskrivingsmaate` og `merknad`.
-
-Verifiser mot faktisk Sikri-miljø/leverandør og legg en contract-test/fixture som
-låser riktig endpoint og parametre. Ikke «fiks» dette bare ut fra navnet.
+med query-parametrene `kildesystem`, `journalpostId`, `avskrivingsmaate` og
+`merknad`. En HTTP-contract-test låser metode, path, parametre og encoding.
+`kildesystem` videreføres fra journalpostkommandoen både ved opprettelse og
+avskriving. `merknad` utelates når Skuffen ikke har en etablert domeneverdi.
 
 ### 4.2 Hvordan avskrevet state observeres
 

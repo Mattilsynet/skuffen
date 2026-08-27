@@ -15,6 +15,14 @@ pub use error_mapping::{
     user_message_for_http_error,
 };
 
+#[derive(Debug, Clone, Copy)]
+pub struct AvskrivJournalpost<'a> {
+    pub journalpost_id: i32,
+    pub avskrivingsmaate: &'a str,
+    pub kildesystem: Option<&'a str>,
+    pub merknad: Option<&'a str>,
+}
+
 pub async fn alive() -> Result<(), SikriFeil> {
     api::alive().await
 }
@@ -37,8 +45,9 @@ pub async fn opprett_sak(data: NySak) -> Result<SakRespons, SikriFeil> {
 pub async fn opprett_journalpost(
     journalpost: ElementsJournalpost,
     saksnummer: &str,
+    kildesystem: Option<&str>,
 ) -> Result<ElementsJournalpostRespons, SikriFeil> {
-    api::opprett_journalpost(journalpost, saksnummer).await
+    api::opprett_journalpost(journalpost, saksnummer, kildesystem).await
 }
 
 pub async fn legg_til_vedlegg(
@@ -58,11 +67,8 @@ pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Resul
     api::sett_journalpost_status(journalpost_id, status).await
 }
 
-pub async fn avskriv_journalpost(
-    journalpost_id: i32,
-    avskrivingsmaate: &str,
-) -> Result<(), SikriFeil> {
-    api::avskriv_journalpost(journalpost_id, avskrivingsmaate).await
+pub async fn avskriv_journalpost(request: AvskrivJournalpost<'_>) -> Result<(), SikriFeil> {
+    api::avskriv_journalpost(request).await
 }
 
 pub async fn avslutt_sak(saksnummer: &str) -> Result<(), SikriFeil> {

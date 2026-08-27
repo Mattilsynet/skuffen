@@ -83,7 +83,12 @@ pub trait ArkivGateway: Send + Sync {
     ) -> Result<(), EksekveringFeil>;
 
     /// Kun inngående avskrives (D21). `TE` — tatt til etterretning.
-    async fn avskriv_journalpost(&self, journalpost_id: i32) -> Result<(), EksekveringFeil>;
+    async fn avskriv_journalpost(
+        &self,
+        journalpost_id: i32,
+        kildesystem: Option<&str>,
+        merknad: Option<&str>,
+    ) -> Result<(), EksekveringFeil>;
 
     /// Ren observasjon.
     async fn hent_journalstatus(

@@ -442,8 +442,19 @@ impl EksekverOperasjonService {
     async fn avskriv(&self, op: &Operasjon, facts: &SakMedBarn) -> Result<Utfall, EksekveringFeil> {
         let journalpost_id = krev_journalpost(op)?;
         let arkiv_id = self.journalpost_arkiv_id(facts, op)?;
+        let attributter = self
+            .fakta
+            .hent_journalpost_attributter(journalpost_id)
+            .await
+            .map_err(|err| {
+                EksekveringFeil::intern_midlertidig("intern_journalpost_attributter_utilgjengelig")
+                    .med_intern_detalj(err.to_string())
+            })?
+            .ok_or_else(|| EksekveringFeil::intern("intern_journalpost_attributter_mangler"))?;
 
-        self.gateway.avskriv_journalpost(arkiv_id).await?;
+        self.gateway
+            .avskriv_journalpost(arkiv_id, attributter.kildesystem.as_deref(), None)
+            .await?;
 
         Ok(Utfall::Ferdig(Faktaoppdatering::JournalpostStatus {
             journalpost_id,

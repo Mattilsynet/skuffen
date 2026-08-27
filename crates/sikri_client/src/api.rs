@@ -1,3 +1,4 @@
+use crate::AvskrivJournalpost;
 use crate::dto::elements_dokument::ElementsDokument;
 use crate::dto::elements_dokument_response::ElementsDokumentRespons;
 use crate::dto::elements_journalpost::{ElementsJournalpost, ElementsJournalpostRespons};
@@ -367,6 +368,7 @@ pub async fn create_sak(
 pub async fn opprett_journalpost(
     journalpost: ElementsJournalpost,
     saksnummer: &str,
+    kildesystem: Option<&str>,
 ) -> Result<ElementsJournalpostRespons, SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/OpprettJournalpost", base_url());
@@ -376,9 +378,13 @@ pub async fn opprett_journalpost(
         endpoint = safe_endpoint_label(&url),
         "Sending OpprettJournalpost request to Sikri"
     );
-    let resp = Client::new()
+    let mut request = Client::new()
         .post(&url)
-        .basic_auth(username, Some(password))
+        .basic_auth(username, Some(password));
+    if let Some(kildesystem) = kildesystem {
+        request = request.query(&[("kildesystem", kildesystem)]);
+    }
+    let resp = request
         .query(&[("saksnr", saksnummer)])
         .json(&journalpost)
         .send()
@@ -462,30 +468,50 @@ pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Resul
     Ok(())
 }
 
-#[tracing::instrument(skip_all, name = "sikri.avskriv_journalpost", fields(avskrivingsmaate))]
-pub async fn avskriv_journalpost(
-    journalpost_id: i32,
-    avskrivingsmaate: &str,
-) -> Result<(), SikriFeil> {
+#[tracing::instrument(
+    skip_all,
+    name = "sikri.avskriv_journalpost",
+    fields(avskrivingsmaate = request.avskrivingsmaate)
+)]
+pub async fn avskriv_journalpost(request: AvskrivJournalpost<'_>) -> Result<(), SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
-    let url = format!("{}/api/Archive/AvskrivJournalpost", base_url());
+    send_avskriv_journalpost(&Client::new(), &base_url(), &username, &password, request).await
+}
+
+async fn send_avskriv_journalpost(
+    client: &Client,
+    base_url: &str,
+    username: &str,
+    password: &str,
+    request: AvskrivJournalpost<'_>,
+) -> Result<(), SikriFeil> {
+    let url = format!("{base_url}/api/Archive/SetAvskrivRestanseJournalpost");
+    let mut params = Vec::with_capacity(4);
+    if let Some(kildesystem) = request.kildesystem {
+        params.push(("kildesystem", kildesystem.to_string()));
+    }
+    params.extend([
+        ("journalpostId", request.journalpost_id.to_string()),
+        ("avskrivingsmaate", request.avskrivingsmaate.to_string()),
+    ]);
+    if let Some(merknad) = request.merknad {
+        params.push(("merknad", merknad.to_string()));
+    }
+
     info!(
         target: "sikri.http",
-        method = "POST",
+        method = "PUT",
         endpoint = safe_endpoint_label(&url),
         "Sending request to Sikri"
     );
-    let resp = Client::new()
-        .post(&url)
+    let resp = client
+        .put(&url)
         .basic_auth(username, Some(password))
-        .query(&[
-            ("journalpostId", journalpost_id.to_string()),
-            ("avskrivingsmaate", avskrivingsmaate.to_string()),
-        ])
+        .query(&params)
         .send()
         .await
-        .map_err(|err| transportfeil("POST", &url, err))?;
-    let _ = ensure_success(resp, "POST", &url).await?;
+        .map_err(|err| transportfeil("PUT", &url, err))?;
+    let _ = ensure_success(resp, "PUT", &url).await?;
     Ok(())
 }
 
@@ -542,6 +568,94 @@ pub async fn sett_saksansvarlig(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn start_mock_sikri(status: &str) -> (String, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let status = status.to_string();
+        let request = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = Vec::new();
+            let mut chunk = [0; 1024];
+            loop {
+                let bytes_read = stream.read(&mut chunk).await.unwrap();
+                if bytes_read == 0 {
+                    break;
+                }
+                buffer.extend_from_slice(&chunk[..bytes_read]);
+                if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            stream
+                .write_all(
+                    format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                        .as_bytes(),
+                )
+                .await
+                .unwrap();
+            String::from_utf8(buffer).unwrap()
+        });
+
+        (format!("http://{address}"), request)
+    }
+
+    #[tokio::test]
+    async fn avskriv_journalpost_bruker_canonical_http_contract_med_encoding() {
+        let (base_url, received_request) = start_mock_sikri("200 OK").await;
+
+        send_avskriv_journalpost(
+            &Client::new(),
+            &base_url,
+            "bruker",
+            "passord",
+            AvskrivJournalpost {
+                journalpost_id: 123,
+                avskrivingsmaate: "T/E",
+                kildesystem: Some("Skuffen & fagsystem"),
+                merknad: Some("Tatt til etterretning: æ"),
+            },
+        )
+        .await
+        .unwrap();
+
+        let request = received_request.await.unwrap();
+        let request_line = request.lines().next().unwrap();
+        assert_eq!(
+            request_line,
+            "PUT /api/Archive/SetAvskrivRestanseJournalpost?kildesystem=Skuffen+%26+fagsystem&journalpostId=123&avskrivingsmaate=T%2FE&merknad=Tatt+til+etterretning%3A+%C3%A6 HTTP/1.1"
+        );
+    }
+
+    #[tokio::test]
+    async fn avskriv_journalpost_klassifiserer_404_som_not_found() {
+        let (base_url, received_request) = start_mock_sikri("404 Not Found").await;
+
+        let feil = send_avskriv_journalpost(
+            &Client::new(),
+            &base_url,
+            "bruker",
+            "passord",
+            AvskrivJournalpost {
+                journalpost_id: 404,
+                avskrivingsmaate: "TE",
+                kildesystem: None,
+                merknad: None,
+            },
+        )
+        .await
+        .unwrap_err();
+
+        let request = received_request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap(),
+            "PUT /api/Archive/SetAvskrivRestanseJournalpost?journalpostId=404&avskrivingsmaate=TE HTTP/1.1"
+        );
+        assert_eq!(feil.kode, "sikri_resource_not_found");
+        assert_eq!(feil.recoverability, crate::Recoverability::Irrecoverable);
+    }
 
     #[test]
     fn chunks_error_response_without_splitting_utf8() {
