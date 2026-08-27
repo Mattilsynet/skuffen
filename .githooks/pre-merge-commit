@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# Git runs this INSTEAD OF pre-commit when creating a merge commit. Without it,
-# merges are a hole in commit-time coverage.
-set -euo pipefail
-HOOKDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-exec "$HOOKDIR/pre-commit"

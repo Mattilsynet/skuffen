@@ -1,34 +1,19 @@
 #!/usr/bin/env bash
-# Review exactly what is about to be committed.
-#
-# Git builds the commit from the INDEX, so the review reads the index, never
-# the working tree. Unstaged edits are deliberately invisible here.
-set -euo pipefail
+set -u
 
-HOOKDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-
-# Nothing staged (or an empty amend) -- let git handle it.
 git diff --cached --quiet && exit 0
 
-if ! BEFORE=$(git write-tree 2>/dev/null); then
-  echo "commit-review: the index cannot be written as a tree." >&2
-  echo "commit-review: it references objects that do not exist, or has unmerged" >&2
-  echo "commit-review: entries. Fix the index before committing." >&2
-  exit 1
-fi
+HOOKDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+echo "security-review: checking staged change" >&2
+BEFORE=$(git write-tree) || exit 1
 
-"$HOOKDIR/commit-review.sh"
+"$HOOKDIR/security-review.sh"
 RC=$?
 
-if ! AFTER=$(git write-tree 2>/dev/null); then
-  echo "commit-review: the index became unwritable during review." >&2
-  echo "commit-review: something staged content whose object is missing. Refusing." >&2
+AFTER=$(git write-tree) || exit 1
+[ "$BEFORE" = "$AFTER" ] || {
+  echo "security-review: staged tree changed during review" >&2
   exit 1
-fi
-if [ "$BEFORE" != "$AFTER" ]; then
-  echo "commit-review: the index changed during review." >&2
-  echo "commit-review: what was reviewed is not what would be committed. Refusing." >&2
-  exit 1
-fi
+}
 
-exit $RC
+exit "$RC"
