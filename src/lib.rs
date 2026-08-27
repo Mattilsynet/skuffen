@@ -46,7 +46,7 @@ pub async fn run() -> anyhow::Result<()> {
     let media_listener = infrastructure::command::nats::media_listener::MediaListener::new(
         runtime.nats.clone(),
         runtime.media_store.clone(),
-    );
+    )?;
     let command_listener = infrastructure::bootstrap::build_command_listener(
         runtime.nats.clone(),
         runtime.db_pool.clone(),
@@ -94,12 +94,15 @@ pub async fn run() -> anyhow::Result<()> {
         TaskCriticality::Degraded,
         async move { ready_replier.run().await.context("ready replier failed") },
     );
-    spawn_named_task(
-        &mut tasks,
-        "media_listener",
-        TaskCriticality::Critical,
-        async move { media_listener.run().await.context("media listener failed") },
-    );
+    spawn_named_task(&mut tasks, "media_listener", TaskCriticality::Critical, {
+        let shutdown = shutdown.clone();
+        async move {
+            media_listener
+                .run(shutdown)
+                .await
+                .context("media listener failed")
+        }
+    });
     spawn_named_task(
         &mut tasks,
         "command_listener",

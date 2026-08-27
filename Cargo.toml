@@ -46,7 +46,7 @@ futures = "0.3.32"
 gcp_auth = "0.12.7"
 http = "1.4.2"
 infrastructure = { path = "src/infrastructure" }
-lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats", tag = "1.6.1.1" }
+lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats", rev = "b14bc135def999458351c3ea40805e09992ddedf" }
 lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas" }
 lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.6.1.1" }
 opentelemetry = "0.32.0"

@@ -1,4 +1,9 @@
 use anyhow::Result;
+use async_nats::jetstream;
+use bytes::Bytes;
+use lib_nats::chunked_upload::{
+    ChunkedUploadClient, ChunkedUploadClientConfig, UploadError, UploadErrorCode, UploadRequest,
+};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -16,6 +21,50 @@ use support::{
 };
 
 mod support;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn media_upload_is_chunked_idempotent_and_immutable() -> Result<()> {
+    let env = support::start_runtime().await?;
+    let dokument_referanse = Uuid::new_v4();
+
+    publish_media(&env.nats_url, dokument_referanse).await?;
+    publish_media(&env.nats_url, dokument_referanse).await?;
+
+    let client = async_nats::connect(&env.nats_url).await?;
+    let uploader = ChunkedUploadClient::new(
+        client,
+        ChunkedUploadClientConfig {
+            base_subject: "arkiv.arkiver.media".to_string(),
+            ..ChunkedUploadClientConfig::default()
+        },
+    );
+    let error = uploader
+        .upload(UploadRequest {
+            upload_id: dokument_referanse.to_string(),
+            bytes: Bytes::from_static(b"different content"),
+            filename: Some("vedlegg.txt".to_string()),
+            content_type: Some("text/plain".to_string()),
+        })
+        .await
+        .expect_err("same upload ID with different content must conflict");
+
+    assert!(matches!(
+        error,
+        UploadError::Rejected {
+            code: UploadErrorCode::UploadConflict,
+            ..
+        }
+    ));
+    let store = jetstream::new(async_nats::connect(&env.nats_url).await?)
+        .get_object_store("arkiv_media")
+        .await?;
+    let mut object = store.get(dokument_referanse.to_string()).await?;
+    let mut stored = Vec::new();
+    tokio::io::AsyncReadExt::read_to_end(&mut object, &mut stored).await?;
+    let expected: Vec<u8> = (0..2_000_001).map(|index| (index % 251) as u8).collect();
+    assert_eq!(stored, expected);
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn command_sequence_opprett_internt_notat_avslutt_sak() -> Result<()> {

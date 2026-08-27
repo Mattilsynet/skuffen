@@ -93,8 +93,12 @@ nats request arkiv.arkiver '[
 ]'
 ```
 
-Merk: for journalpost-kommandoer maa `dokument_referanse` vaere lastet opp paa
-`arkiv.arkiver.media` foer kommandoen sendes.
+Merk: for journalpost-kommandoer maa `dokument_referanse` vaere lastet opp med
+session-protokollen paa `arkiv.arkiver.media` foer kommandoen sendes. Klienten sender
+`begin`, laster chunks til den tildelte receiver-sessionen og avslutter med `commit`.
+Receiver-ID-en holder alle chunks hos samme Skuffen-instans og lar opplastinger fullfoeres
+mens gamle og nye revisjoner overlapper. Samme `dokument_referanse`, stoerrelse og SHA-256
+er idempotent; annet innhold paa samme referanse avvises som konflikt.
 
 ## Manuell E2E test via lokal NATS
 
@@ -319,7 +323,7 @@ arkivkall, med egen id, egen status, egen retry og egen statuslinje utad.
 
 ## Runtime-prioritering
 
-- `command_listener`, `media_listener` og `health_check` regnes som kritiske for opptak. De restartes internt, men hvis de stopper eller feiler mer enn 3 ganger på rad, avsluttes prosessen slik at Cloud Run kan restarte instansen.
+- `command_listener`, `media_listener` og `health_check` regnes som kritiske for opptak. `command_listener` har et begrenset internt restartbudsjett. `media_listener` drives av `ChunkedUploadServer`; hvis serveren stopper eller feiler, avsluttes prosessen slik at Cloud Run kan restarte instansen. Ved shutdown stopper den nye `begin`-requests og gir aktive receiver-sessioner fem sekunder til å fullfoere.
 - `validation_listener`, `execution_listener`, `execution_worker`, `query_listener` og `ready_replier` regnes som degradérbare: hvis de stopper eller feiler, logger Skuffen feilen og holder prosessen i live. `query_listener` dekker `arkiv.request.sak.hent`, `arkiv.request.journalpost.hent` og `arkiv.request.bruker.mt_enheter`.
 
 ---
@@ -466,7 +470,7 @@ feilkode før den kan nå en klient.
 DTO-typene ligger i `landdyrtilsyn-libs/lib-schemas`; latest source kan sees her:
 https://github.com/Mattilsynet/landdyrtilsyn-libs/tree/master/lib-schemas/src/skuffen
 
-Skuffen følger latest git HEAD for `lib-schemas`/`lib-nats` i `Cargo.toml`, mens `Cargo.lock` er resolved build boundary for konkret bygg.
+Skuffen foelger latest git HEAD for `lib-schemas`, bruker en eksplisitt reviewet git-revisjon for `lib-nats`, og beholder tag for `lib-sql`. `Cargo.lock` er resolved build boundary for konkret bygg.
 
 Disse utgjør den stabile kontrakten.
 
