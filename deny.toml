@@ -1,0 +1,45 @@
+# cargo-deny configuration for the commit-review hard gates.
+#
+# Only ABSOLUTES belong in this file. Everything requiring judgement -- a new
+# build script, a proc-macro, a dependency whose purpose is unclear -- is left
+# to the review agents, which can weigh it against what the change is actually
+# for. A rule that fails a legitimate change trains people to bypass the gate,
+# and a bypassed gate reviews nothing.
+
+[advisories]
+version = 2
+
+# A yanked crate in the lockfile is a mechanical fact with a mechanical fix.
+# It is also the signal that caught the arrayref compromise: the attacker
+# yanked the whole modern release history in a 40-second window to push
+# resolvers onto the single poisoned version left standing. The yank IS the
+# delivery, so this is deliberately "deny" rather than the default "warn".
+yanked = "deny"
+
+# Advisories consciously accepted. Every entry needs a reason and a review date.
+ignore = [
+  # { id = "RUSTSEC-0000-0000", reason = "why", expires = "2026-12-31" },
+]
+
+[sources]
+# Code arriving from a registry or git host nobody sanctioned is not a
+# judgement call.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# Mattilsynets egne remotes. lib-nats, lib-schemas og lib-sql er interne
+# biblioteker vi eier selv.
+allow-git = ["https://github.com/Mattilsynet/landdyrtilsyn-libs.git"]
+
+# ---------------------------------------------------------------------------
+# [bans] is intentionally NOT part of the hard-gate path.
+#
+# cargo-deny can enumerate build scripts and proc-macros via [bans.build], and
+# that enumeration is useful -- but as an observation, not a verdict. The hook
+# detects the same thing in signals.sh and hands it to the reviewers, who can
+# tell "this crate added bindgen for a legitimate FFI binding" from "a patch
+# release just acquired an HTTP client".
+#
+# Run `cargo deny check bans` manually when you want the inventory.
+# ---------------------------------------------------------------------------

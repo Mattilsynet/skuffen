@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Deterministic checks before publishing. No AI review here -- that happens at
+# commit time, where the change is still cheap to fix and the author is still
+# holding it in their head.
+#
+# Note the accepted gap: git does not run pre-commit for automatic merge,
+# cherry-pick, revert or rebase commits, so those reach a remote unreviewed.
+# pre-merge-commit covers merges. The rest is knowingly accepted in exchange
+# for a push that stays fast.
+set -euo pipefail
+
+REPO=$(git rev-parse --show-toplevel)
+ZERO=0000000000000000000000000000000000000000
+
+default_base() {
+  local tip="$1" r
+  for r in origin/HEAD origin/master origin/main; do
+    if git rev-parse -q --verify "$r" >/dev/null 2>&1; then
+      git merge-base "$tip" "$r" 2>/dev/null && return 0
+    fi
+  done
+  git rev-parse -q --verify "$tip^" 2>/dev/null || echo ""
+}
+
+BASES=()
+TIPS=()
+while read -r _lref lsha _rref rsha; do
+  [ "$lsha" = "$ZERO" ] && continue
+  if [ "$rsha" != "$ZERO" ] && git rev-parse -q --verify "${rsha}^{commit}" >/dev/null 2>&1; then
+    BASES+=("$rsha")
+    TIPS+=("$lsha")
+  else
+    b=$(default_base "$lsha")
+    [ -n "$b" ] && {
+      BASES+=("$b")
+      TIPS+=("$lsha")
+    }
+  fi
+done
+[ ${#TIPS[@]} -eq 0 ] && exit 0
+
+CLEAN=0
+git diff --quiet && git diff --cached --quiet && CLEAN=1
+
+# ------------------------------------------------------------------- secrets
+
+if command -v gitleaks >/dev/null 2>&1; then
+  if [ "$CLEAN" = "1" ]; then
+    CFG="$REPO/.gitleaks.toml"
+    [ -f "$CFG" ] || CFG="$REPO/scripts/git-hooks/gitleaks.toml"
+    i=0
+    while [ "$i" -lt "${#TIPS[@]}" ]; do
+      if [ -f "$CFG" ]; then
+        gitleaks detect --source "$REPO" --no-banner --redact \
+          --log-opts="${BASES[$i]}..${TIPS[$i]}" --config "$CFG"
+      else
+        gitleaks detect --source "$REPO" --no-banner --redact \
+          --log-opts="${BASES[$i]}..${TIPS[$i]}"
+      fi
+      i=$((i + 1))
+    done
+  else
+    echo "pre-push: working tree not clean; skipping gitleaks" >&2
+  fi
+else
+  echo "pre-push: gitleaks not installed; skipping secrets scan" >&2
+fi
+
+# --------------------------------------------------------- forbidden patterns
+
+RULES="$REPO/scripts/git-hooks/forbidden-patterns.txt"
+[ -f "$RULES" ] || RULES="$REPO/.githooks/forbidden-patterns.txt"
+if [ -f "$RULES" ]; then
+  RELDIR=$(dirname "${RULES#"$REPO"/}")
+  while IFS= read -r rule; do
+    [ -z "$rule" ] && continue
+    case "$rule" in \#*) continue ;; esac
+    i=0
+    while [ "$i" -lt "${#TIPS[@]}" ]; do
+      if git log -p -G "$rule" "${BASES[$i]}..${TIPS[$i]}" -- . \
+        ":(exclude)$RELDIR" | grep -q "^commit"; then
+        echo "pre-push: forbidden pattern detected: $rule" >&2
+        exit 1
+      fi
+      i=$((i + 1))
+    done
+  done <"$RULES"
+fi
+
+# ----------------------------------------------------------------- rust suite
+
+RUST=0
+i=0
+while [ "$i" -lt "${#TIPS[@]}" ]; do
+  if git diff --name-only "${BASES[$i]}" "${TIPS[$i]}" |
+    grep -Eq '(^|/)(Cargo\.toml|Cargo\.lock|rustfmt\.toml)$|\.rs$'; then RUST=1; fi
+  i=$((i + 1))
+done
+
+if [ "$RUST" = "1" ] && [ -f "$REPO/Cargo.toml" ] && command -v cargo >/dev/null 2>&1; then
+  if [ "$CLEAN" = "1" ]; then
+    cargo fmt --check
+    cargo clippy --all-targets --all-features -- -D warnings
+    cargo test
+    if cargo audit --version >/dev/null 2>&1; then
+      cargo audit
+    else
+      echo "pre-push: cargo-audit not installed; skipping audit" >&2
+    fi
+  else
+    echo "pre-push: working tree not clean; skipping fmt/clippy/test" >&2
+  fi
+fi
+
+exit 0
