@@ -65,3 +65,4 @@ tokio-util = { workspace = true }
 [dev-dependencies]
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"] }
+opentelemetry_sdk = { workspace = true, features = ["trace", "metrics", "testing"] }

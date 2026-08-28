@@ -1,7 +1,21 @@
 # Plan: `arkiv.admin.read` MVP
 
-Status: klar for implementasjon.
-Skrevet 2026-08-25, verifisert på nytt mot committed HEAD 2026-08-26.
+Status: implementert. Se ADR
+[SKU-0018](adr/skuffen/SKU-0018-admin-read-lokal-reparasjonstilstand.md) for den
+varige beslutningen; denne planen beholdes som gjennomføringsdokumentasjon.
+Skrevet 2026-08-25, verifisert på nytt mot `c50d895`/`765a19d` 2026-08-27.
+
+Avvik som ble avklart under implementasjonen:
+
+- Sak-oppslaget har maksimalt fem SELECTs: fem når `sak_tilstand` finnes, tre ved
+  identity-only.
+- Integrasjonsmiljøet hadde allerede NATS-config-fil og `max_payload`; den ble
+  parameterisert i stedet for innført.
+- Queue group-testen starter en andre admin-listener direkte mot samme NATS og
+  database, og beviser køemedlemskap via NATS monitoring `/subsz`.
+- Trace-parenting krevde en reell fiks: `tracing-opentelemetry` bygger OTel-spanet
+  ved `on_enter`, så `set_parent` inne i en `#[instrument]`-kropp blir ignorert.
+  Admin-listeneren setter derfor parent på spanet før det aktiveres.
 
 Planen er selvstendig. En ny agentsesjon skal kunne implementere den uten å
 rekonstruere brainstormingen som førte hit.

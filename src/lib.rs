@@ -57,6 +57,12 @@ pub async fn run() -> anyhow::Result<()> {
         runtime.db_pool.clone(),
         runtime.use_fake_sikri,
     );
+    // Må bygges før poolen flyttes inn i execution-wiringen.
+    let admin_listener = infrastructure::bootstrap::build_admin_listener(
+        runtime.nats.clone(),
+        runtime.db_pool.clone(),
+        shutdown.clone(),
+    );
     let (eksekvering_listener, eksekvering_worker) =
         infrastructure::bootstrap::build_eksekvering_components(
             runtime.nats.clone(),
@@ -127,6 +133,12 @@ pub async fn run() -> anyhow::Result<()> {
     );
     spawn_named_task(
         &mut tasks,
+        "admin_listener",
+        TaskCriticality::Degraded,
+        async move { admin_listener.run().await.context("admin listener failed") },
+    );
+    spawn_named_task(
+        &mut tasks,
         "execution_listener",
         TaskCriticality::Degraded,
         async move {
@@ -158,6 +170,15 @@ pub async fn run() -> anyhow::Result<()> {
                 result: Err(anyhow::anyhow!("background task panicked: {err}")),
             },
         };
+
+        // Etter et nedstengingssignal er en avsluttet task normal oppførsel,
+        // ikke en degradert eller kritisk feil.
+        if shutdown.is_cancelled() {
+            if let Err(err) = outcome.result {
+                tracing::debug!(task = outcome.name, error = %err, "task stopped during shutdown");
+            }
+            return avslutt_kontrollert(tasks).await;
+        }
 
         match outcome.result {
             Ok(()) => {
@@ -196,6 +217,46 @@ pub async fn run() -> anyhow::Result<()> {
     Err(anyhow::anyhow!("all background tasks stopped"))
 }
 
+/// Cloud Run gir 10 sekunder fra SIGTERM til kill. Vi lar tasks avslutte selv
+/// innenfor et kortere vindu, og aborterer resten kontrollert.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(8);
+
+async fn avslutt_kontrollert(mut tasks: JoinSet<TaskOutcome>) -> anyhow::Result<()> {
+    let dreneringen = async {
+        while let Some(join_result) = tasks.join_next().await {
+            match join_result {
+                Ok(TaskOutcome {
+                    name,
+                    result: Err(err),
+                    ..
+                }) => {
+                    tracing::debug!(task = name, error = %err, "task stopped during shutdown");
+                }
+                Ok(_) => {}
+                Err(err) if err.is_cancelled() => {}
+                Err(err) => {
+                    tracing::warn!(error = %err, "task panicked during shutdown");
+                }
+            }
+        }
+    };
+
+    if tokio::time::timeout(SHUTDOWN_GRACE, dreneringen)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            grace_seconds = SHUTDOWN_GRACE.as_secs(),
+            "shutdown grace utløp, aborterer gjenstående tasks"
+        );
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+    }
+
+    tracing::info!("skuffen avsluttet kontrollert");
+    Ok(())
+}
+
 fn spawn_named_task<F>(
     tasks: &mut JoinSet<TaskOutcome>,
     name: &'static str,
@@ -211,4 +272,52 @@ fn spawn_named_task<F>(
             result: future.await,
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ferdig_task(name: &'static str) -> TaskOutcome {
+        TaskOutcome {
+            name,
+            criticality: TaskCriticality::Degraded,
+            result: Ok(()),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kontrollert_avslutning_venter_paa_tasks_som_avslutter_selv() {
+        let mut tasks = JoinSet::new();
+        tasks.spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            ferdig_task("media_listener")
+        });
+        tasks.spawn(async { ferdig_task("admin_listener") });
+
+        let start = tokio::time::Instant::now();
+        avslutt_kontrollert(tasks)
+            .await
+            .expect("normal nedstenging er ikke en feil");
+
+        assert!(start.elapsed() < SHUTDOWN_GRACE);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kontrollert_avslutning_aborterer_tasks_som_henger() {
+        let mut tasks = JoinSet::new();
+        tasks.spawn(async {
+            std::future::pending::<()>().await;
+            ferdig_task("henger")
+        });
+
+        let start = tokio::time::Instant::now();
+        avslutt_kontrollert(tasks)
+            .await
+            .expect("abort etter grace er ikke en feil");
+
+        // Vinduet holder seg innenfor Cloud Runs 10 sekunder.
+        assert!(start.elapsed() >= SHUTDOWN_GRACE);
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+    }
 }

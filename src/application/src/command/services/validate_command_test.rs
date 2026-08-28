@@ -1,16 +1,5 @@
 use async_trait::async_trait;
 use domain::eksekvering::typer::{CommandEvent, CommandStatus, Operasjonstatus, StatusErrorCode};
-use lib_schemas::skuffen::command::commands::{
-    Command as WireCommand, CommandEnvelope as WireCommandEnvelope,
-};
-use lib_schemas::skuffen::command::journalpost::{
-    JournalpostCommon, OpprettInterntNotatJournalpost,
-};
-use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
-use lib_schemas::skuffen::dokument::{Dokument, Dokumentform};
-use lib_schemas::skuffen::query::queries::SakKey;
-use lib_schemas::skuffen::sak::{Ordningsverdi, Saksnummer, Sakstittel};
-use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -22,7 +11,8 @@ use crate::command::ports::status_publisher_port::StatusPublisher;
 use crate::command::ports::validated_command_dispatcher_port::ValidatedCommandDispatcher;
 use crate::command::services::validate_command::{ValidateCommandService, ValidationOutcome};
 use crate::command::{
-    Command as ApplicationCommand, CommandEnvelope as ApplicationCommandEnvelope,
+    Command as ApplicationCommand, CommandEnvelope as ApplicationCommandEnvelope, SakKey,
+    test_fixtures,
 };
 
 #[derive(Clone, Default)]
@@ -223,55 +213,20 @@ fn build_service(
     )
 }
 
-fn sample_dokument() -> Dokument {
-    Dokument {
-        client_reference: Uuid::new_v4(),
-        tittel: "Hoveddokument".to_string(),
-        form: Dokumentform::Bytes {
-            filtype: "PDF".to_string(),
-            dokument_referanse: Uuid::new_v4(),
-        },
-    }
+fn make_journalpost_command(sak_key: SakKey) -> ApplicationCommand {
+    test_fixtures::internt_notat(sak_key)
 }
 
-fn make_journalpost_command(sak_key: SakKey) -> WireCommand {
-    WireCommand::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
-        felles: JournalpostCommon {
-            client_reference: Uuid::new_v4(),
-            tittel: "Internt notat".to_string(),
-            dokument_dato: "2025-01-01".to_string(),
-            saksbehandler: "Z12345".to_string(),
-            saksbehandler_enhet: "42".to_string(),
-            tilgjengelighet: Tilgjengelighet::Offentlig,
-            dokumenter: vec![sample_dokument()],
-            sak_key,
-            kildesystem: None,
-        },
-    })
+fn make_opprett_sak_command() -> ApplicationCommand {
+    test_fixtures::opprett_sak(Uuid::new_v4())
 }
 
-fn make_opprett_sak_command() -> WireCommand {
-    WireCommand::OpprettSak(OpprettSak {
-        client_reference: Uuid::new_v4(),
-        sakstittel: Sakstittel::try_from("Test sak".to_string()).unwrap(),
-        ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
-        arkivdel: Arkivdel::Tilsynsdivisjonene,
-        saksbehandler_id: "Z12345".to_string(),
-        saksbehandler_enhet: "42".to_string(),
-        tilgjengelighet: Tilgjengelighet::Offentlig,
-    })
+fn make_avslutt_sak_command(sak_key: SakKey) -> ApplicationCommand {
+    test_fixtures::avslutt_sak(sak_key)
 }
 
-fn make_avslutt_sak_command(sak_key: SakKey) -> WireCommand {
-    WireCommand::AvsluttSak(AvsluttSak { sak_key })
-}
-
-fn wrap_command(command: WireCommand) -> ApplicationCommandEnvelope<ApplicationCommand> {
-    crate::command::test_support::map_wire_envelope(WireCommandEnvelope {
-        command_id: Uuid::new_v4(),
-        correlation_id: Some(Uuid::new_v4()),
-        payload: command,
-    })
+fn wrap_command(command: ApplicationCommand) -> ApplicationCommandEnvelope<ApplicationCommand> {
+    test_fixtures::envelope(command)
 }
 
 fn assert_statuses(
@@ -475,7 +430,7 @@ async fn test_validate_arkiv_id_open_sak_is_ok() {
         status_publisher.clone(),
     );
 
-    let saksnummer = Saksnummer::new("2025/42").unwrap();
+    let saksnummer = "2025/42".to_string();
     let envelope = wrap_command(make_avslutt_sak_command(SakKey::ArkivId(saksnummer)));
 
     let command_id = envelope.command_id;
@@ -514,7 +469,7 @@ async fn test_validate_arkiv_id_recoverable_error_retries() {
         status_publisher.clone(),
     );
 
-    let saksnummer = Saksnummer::new("2025/99").unwrap();
+    let saksnummer = "2025/99".to_string();
     let envelope = wrap_command(make_journalpost_command(SakKey::ArkivId(saksnummer)));
 
     let _command_id = envelope.command_id;
@@ -565,7 +520,7 @@ async fn test_validate_arkiv_id_irrecoverable_error_is_error() {
         status_publisher.clone(),
     );
 
-    let saksnummer = Saksnummer::new("2025/404").unwrap();
+    let saksnummer = "2025/404".to_string();
     let envelope = wrap_command(make_journalpost_command(SakKey::ArkivId(saksnummer)));
 
     let command_id = envelope.command_id;

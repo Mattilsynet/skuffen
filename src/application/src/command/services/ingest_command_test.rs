@@ -4,12 +4,6 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use domain::eksekvering::operasjon::EntitetType;
 use domain::eksekvering::typer::{CommandEvent, CommandStatus, Operasjonstatus};
-use lib_schemas::skuffen::command::commands::{
-    Command as WireCommand, CommandEnvelope as WireCommandEnvelope, CommandSequence,
-};
-use lib_schemas::skuffen::command::sak::{Arkivdel, OpprettSak};
-use lib_schemas::skuffen::sak::{Ordningsverdi, Sakstittel};
-use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 use uuid::Uuid;
 
 use crate::command::ports::command_dispatcher_port::CommandDispatcher;
@@ -17,7 +11,7 @@ use crate::command::ports::command_port::{CommandRepository, Mottaksresultat};
 use crate::command::ports::entitet_port::{Entitet, EntitetRepository, NyEntitet};
 use crate::command::ports::status_publisher_port::StatusPublisher;
 use crate::command::services::ingest_command::IngestCommandService;
-use crate::command::{Command, CommandEnvelope};
+use crate::command::{Command, CommandEnvelope, test_fixtures};
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -163,21 +157,11 @@ fn build_service(
     )
 }
 
-fn opprett_sak_sequence(command_id: Uuid, client_reference: Uuid) -> CommandSequence {
-    CommandSequence::try_from(vec![WireCommandEnvelope {
+fn opprett_sak_batch(command_id: Uuid, client_reference: Uuid) -> Vec<CommandEnvelope<Command>> {
+    vec![test_fixtures::opprett_sak_envelope(
         command_id,
-        correlation_id: Some(Uuid::new_v4()),
-        payload: WireCommand::OpprettSak(OpprettSak {
-            client_reference,
-            sakstittel: Sakstittel::try_from("Tilsynssak".to_string()).unwrap(),
-            ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
-            arkivdel: Arkivdel::Tilsynsdivisjonene,
-            saksbehandler_id: "Z99999".to_string(),
-            saksbehandler_enhet: "42".to_string(),
-            tilgjengelighet: Tilgjengelighet::Offentlig,
-        }),
-    }])
-    .unwrap()
+        client_reference,
+    )]
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +197,7 @@ async fn retry_etter_dispatch_feil_skal_ikke_kvittere_ok_for_udispatchet_command
     );
     assert!(
         service
-            .handle(opprett_sak_sequence(command_id, client_reference))
+            .handle(opprett_sak_batch(command_id, client_reference))
             .await
             .is_err()
     );
@@ -227,7 +211,7 @@ async fn retry_etter_dispatch_feil_skal_ikke_kvittere_ok_for_udispatchet_command
         FakeStatusPublisher::default(),
     );
     let command_ids = service
-        .handle(opprett_sak_sequence(command_id, client_reference))
+        .handle(opprett_sak_batch(command_id, client_reference))
         .await
         .expect("retry rapporteres som akseptert");
 
@@ -260,7 +244,7 @@ async fn ekte_duplikat_dispatches_ikke_paa_nytt() {
             FakeStatusPublisher::default(),
         );
         let command_ids = service
-            .handle(opprett_sak_sequence(command_id, client_reference))
+            .handle(opprett_sak_batch(command_id, client_reference))
             .await
             .expect("duplikat aksepteres idempotent");
         assert_eq!(command_ids, vec![command_id]);
@@ -291,7 +275,7 @@ async fn replay_etter_dispatch_feil_gjenbruker_skuffen_id() {
         FakeStatusPublisher::default(),
     );
     let _ = service
-        .handle(opprett_sak_sequence(command_id, client_reference))
+        .handle(opprett_sak_batch(command_id, client_reference))
         .await;
 
     let forste = entitet
@@ -307,7 +291,7 @@ async fn replay_etter_dispatch_feil_gjenbruker_skuffen_id() {
         FakeStatusPublisher::default(),
     );
     service
-        .handle(opprett_sak_sequence(command_id, client_reference))
+        .handle(opprett_sak_batch(command_id, client_reference))
         .await
         .unwrap();
 
@@ -338,7 +322,7 @@ async fn mottatt_publiseres_forst_etter_vellykket_dispatch() {
         publisher.clone(),
     );
     let _ = service
-        .handle(opprett_sak_sequence(Uuid::new_v4(), Uuid::new_v4()))
+        .handle(opprett_sak_batch(Uuid::new_v4(), Uuid::new_v4()))
         .await;
 
     assert!(
@@ -353,7 +337,7 @@ async fn mottatt_publiseres_forst_etter_vellykket_dispatch() {
         publisher.clone(),
     );
     service
-        .handle(opprett_sak_sequence(Uuid::new_v4(), Uuid::new_v4()))
+        .handle(opprett_sak_batch(Uuid::new_v4(), Uuid::new_v4()))
         .await
         .unwrap();
 
@@ -374,20 +358,12 @@ async fn batch_beholder_rekkefolgen() {
     );
 
     let ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
-    let envelopes: Vec<WireCommandEnvelope<WireCommand>> = ids
+    let envelopes: Vec<CommandEnvelope<Command>> = ids
         .iter()
-        .map(|id| {
-            opprett_sak_sequence(*id, Uuid::new_v4())
-                .into_iter()
-                .next()
-                .unwrap()
-        })
+        .map(|id| test_fixtures::opprett_sak_envelope(*id, Uuid::new_v4()))
         .collect();
 
-    let command_ids = service
-        .handle(CommandSequence::try_from(envelopes).unwrap())
-        .await
-        .unwrap();
+    let command_ids = service.handle(envelopes).await.unwrap();
 
     assert_eq!(command_ids, ids);
     assert_eq!(*dispatcher.dispatched.lock().unwrap(), ids);

@@ -121,9 +121,24 @@ impl Extractor for HeaderMapExtractor<'_> {
 /// statement inside `#[instrument]`-annotated message handlers, before any
 /// nested spans or log statements are created.
 pub fn set_parent_from_nats_headers(headers: Option<&HeaderMap>) {
-    let ctx = match headers {
+    let _ = Span::current().set_parent(nats_trace_context(headers));
+}
+
+/// Sets the inbound trace context as parent of a span that has not been
+/// entered yet.
+///
+/// `tracing-opentelemetry` builds the OTel span on `on_enter`, so a
+/// `set_parent` from inside an already-entered `#[instrument]` body is
+/// silently ignored. Handlers that need the caller's trace as parent must
+/// therefore create the span, set the parent, and only then instrument the
+/// work with it.
+pub fn set_parent_on_span_from_nats_headers(span: &Span, headers: Option<&HeaderMap>) {
+    let _ = span.set_parent(nats_trace_context(headers));
+}
+
+fn nats_trace_context(headers: Option<&HeaderMap>) -> opentelemetry::Context {
+    match headers {
         Some(h) => global::get_text_map_propagator(|prop| prop.extract(&HeaderMapExtractor(h))),
         None => opentelemetry::Context::new(),
-    };
-    let _ = Span::current().set_parent(ctx);
+    }
 }

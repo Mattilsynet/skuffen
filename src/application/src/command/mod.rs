@@ -7,11 +7,8 @@ pub use model::{
 };
 
 #[cfg(test)]
-pub use model::test_support;
+pub use model::test_fixtures;
 
 pub mod materialisering;
 pub mod ports;
 pub mod services;
-
-#[cfg(test)]
-mod wire_test_support;

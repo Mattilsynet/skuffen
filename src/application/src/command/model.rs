@@ -194,231 +194,59 @@ impl<T> CommandEnvelope<T> {
 }
 
 #[cfg(test)]
-pub mod test_support {
+pub mod test_fixtures {
     use super::*;
-    use lib_schemas::skuffen::command::commands::{
-        Command as WireCommand, CommandEnvelope as WireCommandEnvelope,
-    };
-    use lib_schemas::skuffen::command::journalpost as wire_journalpost;
-    use lib_schemas::skuffen::command::sak as wire_sak;
-    use lib_schemas::skuffen::dokument as wire_dokument;
-    use lib_schemas::skuffen::query::queries as wire_query;
 
-    pub fn map_wire_envelope(
-        envelope: WireCommandEnvelope<WireCommand>,
+    pub fn envelope(payload: Command) -> CommandEnvelope<Command> {
+        CommandEnvelope::new(Uuid::new_v4(), payload).with_correlation_id(Uuid::new_v4())
+    }
+
+    pub fn opprett_sak(client_reference: Uuid) -> Command {
+        Command::OpprettSak(OpprettSakCommand {
+            client_reference,
+            sakstittel: "Tilsynssak".to_string(),
+            ordningsverdi: domain::model::sak::Ordningsverdi::new("123".to_string())
+                .expect("syntetisk ordningsverdi er gyldig"),
+            arkivdel: Arkivdel::Tilsynsdivisjonene,
+            saksbehandler_id: "Z99999".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            tilgjengelighet: Tilgjengelighet::Offentlig,
+        })
+    }
+
+    pub fn opprett_sak_envelope(
+        command_id: Uuid,
+        client_reference: Uuid,
     ) -> CommandEnvelope<Command> {
-        CommandEnvelope {
-            command_id: envelope.command_id,
-            correlation_id: envelope.correlation_id,
-            payload: map_wire_command(envelope.payload),
-        }
+        CommandEnvelope::new(command_id, opprett_sak(client_reference))
+            .with_correlation_id(Uuid::new_v4())
     }
 
-    fn map_wire_command(command: WireCommand) -> Command {
-        match command {
-            WireCommand::OpprettSak(command) => Command::OpprettSak(map_opprett_sak(command)),
-            WireCommand::OpprettInngåendeJournalpost(command) => {
-                Command::OpprettInngaaendeJournalpost(map_inngaende_journalpost(command))
-            }
-            WireCommand::OpprettUtgåendeJournalpost(command) => {
-                Command::OpprettUtgaaendeJournalpost(map_utgaaende_journalpost(command))
-            }
-            WireCommand::OpprettUtgåendeJournalpostMedUtsending(command) => {
-                Command::OpprettUtgaaendeJournalpost(map_utgaaende_med_utsending(command))
-            }
-            WireCommand::OpprettInterntNotatJournalpost(command) => {
-                Command::OpprettInterntNotatJournalpost(map_internt_notat_journalpost(command))
-            }
-            WireCommand::AvsluttSak(command) => Command::AvsluttSak(AvsluttSakCommand {
-                sak_key: map_sak_key(command.sak_key),
-            }),
-            WireCommand::SettSaksansvarlig(command) => {
-                Command::SettSaksansvarlig(SettSaksansvarligCommand {
-                    sak_key: map_sak_key(command.sak_key),
-                    saksbehandler_id: command.saksbehandler_id,
-                    saksbehandler_enhet: command.saksbehandler_enhet,
-                })
-            }
-        }
-    }
-
-    fn map_tilgjengelighet(
-        tilgjengelighet: lib_schemas::skuffen::tilgang::Tilgjengelighet,
-    ) -> Tilgjengelighet {
-        match tilgjengelighet {
-            lib_schemas::skuffen::tilgang::Tilgjengelighet::Offentlig => Tilgjengelighet::Offentlig,
-            lib_schemas::skuffen::tilgang::Tilgjengelighet::Skjermet {
-                tilgangskode,
-                tilgangshjemmel,
-            } => Tilgjengelighet::Skjermet {
-                tilgangskode: domain::model::tilgang::Tilgangskode::new(tilgangskode.as_str())
-                    .expect("wire tilgangskode er allerede validert"),
-                tilgangshjemmel: domain::model::tilgang::Tilgangshjemmel::new(
-                    tilgangshjemmel.as_str(),
-                )
-                .expect("wire tilgangshjemmel er allerede validert"),
-            },
-        }
-    }
-
-    fn map_parttype(parttype: wire_journalpost::Parttype) -> Parttype {
-        match parttype {
-            wire_journalpost::Parttype::Person => Parttype::Person,
-            wire_journalpost::Parttype::Virksomhet => Parttype::Virksomhet,
-        }
-    }
-
-    fn map_korrespondansepart(part: wire_journalpost::Korrespondansepart) -> Korrespondansepart {
-        Korrespondansepart {
-            navn: part.navn,
-            parttype: map_parttype(part.parttype),
-        }
-    }
-
-    fn map_utsendingsmottaker(
-        mottaker: wire_journalpost::Utsendingsmottaker,
-    ) -> Utsendingsmottaker {
-        Utsendingsmottaker {
-            navn: mottaker.navn,
-            id: match mottaker.id {
-                wire_journalpost::MottakerId::Person { fødselsnummer } => MottakerId::Person {
-                    fødselsnummer: domain::model::identifikator::Fødselsnummer::new(
-                        fødselsnummer.as_str(),
-                    )
-                    .expect("wire fødselsnummer er allerede validert"),
-                },
-                wire_journalpost::MottakerId::Virksomhet {
-                    organisasjonsnummer,
-                } => MottakerId::Virksomhet {
-                    organisasjonsnummer: domain::model::identifikator::Organisasjonsnummer::new(
-                        organisasjonsnummer.as_str(),
-                    )
-                    .expect("wire organisasjonsnummer er allerede validert"),
-                },
-            },
-            adresse: Postadresse {
-                adresse: mottaker.adresse.adresse,
-                postnummer: domain::model::identifikator::Postnummer::new(
-                    mottaker.adresse.postnummer.as_str(),
-                )
-                .expect("wire postnummer er allerede validert"),
-                poststed: mottaker.adresse.poststed,
-            },
-        }
-    }
-
-    fn map_opprett_sak(command: wire_sak::OpprettSak) -> OpprettSakCommand {
-        OpprettSakCommand {
-            client_reference: command.client_reference,
-            sakstittel: command.sakstittel.as_str().to_string(),
-            ordningsverdi: domain::model::sak::Ordningsverdi::new(
-                command.ordningsverdi.as_str().to_string(),
-            )
-            .expect("wire ordningsverdi er allerede validert"),
-            arkivdel: match command.arkivdel {
-                wire_sak::Arkivdel::Tilsynsdivisjonene => Arkivdel::Tilsynsdivisjonene,
-                wire_sak::Arkivdel::Hovedkontoret => Arkivdel::Hovedkontoret,
-            },
-            saksbehandler_id: command.saksbehandler_id,
-            saksbehandler_enhet: command.saksbehandler_enhet,
-            tilgjengelighet: map_tilgjengelighet(command.tilgjengelighet),
-        }
-    }
-
-    fn map_inngaende_journalpost(
-        command: wire_journalpost::OpprettInngåendeJournalpost,
-    ) -> OpprettJournalpostCommand {
-        OpprettJournalpostCommand::Inngaende {
-            felles: map_journalpost_common(command.felles),
-            avsender: map_korrespondansepart(command.avsender),
-        }
-    }
-
-    fn map_utgaaende_journalpost(
-        command: wire_journalpost::OpprettUtgåendeJournalpost,
-    ) -> OpprettJournalpostCommand {
-        OpprettJournalpostCommand::Utgaaende {
-            felles: map_journalpost_common(command.felles),
-            mottakere: command
-                .mottakere
-                .into_iter()
-                .map(map_korrespondansepart)
-                .collect(),
-        }
-    }
-
-    fn map_utgaaende_med_utsending(
-        command: wire_journalpost::OpprettUtgåendeJournalpostMedUtsending,
-    ) -> OpprettJournalpostCommand {
-        OpprettJournalpostCommand::UtgaaendeMedUtsending {
-            felles: map_journalpost_common(command.felles),
-            mottakere: command
-                .mottakere
-                .into_iter()
-                .map(map_utsendingsmottaker)
-                .collect(),
-        }
-    }
-
-    fn map_internt_notat_journalpost(
-        command: wire_journalpost::OpprettInterntNotatJournalpost,
-    ) -> OpprettJournalpostCommand {
-        OpprettJournalpostCommand::InterntNotat {
-            felles: map_journalpost_common(command.felles),
-        }
-    }
-
-    fn map_journalpost_common(command: wire_journalpost::JournalpostCommon) -> JournalpostCommon {
-        JournalpostCommon {
-            client_reference: command.client_reference,
-            tittel: command.tittel,
-            dokument_dato: command.dokument_dato,
-            saksbehandler: command.saksbehandler,
-            saksbehandler_enhet: command.saksbehandler_enhet,
-            tilgjengelighet: map_tilgjengelighet(command.tilgjengelighet),
-            dokumenter: command
-                .dokumenter
-                .into_iter()
-                .map(|dokument| Dokument {
-                    client_reference: dokument.client_reference,
-                    tittel: dokument.tittel,
-                    form: match dokument.form {
-                        wire_dokument::Dokumentform::Bytes {
-                            dokument_referanse,
-                            filtype,
-                        } => Dokumentform::Bytes {
-                            dokument_referanse,
-                            filtype,
-                        },
-                        wire_dokument::Dokumentform::HtmlTemplate {
-                            mal_referanse,
-                            felter,
-                        } => Dokumentform::HtmlTemplate {
-                            mal_referanse,
-                            felter: felter
-                                .into_iter()
-                                .map(|felt| match felt {
-                                    wire_dokument::Felt::Saksnummer => TemplateFelt::Saksnummer,
-                                })
-                                .collect(),
-                        },
+    pub fn internt_notat(sak_key: SakKey) -> Command {
+        Command::OpprettInterntNotatJournalpost(OpprettJournalpostCommand::InterntNotat {
+            felles: JournalpostCommon {
+                client_reference: Uuid::new_v4(),
+                tittel: "Internt notat".to_string(),
+                dokument_dato: "2025-01-01".to_string(),
+                saksbehandler: "Z12345".to_string(),
+                saksbehandler_enhet: "42".to_string(),
+                tilgjengelighet: Tilgjengelighet::Offentlig,
+                dokumenter: vec![Dokument {
+                    client_reference: Uuid::new_v4(),
+                    tittel: "Hoveddokument".to_string(),
+                    form: Dokumentform::Bytes {
+                        dokument_referanse: Uuid::new_v4(),
+                        filtype: "PDF".to_string(),
                     },
-                })
-                .collect(),
-            sak_key: map_sak_key(command.sak_key),
-            kildesystem: command.kildesystem,
-        }
+                }],
+                sak_key,
+                kildesystem: None,
+            },
+        })
     }
 
-    fn map_sak_key(sak_key: wire_query::SakKey) -> SakKey {
-        match sak_key {
-            wire_query::SakKey::ClientReference(client_reference) => {
-                SakKey::ClientReference(client_reference)
-            }
-            wire_query::SakKey::ArkivId(saksnummer) => {
-                SakKey::ArkivId(saksnummer.as_str().to_string())
-            }
-        }
+    pub fn avslutt_sak(sak_key: SakKey) -> Command {
+        Command::AvsluttSak(AvsluttSakCommand { sak_key })
     }
 }
 

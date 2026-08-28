@@ -107,6 +107,25 @@ Denne guiden beskriver trygge, vanlige bygg-, test- og kvalitetssjekker for `sku
 - By substring when exact name is unknown:
   `cargo test -p application ingest_command -- --nocapture`
 
+## Admin read over NATS
+
+Admin read er to eksakte core request-reply-subjects. `utfort_av` er obligatorisk
+selvdeklarert attribusjon, ikke autentisering.
+
+```bash
+nats request arkiv.admin.read.command.hent \
+  '{"utfort_av":"test-operator","command_id":"00000000-0000-0000-0000-000000000001"}'
+```
+
+```bash
+nats request arkiv.admin.read.sak.hent \
+  '{"utfort_av":"test-operator","key":{"type":"clientReference","value":"00000000-0000-0000-0000-000000000002"}}'
+```
+
+`key` støtter `skuffenId`, `clientReference` og `arkivId`. Svarene bruker
+`NatsResponse<T>`; stabile feilmeldinger er `Invalid request format`,
+`Command not found`, `Sak not found`, `Response too large` og `Internal error`.
+
 ## Useful targeted commands
 
 - Check one crate: `cargo check -p infrastructure`

@@ -10,16 +10,6 @@ use crate::command::services::ingest_command::{command_type, kontekst};
 use crate::command::{Command, CommandEnvelope};
 use domain::eksekvering::typer::{CommandEvent, CommandStatus, StatusErrorCode};
 
-pub trait IntoCommandEnvelope {
-    fn into_command_envelope(self) -> CommandEnvelope<Command>;
-}
-
-impl IntoCommandEnvelope for CommandEnvelope<Command> {
-    fn into_command_envelope(self) -> CommandEnvelope<Command> {
-        self
-    }
-}
-
 pub enum ValidationOutcome {
     Ok,
     Blocked {
@@ -84,9 +74,7 @@ impl ValidateCommandService {
         }
     }
 
-    pub async fn handle(&self, envelope: impl IntoCommandEnvelope) -> Result<ValidationOutcome> {
-        let envelope = envelope.into_command_envelope();
-
+    pub async fn handle(&self, envelope: CommandEnvelope<Command>) -> Result<ValidationOutcome> {
         let outcome = match envelope.payload.clone() {
             Command::OpprettSak(c) => match validate_sakstittel_markup(&c) {
                 ValidationOutcome::Ok => ValidationOutcome::Ok,

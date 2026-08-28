@@ -11,16 +11,6 @@ use crate::command::ports::{
 };
 use crate::command::{Command, CommandEnvelope, SakKey};
 
-pub trait IntoCommandBatch {
-    fn into_command_batch(self) -> Vec<CommandEnvelope<Command>>;
-}
-
-impl IntoCommandBatch for Vec<CommandEnvelope<Command>> {
-    fn into_command_batch(self) -> Vec<CommandEnvelope<Command>> {
-        self
-    }
-}
-
 /// Idempotency-nøkkelen er `command.dispatchet_at`, ikke radens eksistens
 /// (SKU-0016 R11). Rekkefølgen er: skriv mottaksraden, mint id-ene, dispatch,
 /// og først da sett milepælen. Feiler dispatch, står milepælen som `NULL`, og
@@ -49,10 +39,10 @@ impl IngestCommandService {
 
     /// Returnerer alle command-id-er i innsendt rekkefølge, inkludert
     /// idempotent aksepterte (SKU-0008 R3). Feiler én, feiler hele batchen.
-    pub async fn handle(&self, commands: impl IntoCommandBatch) -> Result<Vec<Uuid>> {
+    pub async fn handle(&self, commands: Vec<CommandEnvelope<Command>>) -> Result<Vec<Uuid>> {
         let mut command_ids = Vec::new();
 
-        for envelope in commands.into_command_batch() {
+        for envelope in commands {
             let command_id = envelope.command_id;
             self.process_command(envelope).await?;
             command_ids.push(command_id);

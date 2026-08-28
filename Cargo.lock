@@ -113,7 +113,6 @@ dependencies = [
  "async-trait",
  "chrono",
  "domain",
- "lib-schemas",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -1843,7 +1842,7 @@ dependencies = [
 [[package]]
 name = "lib-schemas"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#9b47b3291e513d51c6e555d0b2212c497b5c7f3c"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git#0a098363ece37b7cd6d9283d7942d9f1bff2c34c"
 dependencies = [
  "chrono",
  "serde",
@@ -2178,6 +2177,7 @@ dependencies = [
  "portable-atomic",
  "rand 0.9.4",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -3167,6 +3167,7 @@ dependencies = [
  "infrastructure",
  "lib-nats",
  "lib-schemas",
+ "reqwest",
  "rustls",
  "serde",
  "serde_json",
@@ -3174,6 +3175,7 @@ dependencies = [
  "testcontainers",
  "testcontainers-modules",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]

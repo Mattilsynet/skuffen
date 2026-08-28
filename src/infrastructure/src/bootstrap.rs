@@ -1,4 +1,5 @@
 use anyhow::{Context, ensure};
+use application::admin::services::admin_read_service::AdminReadService;
 use application::command::ports::command_state_port::ArkivSakTilstandRepository;
 use application::command::ports::dokument_renderer_port::{
     DokumentRenderer, IkkeKonfigurertDokumentRenderer,
@@ -11,6 +12,8 @@ use lib_nats::jetstream;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
+use crate::admin::adapter::postgres_admin_read_repository::PostgresAdminReadRepository;
+use crate::admin::nats::listener::{AdminListener, NatsAdminTransport};
 use crate::command::adapter::fake_arkiv_gateway::FakeArkivGateway;
 use crate::command::adapter::fake_command_state_repo::FakeArkivSakTilstandRepository;
 use crate::command::adapter::html2pdf_renderer_adapter::{
@@ -143,6 +146,22 @@ pub fn build_command_listener(
     );
 
     CommandListener::new(nats, command_service, media_store)
+}
+
+/// Admin read deler ett repository mellom de to use casene.
+pub fn build_admin_listener(
+    nats: NatsClient,
+    db_pool: lib_sql::database_config::DbPool,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> AdminListener {
+    let repository = std::sync::Arc::new(PostgresAdminReadRepository::new(db_pool));
+    let service = std::sync::Arc::new(AdminReadService::new(repository));
+
+    AdminListener::new(
+        std::sync::Arc::new(NatsAdminTransport::new(nats)),
+        service,
+        shutdown,
+    )
 }
 
 pub fn build_validator_listener(

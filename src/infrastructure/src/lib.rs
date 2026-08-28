@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod bootstrap;
 pub mod command;
 pub mod database;

@@ -233,7 +233,48 @@ Request-reply (skriv / kommandoer):
 - `arkiv.arkiver` (kommandoer). Request: `Vec<CommandEnvelope<Command>>`. Reply: `ArkiveringKvittering`.
   - OK: `{ "Ok": { "command_ids": ["<uuid>"] } }` betyr at hele batchen er mottatt og akseptert for prosessering.
   - Error: `{ "Error": { "message": "..." } }` betyr at hele batchen er avvist. Execution-resultat kommer via status-events, ikke request-reply.
-- `arkiv.admin` (administrative funksjoner).
+
+Request-reply (admin read / reparasjonstilstand):
+- `arkiv.admin.read.command.hent` — hent én kommando med alle nåværende operasjonsrader.
+  Request: `HentAdminCommandRequestV1`. Reply: `NatsResponse<AdminCommandResponseV1>`.
+- `arkiv.admin.read.sak.hent` — hent én sak med materialisert lokal state og lette
+  operasjonssammendrag. Request: `HentAdminSakRequestV1`. Reply: `NatsResponse<AdminSakResponseV1>`.
+
+Ansvarsdelingen er bevisst:
+
+| Kanal | Spørsmål den svarer på |
+| :-- | :-- |
+| Status-streamen | Hva har skjedd med kommandoen? |
+| Admin read | Hvilken lokal tilstand må forstås før en reparasjon? |
+| Admin write (senere) | Utfør en avgrenset reparasjon og la workeren fortsette. |
+
+Admin read viser autoritativ nåværende PostgreSQL-tilstand. Den rekonstruerer ingen
+hendelsestidslinje, leser ikke status-streamen og kaller ikke arkivet.
+Se ADR [SKU-0018](docs/adr/skuffen/SKU-0018-admin-read-lokal-reparasjonstilstand.md).
+
+```bash
+nats request arkiv.admin.read.command.hent \
+  '{"utfort_av":"test-operator","command_id":"00000000-0000-0000-0000-000000000001"}'
+
+nats request arkiv.admin.read.sak.hent \
+  '{"utfort_av":"test-operator","key":{"type":"clientReference","value":"00000000-0000-0000-0000-000000000002"}}'
+```
+
+`utfort_av` er obligatorisk, men er selvdeklarert attribusjon — ikke autentisering.
+Tillitsmodellen er den eksisterende NATS-tilgangen.
+
+Stabile feilsvar fra admin read:
+
+| Situasjon | `message` |
+| :-- | :-- |
+| ugyldig JSON, ukjent felt, manglende/blank `utfort_av` | `Invalid request format` |
+| ukjent command-id | `Command not found` |
+| ingen sak-entitet matcher key | `Sak not found` |
+| serialisert svar overskrider NATS-grensen | `Response too large` |
+| database-/mapping-/serialiseringsfeil | `Internal error` |
+
+`skuffen_id`, operasjoner og intern kontekst er skjult for normale klienter, men eksponeres
+bevisst gjennom admin read: de er nødvendige for å adressere riktig mål i en reparasjon.
 
 Request-reply (les / queries):
 - `arkiv.request.sak.hent` — hent sak. Request: `HentSakQuery` med `SakKey::ClientReference(uuid)` eller `SakKey::ArkivId(Saksnummer)`. Reply: `NatsResponse<SakResponse>`.
@@ -324,7 +365,8 @@ arkivkall, med egen id, egen status, egen retry og egen statuslinje utad.
 ## Runtime-prioritering
 
 - `command_listener`, `media_listener` og `health_check` regnes som kritiske for opptak. `command_listener` har et begrenset internt restartbudsjett. `media_listener` drives av `ChunkedUploadServer`; hvis serveren stopper eller feiler, avsluttes prosessen slik at Cloud Run kan restarte instansen. Ved shutdown stopper den nye `begin`-requests og gir aktive receiver-sessioner fem sekunder til å fullfoere.
-- `validation_listener`, `execution_listener`, `execution_worker`, `query_listener` og `ready_replier` regnes som degradérbare: hvis de stopper eller feiler, logger Skuffen feilen og holder prosessen i live. `query_listener` dekker `arkiv.request.sak.hent`, `arkiv.request.journalpost.hent` og `arkiv.request.bruker.mt_enheter`.
+- `validation_listener`, `execution_listener`, `execution_worker`, `query_listener`, `admin_listener` og `ready_replier` regnes som degradérbare: hvis de stopper eller feiler, logger Skuffen feilen og holder prosessen i live. `query_listener` dekker `arkiv.request.sak.hent`, `arkiv.request.journalpost.hent` og `arkiv.request.bruker.mt_enheter`. `admin_listener` dekker `arkiv.admin.read.command.hent` og `arkiv.admin.read.sak.hent`.
+- Ved SIGTERM avslutter Skuffen kontrollert: tasks får åtte sekunder på å avslutte selv, og resten aborteres. Det holder oss innenfor Cloud Runs ti sekunder.
 
 ---
 

@@ -64,7 +64,16 @@ impl TaskSupervisor {
             let run_duration = started_at.elapsed();
 
             if self.er_nedstengt() {
-                return result;
+                // Nedstenging er en normal slutt. En feil som oppsto mens
+                // tasken avsluttet, skal ikke bli en runtime-feil.
+                if let Err(err) = result {
+                    tracing::debug!(
+                        task = %self.name,
+                        error = %err,
+                        "task stopped with error during shutdown"
+                    );
+                }
+                return Ok(());
             }
 
             if run_duration >= self.stable_run_window && attempt > 0 {
@@ -122,8 +131,109 @@ impl TaskSupervisor {
                 next_retry_ms = backoff.as_millis() as u64,
                 "restarting critical task after backoff"
             );
-            tokio::time::sleep(backoff).await;
+            if self.vent_med_backoff(backoff).await {
+                return Ok(());
+            }
             backoff = std::cmp::min(backoff.saturating_mul(2), self.max_backoff);
         }
+    }
+
+    /// Returnerer `true` når nedstenging avbrøt ventetiden.
+    ///
+    /// Backoffen kan være opptil 30 sekunder, mens Cloud Run gir 10. En
+    /// ukansellerbar sleep her ville derfor gjort normal nedstenging til en
+    /// hard kill.
+    async fn vent_med_backoff(&self, backoff: Duration) -> bool {
+        match &self.shutdown {
+            Some(shutdown) => {
+                tokio::select! {
+                    _ = shutdown.cancelled() => true,
+                    _ = tokio::time::sleep(backoff) => false,
+                }
+            }
+            None => {
+                tokio::time::sleep(backoff).await;
+                false
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test(start_paused = true)]
+    async fn nedstenging_avbryter_backoff_uten_aa_vente_ut_hele_forsinkelsen() {
+        let shutdown = CancellationToken::new();
+        let supervisor = TaskSupervisor::background("test").with_shutdown(shutdown.clone());
+        let forsok = Arc::new(AtomicU32::new(0));
+
+        let kjoring = {
+            let forsok = forsok.clone();
+            let shutdown = shutdown.clone();
+            tokio::spawn(async move {
+                supervisor
+                    .run(|| {
+                        let forsok = forsok.clone();
+                        let shutdown = shutdown.clone();
+                        async move {
+                            if forsok.fetch_add(1, Ordering::SeqCst) == 0 {
+                                // Første kjøring feiler og utløser backoff.
+                                return Err(anyhow::anyhow!("uventet stopp"));
+                            }
+                            shutdown.cancelled().await;
+                            Ok(())
+                        }
+                    })
+                    .await
+            })
+        };
+
+        // La første kjøring feile og backoffen starte, be så om nedstenging.
+        for _ in 0..100 {
+            if forsok.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            forsok.load(Ordering::SeqCst),
+            1,
+            "backoffen skal ha startet"
+        );
+        shutdown.cancel();
+
+        let start = tokio::time::Instant::now();
+        kjoring
+            .await
+            .expect("supervisor-tasken fullførte")
+            .expect("nedstenging er ikke en feil");
+
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "nedstenging skal ikke vente ut backoffen"
+        );
+        assert_eq!(
+            forsok.load(Ordering::SeqCst),
+            1,
+            "tasken skal ikke restartes etter nedstenging"
+        );
+    }
+
+    #[tokio::test]
+    async fn feil_under_nedstenging_rapporteres_ikke_som_runtime_feil() {
+        let shutdown = CancellationToken::new();
+        shutdown.cancel();
+        let supervisor = TaskSupervisor::background("test").with_shutdown(shutdown);
+
+        let resultat = supervisor
+            .run(|| async { Err(anyhow::anyhow!("subscription avsluttet")) })
+            .await;
+
+        assert!(resultat.is_ok());
     }
 }

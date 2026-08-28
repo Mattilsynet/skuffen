@@ -9,6 +9,8 @@ Subjects and flows:
 - `arkiv.request.sak.hent` (NATS core): read/query request-reply for sak
 - `arkiv.request.journalpost.hent` (NATS core): read/query request-reply for journalpost
 - `arkiv.request.bruker.mt_enheter` (NATS core): live read/query stub returning `Not implemented`
+- `arkiv.admin.read.command.hent` (NATS core): admin read request-reply for one command and its current operasjon rows
+- `arkiv.admin.read.sak.hent` (NATS core): admin read request-reply for one sak with materialised local state
 - `arkiv.command.inbox.<entity>.<command_id>` (JetStream): ingested commands
 - `arkiv.command.ready.<entity>.<command_id>` (JetStream): validated commands ready for execution
 - `arkiv.command.done.<entity>.<command_id>` (JetStream): terminal execution result
@@ -18,6 +20,8 @@ Durability and availability:
 - `arkiv_command_inbox`, `arkiv_command_ready`, `arkiv_command_done`, `arkiv_status` and `arkiv_media` are configured with `num_replicas = 3`.
 - Durable consumers `validator` and `executor` use explicit ack and `num_replicas = 3`.
 - `validation_listener` and `eksekvering_listener` run in restart loops that recreate stream/consumer state after NATS disruptions.
+- `admin_listener` is degradable. It queue-subscribes to the two exact admin subjects with the stable queue groups `skuffen-admin-read-command-hent-v1` and `skuffen-admin-read-sak-hent-v1`, so only one instance answers during deploy overlap. Both subscriptions run under one `TaskSupervisor::background`; a subscription that ends returns `Err` so the supervisor restarts both.
+- Shutdown is cancellation-aware end to end: supervisor backoff waits on the shutdown token, and the root runtime gives tasks eight seconds to finish before aborting the rest. That keeps us inside Cloud Run's ten seconds.
 - `command_listener` and `media_listener` are intake-critical. The command listener has a bounded restart budget; the session-based media server remains critical without an outer restart loop, so a stopped server crashes the process and Cloud Run can replace the instance. During shutdown it stops begin intake and keeps receiver sessions available for a five-second grace period.
 
 Database state:
@@ -66,6 +70,13 @@ OpenTelemetry context using `set_parent_from_nats_headers()` in `telemetry.rs`. 
 the first statement in each `#[instrument]`-annotated message handler, before any nested spans
 or log statements. The `lib-nats` media server owns its protocol handlers and is not included.
 
+`tracing-opentelemetry` builds the OTel span when the span is entered. A handler
+that creates its span with `#[instrument]` and only then calls `set_parent_...`
+is therefore too late: the parent is silently dropped. Handlers that must inherit
+the caller's trace create the span first, call
+`set_parent_on_span_from_nats_headers(&span, headers)`, and instrument the work
+with that span. `admin_listener` (`admin.read`) uses this pattern.
+
 The pattern:
 1. Inbound: `crate::telemetry::set_parent_from_nats_headers(headers)` — extracts
    OTel context from NATS headers and reparents the current span.
@@ -81,6 +92,25 @@ Listeners using this pattern:
 - `validation_listener` (`command.validate`)
 - `eksekvering_listener` (`command.register_execution`)
 - `NatsReplier` (`query.handle`)
+- `admin_listener` (`admin.read`), via `set_parent_on_span_from_nats_headers`
+
+## Admin read attribution logging
+
+Admin read requests carry a mandatory self-declared `utfort_av`. It is
+attribution, not an authenticated audit log, and it is never stored.
+
+One structured `info!` line is written per valid request, after the publish
+result is known:
+- `admin_action`: `read.command.hent` or `read.sak.hent`
+- `utfort_av`: trimmed operator identifier
+- `key_type` and `lookup`: UUID key values may be logged; a raw `ArkivId` is not,
+  so `key_type = "arkiv_id"` is logged without its value
+- `resultat`: `ok` | `not_found` | `error` | `response_too_large`
+
+Request and response payloads, `siste_detalj`, titles, correspondence parties,
+addresses and document metadata are never logged. `utfort_av` is the only
+human-identifying field permitted at `info!`, and the listener rejects blank
+values, control characters and anything over 128 UTF-8 bytes.
 
 ## Span coverage
 

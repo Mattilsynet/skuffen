@@ -15,6 +15,3 @@ uuid = { workspace = true, features = ["v7", "v5", "v4"] }
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 tokio-util = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
-
-[dev-dependencies]
-lib-schemas = { workspace = true, features = ["skuffen"] }
