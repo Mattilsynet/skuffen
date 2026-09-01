@@ -204,8 +204,8 @@ async fn hent_brukernavn_passord_sikri() -> Result<(String, String), SikriFeil> 
     })?;
 
     let (username, password) = tokio::try_join!(
-        get_secret(&project_id, "sikri-api-cloud-username", None),
-        get_secret(&project_id, "sikri-api-cloud-password", None),
+        get_secret(&project_id, "sikri-api-username", None),
+        get_secret(&project_id, "sikri-api-password", None),
     )
     .map_err(|err| {
         let feil = SikriFeil::secret_utilgjengelig();
