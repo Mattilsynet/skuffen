@@ -42,6 +42,7 @@ impl EvaluerOperasjonerService {
         }
     }
 
+    #[tracing::instrument(skip_all, name = "operasjon.evaluer")]
     pub async fn run_evaluation_pass(&self) -> Result<Evalueringsresultat> {
         let blokkerte = self.operasjon.hent_blokkerte(self.grense).await?;
         let mut resultat = Evalueringsresultat::default();
@@ -77,6 +78,18 @@ impl EvaluerOperasjonerService {
                         .await?;
                 }
             }
+        }
+
+        // Passet går på pollefrekvensen. Bare de som endret noe er verdt en
+        // linje; resten ville druknet loggen.
+        if resultat.frigjort > 0 || resultat.allerede_utfort > 0 || resultat.ugyldig > 0 {
+            tracing::info!(
+                vurdert = resultat.vurdert,
+                frigjort = resultat.frigjort,
+                allerede_utfort = resultat.allerede_utfort,
+                ugyldig = resultat.ugyldig,
+                "evalueringspass flyttet blokkerte operasjoner"
+            );
         }
 
         Ok(resultat)

@@ -46,7 +46,21 @@ impl DekomponerCommandService {
         }
     }
 
+    #[tracing::instrument(
+        skip_all,
+        name = "command.dekomponer",
+        fields(
+            command_id = %envelope.command_id,
+            correlation_id = tracing::field::Empty,
+            command_type = command_type(&envelope.payload).as_code(),
+        )
+    )]
     pub async fn handle(&self, envelope: CommandEnvelope<Command>) -> Result<()> {
+        if let Some(correlation_id) = envelope.correlation_id {
+            tracing::Span::current()
+                .record("correlation_id", tracing::field::display(correlation_id));
+        }
+
         let plan = self.bygg_plan(&envelope).await?;
         let resultat = self
             .operasjon
@@ -56,6 +70,12 @@ impl DekomponerCommandService {
 
         // En replay setter inn null rader, så `rows_affected` sier om det var
         // første gang.
+        tracing::info!(
+            nye_operasjoner = resultat.nye_operasjoner,
+            forste_gang = resultat.var_forste_gang(),
+            "kommando dekomponert"
+        );
+
         if resultat.var_forste_gang() {
             self.status_publisher
                 .publiser_command_status(CommandStatus::new(

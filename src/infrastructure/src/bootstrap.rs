@@ -126,6 +126,10 @@ pub async fn vent_paa_nedstengingssignal(
 
     info!(signal = signalnavn, "nedstenging signalisert");
     shutdown.cancel();
+    // Cloud Run river containeren kort tid etter signalet. Uten en eksplisitt
+    // tømming går siste batch med spans tapt — som regel nettopp den som
+    // forklarer hvorfor tjenesten stoppet.
+    crate::telemetry::shutdown_telemetry();
     Ok(())
 }
 

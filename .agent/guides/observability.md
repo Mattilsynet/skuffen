@@ -25,11 +25,10 @@ Durability and availability:
 - `command_listener` and `media_listener` are intake-critical. The command listener has a bounded restart budget; the session-based media server remains critical without an outer restart loop, so a stopped server crashes the process and Cloud Run can replace the instance. During shutdown it stops begin intake and keeps receiver sessions available for a five-second grace period.
 
 Database state:
-- `id_mapping`: client_reference -> skuffen_id (+ optional arkiv_id)
-- `sak_state`: skuffen_id keyed sak state
-- `journalpost_state`: journalpost state (FK -> sak_state)
-- `dokument_state`: dokument state (FK -> journalpost_state)
-- `command_execution`: execution lifecycle state
+- `entitet`: master for `skuffen_id` (client_reference / arkiv_id)
+- `command`: mottaksjournal, holder `correlation_id` og dispatch-milepælene
+- `sak_tilstand`, `journalpost_tilstand`, `dokument_tilstand`: materialiserte fakta
+- `operasjon`, `operasjon_forsok`: eksekveringstilstand og forsøkshistorikk
 
 ## Logging principles
 
@@ -63,36 +62,86 @@ Use error classification consistently across layers:
 - `recoverable`: transient errors (network, 5xx, rate limit)
 - `irrecoverable`: invalid input, missing resources, or rule violations
 
+## Log–trace correlation
+
+`telemetry/cloud_logging.rs` is our own Cloud Logging event formatter. It exists
+because `tracing-stackdriver` pins `opentelemetry 0.22`, which cannot coexist
+with the `0.32` series this workspace uses, so its `with_cloud_trace` support is
+unavailable to us.
+
+Every log line carries:
+- `logging.googleapis.com/trace` — `projects/<project>/traces/<trace_id>`
+- `logging.googleapis.com/spanId` and `logging.googleapis.com/trace_sampled`
+- `severity`, `time`, `message`, `target`, `span`
+- all span fields, flattened into the payload
+
+Flattening is what makes `jsonPayload.command_id = "..."` find everything that
+happened to one command, regardless of which layer emitted it.
+
+The trace fields require `GOOGLE_CLOUD_PROJECT` (or `APP_APPLICATION__PROJECT_ID`).
+Without it the log line still carries the raw trace id, but Cloud Logging cannot
+resolve it to a trace.
+
+Filters are per layer: `RUST_LOG` governs logs, `SKUFFEN_TRACE_FILTER` governs
+spans. Otherwise `RUST_LOG=warn` would silently remove the spans the logs
+correlate against.
+
+## Identity fields
+
+| Field | Scope | Use |
+|---|---|---|
+| `correlation_id` | The client's own key, e.g. a bekymringsmelding | The whole course of events, across commands and across traces |
+| `command_id` | One command | Everything that happened to one request |
+| `operasjon_id` | One operation | One unit of archive work and its attempts |
+
+`correlation_id` is persisted on the `command` row and read back via
+`hent_command_metadata`, so it is available during execution even though the
+message is long gone. UUIDs are always logged as plain strings — never as
+`Some(...)` — so a log search on the value matches.
+
 ## Trace context propagation
 
-Skuffen-owned NATS message handlers extract the incoming `traceparent` header into the
-OpenTelemetry context using `set_parent_from_nats_headers()` in `telemetry.rs`. This must be
-the first statement in each `#[instrument]`-annotated message handler, before any nested spans
-or log statements. The `lib-nats` media server owns its protocol handlers and is not included.
+Trace context travels in NATS headers while a message exists:
 
-`tracing-opentelemetry` builds the OTel span when the span is entered. A handler
-that creates its span with `#[instrument]` and only then calls `set_parent_...`
-is therefore too late: the parent is silently dropped. Handlers that must inherit
-the caller's trace create the span first, call
-`set_parent_on_span_from_nats_headers(&span, headers)`, and instrument the work
-with that span. `admin_listener` (`admin.read`) uses this pattern.
+```
+arkiv.arkiver → arkiv_command_inbox → arkiv_command_ready → dekomponering (ack)
+```
 
-The pattern:
-1. Inbound: `crate::telemetry::set_parent_from_nats_headers(headers)` — extracts
-   OTel context from NATS headers and reparents the current span.
-2. Outbound: `crate::telemetry::current_trace_parent()` — injects the current
-   trace context as a `traceparent` header on published NATS messages.
+After decomposition the message is gone and execution is driven by polling
+Postgres. There is no trace context to continue, so each operation attempt gets
+its own trace, tagged with the identity fields above. This is deliberate: a
+retry may happen a day later, and a trace that spans a day is not a useful
+trace.
 
-This enables end-to-end trace visibility in GCP Trace Explorer: a command
-batch flows through `nats.command_batch` → `command.validate` →
-`command.register_execution` → `sikri.*` as a single connected trace.
+The pattern, inbound:
 
-Listeners using this pattern:
+```rust
+let span = tracing::info_span!("command.validate", ...);
+crate::telemetry::set_parent_on_span_from_nats_headers(&span, message.headers.as_ref());
+self.handle_message(message).instrument(span).await
+```
+
+The order matters. `tracing-opentelemetry` builds the OTel span when the span is
+entered, and `set_parent` after that point returns `AlreadyStarted` and is
+discarded. Calling it from inside an `#[instrument]` body therefore breaks the
+trace silently. `telemetry/mod.rs` has a regression test for both directions.
+
+Outbound: `crate::telemetry::trace_headers()` returns the headers for the
+current span, or `None` when there is no span. Only trace context is
+propagated. Baggage is deliberately excluded: nothing in Skuffen sets or reads
+it, so carrying it would only make the service a relay for caller-controlled
+key-value pairs into our own subjects. The business key is `correlation_id`,
+which also survives ack, restart and a day of retries. `installer_propagator`
+is shared with the tests so they lock the configuration production runs. It reads the context from the
+span, not from `opentelemetry::Context::current()` — `tracing-opentelemetry`
+never attaches to the global context, so that one is always empty.
+
+Handlers using this pattern:
 - `command_listener` (`nats.command_batch`)
-- `validation_listener` (`command.validate`)
-- `eksekvering_listener` (`command.register_execution`)
+- `validation_listener` (`nats.validate`)
+- `dekomponering_listener` (`nats.dekomponer`)
+- `admin_listener` (`admin.read`)
 - `NatsReplier` (`query.handle`)
-- `admin_listener` (`admin.read`), via `set_parent_on_span_from_nats_headers`
 
 ## Admin read attribution logging
 
@@ -112,21 +161,60 @@ addresses and document metadata are never logged. `utfort_av` is the only
 human-identifying field permitted at `info!`, and the listener rejects blank
 values, control characters and anything over 128 UTF-8 bytes.
 
+The `lib-nats` media server owns its own protocol handlers and is not included.
+
 ## Span coverage
 
-Infrastructure spans (all use `#[tracing::instrument]`):
-- NATS listeners: per-message spans with `command_id`, `correlation_id`, `subject`
-- Sikri HTTP client: per-function spans (`sikri.get_sak`, `sikri.create_sak`, etc.)
-  with safe fields only (`saksnr`, `journalpost_id`, `method`, `url`)
-- NATS publishers: per-publish spans with `entity_type`, `subject`
+Infrastructure owns the transport boundary; application owns the unit of work.
 
-Application layer does not use tracing (per repo rule: no I/O or tracing in
-Domain/Application). Application service execution time is visible as the gap
-between the listener span start and the first infrastructure child span.
+| Span | Layer | Boundary |
+|---|---|---|
+| `nats.command_batch`, `nats.validate`, `nats.dekomponer`, `admin.read`, `query.handle` | infrastructure | One inbound message |
+| `command.ingest`, `command.validate`, `command.dekomponer` | application | One command |
+| `operasjon.utfor` | application | One operation attempt |
+| `operasjon.evaluer` | application | One evaluation pass |
+| `sikri.*`, `nats.publish.*`, `sak.hent` | infrastructure | One outbound call |
 
-## Cloud Logging command outcomes
+`tracing` is permitted in application per SKU-0019. `domain` stays free of it —
+`domain/Cargo.toml` has no tracing dependency, which makes that boundary
+compile-enforced.
 
-Cloud Logging list rows use scan-friendly command outcome headlines while retaining structured `event="command_execution_outcome"`. This enables operators to quickly scan command execution results in logs while preserving structured filtering capability.
+`#[instrument]` must always carry `skip_all` and name its fields explicitly
+(SKU-0019 R2). Without it the macro records every argument via `Debug`, and in
+application the arguments are command payloads. `scripts/sjekk-instrument-skip-all.sh`
+enforces this in CI; it handles multi-line attributes and bare `#[instrument]`.
+
+What you then record is governed by the logging policy below, unchanged: no
+external request payloads at `info!`/`error!`, PII from domain and command types
+at `debug!` only.
+
+## Milestone logs
+
+The nominal path is logged at `info!`, so a search on one id yields a readable
+sequence without reading NATS. Each milestone is emitted where the fact is
+known, and only once.
+
+| Event | Emitted by |
+|---|---|
+| `kommandobatch mottatt og videresendt` | `command_listener`, with `command_count` and `command_ids` |
+| `kommando mottatt og dispatchet` / `allerede dispatchet` | `IngestCommandService` |
+| `kommando validert` / `avvist` / `venter på ny levering` | `ValidateCommandService`, with `error_code` and `arsak` |
+| `kommando dekomponert` | `DekomponerCommandService`, with `nye_operasjoner` |
+| `operasjon blokkert` / `allerede utført` / `er ugyldig` | `EksekverOperasjonService`, with `grunn` |
+| `operasjon utført` / `venter, poller igjen` / `feilet terminalt` | `EksekverOperasjonService`, with `attempt_no` and `kode` |
+| `evalueringspass flyttet blokkerte operasjoner` | `EvaluerOperasjonerService`, only when something moved |
+| `executor overtok lederskapet` | `OperasjonWorker`, with the recovery counts |
+| `kommandostatus publisert` / `operasjonstatus publisert` | `NatsStatusPublisher`, mirroring the status stream |
+
+The blocked and polling paths matter most: they write to the database without
+publishing status, so the log is the only place their reason becomes visible.
+
+## Shutdown
+
+The OTLP batch exporter buffers. `vent_paa_nedstengingssignal` calls
+`shutdown_telemetry()` after signalling shutdown, because Cloud Run tears the
+container down shortly after SIGTERM and the last batch is usually the one that
+explains why the service stopped.
 
 ## Render diagnostics
 
@@ -260,8 +348,16 @@ The companion `user_message_for_http_error` function returns a Norwegian human-r
 
 Logging policy: raw Sikri error-body is logged only at `debug!` level (never `error!`/`info!`). The same split applies to transport and parse failures, whose `reqwest::Error` renders the full URL including query parameters; the `error!` line carries `sikri_transport_arsak` instead. Everywhere else the safe code applies, with `sikri_unknown_error` as fallback. Raw bodies must never reach NATS replies, public status events, or `operasjon.siste_detalj`. Raw error bodies may contain sensitive archive details; the previous risk acceptance permitting full 4xx/5xx body logging on `error!`/`info!` is withdrawn.
 
-## NATS server URL redaction
+## URL redaction
 
-`safe_nats_server_label` in `src/infrastructure/src/nats/config.rs` strips credentials (user/password or token in the URL authority) before logging the NATS server address. Only `scheme://host:port` is logged; inline secrets are never emitted to logs or spans.
+`trygg_url_etikett` in `src/infrastructure/src/url_etikett.rs` keeps `scheme://host:port`
+and discards everything else — user, password, token, path and query. Two call sites use it:
+
+- `safe_nats_server_label` (`src/infrastructure/src/nats/config.rs`) for the NATS server address
+- telemetry startup logging for `OTEL_EXPORTER_OTLP_ENDPOINT`
+
+Both URLs come from configuration and may carry credentials in the authority. The
+OTLP exporter's own build error renders the full URL, so it goes to `debug!` only —
+the same split as for Sikri transport errors. Only `scheme://host:port` is logged; inline secrets are never emitted to logs or spans.
 
 Example: `nats://user:secret@nats.example.invalid:4222` → logged as `nats://nats.example.invalid:4222`.

@@ -4,7 +4,6 @@ use crate::nats::client::NatsClient;
 use crate::nats::jetstream_setup::{command_inbox_stream_config, ensure_stream};
 use application::command::ports::command_dispatcher_port::CommandDispatcher;
 use application::command::{Command, CommandEnvelope};
-use async_nats::HeaderMap;
 use async_nats::jetstream::{self, message::PublishMessage};
 use async_trait::async_trait;
 use tracing::Span;
@@ -27,11 +26,12 @@ impl CommandDispatcher for NatsCommandDispatcher {
         name = "nats.publish.inbox",
         fields(
             command_id = %command.command_id,
-            correlation_id = ?command.correlation_id,
+            correlation_id = tracing::field::Empty,
             subject = tracing::field::Empty
         )
     )]
     async fn dispatch(&self, command: &CommandEnvelope<Command>) -> Result<(), anyhow::Error> {
+        crate::telemetry::record_correlation_id(command.correlation_id);
         let wire_envelope = map_application_envelope_to_wire(command)?;
         let subject = command_subject(
             CommandStreamStage::Inbox,
@@ -48,9 +48,7 @@ impl CommandDispatcher for NatsCommandDispatcher {
         )
         .await?;
         let mut message = PublishMessage::build().payload(payload.into());
-        if let Some(trace_parent) = crate::telemetry::current_trace_parent() {
-            let mut headers = HeaderMap::new();
-            headers.insert("traceparent", trace_parent);
+        if let Some(headers) = crate::telemetry::trace_headers() {
             message = message.headers(headers);
         }
         jetstream

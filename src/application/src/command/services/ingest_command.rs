@@ -51,8 +51,21 @@ impl IngestCommandService {
         Ok(command_ids)
     }
 
+    #[tracing::instrument(
+        skip_all,
+        name = "command.ingest",
+        fields(
+            command_id = %envelope.command_id,
+            correlation_id = tracing::field::Empty,
+            command_type = command_type(&envelope.payload).as_code(),
+        )
+    )]
     async fn process_command(&self, envelope: CommandEnvelope<Command>) -> Result<()> {
         let command_id = envelope.command_id;
+        if let Some(correlation_id) = envelope.correlation_id {
+            tracing::Span::current()
+                .record("correlation_id", tracing::field::display(correlation_id));
+        }
 
         let mottak = self
             .command
@@ -61,7 +74,7 @@ impl IngestCommandService {
             .context("failed to record command receipt")?;
 
         if !mottak.maa_dispatches() {
-            // Ekte duplikat.
+            tracing::info!("kommando allerede dispatchet, hopper over");
             return Ok(());
         }
 
@@ -91,6 +104,7 @@ impl IngestCommandService {
             .await
             .context("failed to publish mottatt status")?;
 
+        tracing::info!("kommando mottatt og dispatchet");
         Ok(())
     }
 

@@ -50,7 +50,6 @@ lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", pack
 lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas" }
 lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.6.1.1" }
 opentelemetry = "0.32.0"
-opentelemetry-http = "0.32.0"
 opentelemetry-otlp = "0.32.0"
 opentelemetry_sdk = "0.32.1"
 predicates = "3"
@@ -72,7 +71,6 @@ toml = "1"
 tracing = "0.1.44"
 tracing-log = "0.2.0"
 tracing-opentelemetry = "0.33.0"
-tracing-stackdriver = "0.10.0"
 tracing-subscriber = "0.3.23"
 url = "2.5.8"
 uuid = "1.24.0"

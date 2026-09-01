@@ -6,3 +6,4 @@ pub mod http;
 pub mod nats;
 pub mod query;
 pub mod telemetry;
+mod url_etikett;

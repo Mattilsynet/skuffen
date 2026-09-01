@@ -158,17 +158,49 @@ forbudte patterns fra `scripts/git-hooks/forbidden-patterns.txt` (i repoet).
 
 ## Telemetry / tracing
 
-Skuffen logger requests/responses mot Sikri via `tracing` (`target="sikri.http"`).
+Skuffen skriver Cloud Logging-JSON til stdout og eksporterer spans over OTLP.
+Hver loggpost bærer `logging.googleapis.com/trace`, så en loggpost i Cloud
+Logging kan åpnes direkte i Cloud Trace.
 
-For aa faa spans i GCP Trace maa OTLP-export vaere satt opp i runtime:
+Runtime-oppsett:
 
 ```bash
+# Kreves for at spans skal eksporteres i det hele tatt
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=<otlp-grpc-endpoint>
 # evt fallback:
 OTEL_EXPORTER_OTLP_ENDPOINT=<otlp-grpc-endpoint>
+
+# Kreves for at loggposter skal kunne kobles til tracen
+GOOGLE_CLOUD_PROJECT=<gcp-prosjekt-id>   # eller APP_APPLICATION__PROJECT_ID
+
+# Valgfritt
+RUST_LOG=info               # loggnivå
+SKUFFEN_TRACE_FILTER=info   # spannivå, uavhengig av RUST_LOG
+APP_ENV=<miljø>             # blir deployment.environment.name på spans
 ```
 
-Hvis OTLP-endpoint ikke er satt, logger tjenesten fortsatt structured logs, men spans eksporteres ikke til trace-backend.
+Mangler noe av dette, sier tjenesten fra i oppstartsloggen. Uten OTLP-endpoint
+eksporteres ingen spans; uten prosjekt-ID blir loggene stående uten lenke til
+Trace. Begge deler er synlige, ingen av dem stopper tjenesten.
+
+### Å følge én melding
+
+| Spørsmål | Søk |
+|---|---|
+| Hva skjedde med dette forløpet? | `jsonPayload.correlation_id = "<id>"` |
+| Hva skjedde med denne kommandoen? | `jsonPayload.command_id = "<id>"` |
+| Hva skjedde med dette forsøket? | `jsonPayload.operasjon_id = "<id>"` |
+
+`correlation_id` er klientens egen nøkkel og den bredeste inngangen: den binder
+sammen kommandoer og retries som kan strekke seg over flere døgn, og dermed
+over flere traces. `traceparent` binder bare sammen spans innenfor én trace, og
+følger meldingen i NATS-headere så langt meldingen finnes.
+
+Eksekveringen starter fra et databaseoppslag, ikke fra en melding. Hvert
+operasjonsforsøk får derfor sitt eget spor, merket med `command_id`,
+`correlation_id`, `operasjon_id` og `operasjonstype`.
+
+Sikri-trafikken logges som før via `tracing` (`target="sikri.http"`).
 
 # skuffen
 

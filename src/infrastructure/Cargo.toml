@@ -47,15 +47,13 @@ tracing-subscriber = { workspace = true, features = [
   "registry",
 ] }
 tracing-opentelemetry = { workspace = true }
-opentelemetry = { workspace = true, features = ["trace", "metrics"] }
-opentelemetry_sdk = { workspace = true, features = ["trace", "metrics"] }
+opentelemetry = { workspace = true, features = ["trace"] }
+opentelemetry_sdk = { workspace = true, features = ["trace"] }
 opentelemetry-otlp = { workspace = true, features = [
   "grpc-tonic",
   "trace",
-  "metrics",
+  "tls-webpki-roots",
 ] }
-opentelemetry-http = { workspace = true }
-tracing-stackdriver = { workspace = true }
 tracing-log = { workspace = true }
 
 uuid = { workspace = true, features = ["serde", "v7", "v5", "v4"] }

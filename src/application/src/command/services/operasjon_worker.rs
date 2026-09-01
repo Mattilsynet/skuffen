@@ -85,6 +85,12 @@ impl OperasjonWorker {
         // Startup recovery før noe annet: `kjorer → klar` er trygt å prøve
         // igjen, `sendt → krever_avklaring` har ukjent utfall (SKU-0016 R5).
         let gjenoppretting = self.operasjon.gjenopprett_etter_restart().await?;
+        tracing::info!(
+            executor_id = %self.executor_id,
+            gjenopptatt = gjenoppretting.gjenopptatt,
+            krever_avklaring = gjenoppretting.krever_avklaring,
+            "executor overtok lederskapet"
+        );
         if gjenoppretting.krever_avklaring > 0 {
             self.varsle_krever_avklaring().await?;
         }

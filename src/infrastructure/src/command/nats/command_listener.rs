@@ -10,7 +10,7 @@ use lib_schemas::skuffen::command::commands::{
 };
 use lib_schemas::skuffen::dokument::{Dokument, Dokumentform, Felt};
 use std::collections::HashSet;
-use tracing::{Span, error, info};
+use tracing::{Instrument, Span, error, info};
 
 pub struct CommandListener {
     client: NatsClient,
@@ -57,18 +57,23 @@ impl CommandListener {
         ))
     }
 
-    #[tracing::instrument(
-        skip_all,
-        name = "nats.command_batch",
-        fields(
+    /// Spanet lages her og får parent før det aktiveres. Settes parent fra
+    /// innsiden av en `#[instrument]`-kropp, er OTel-spanet allerede bygget og
+    /// avsenderens trace blir stille forkastet.
+    async fn process_message(&self, msg: Message) {
+        let span = tracing::info_span!(
+            "nats.command_batch",
             subject = %msg.subject,
             reply_subject = ?msg.reply,
             command_count = tracing::field::Empty,
-        )
-    )]
-    async fn process_message(&self, msg: Message) {
-        crate::telemetry::set_parent_from_nats_headers(msg.headers.as_ref());
-        info!("Received command batch");
+            command_ids = tracing::field::Empty,
+        );
+        crate::telemetry::set_parent_on_span_from_nats_headers(&span, msg.headers.as_ref());
+        self.handle_message(msg).instrument(span).await
+    }
+
+    async fn handle_message(&self, msg: Message) {
+        info!("mottok kommandobatch");
 
         let reply_subject = match msg.reply.clone() {
             Some(r) => r,
@@ -135,6 +140,10 @@ impl CommandListener {
 
         match self.ingest_sequence(sequence).await {
             Ok(command_ids) => {
+                // Batchen er inngangen til alt som skjer videre. Uten id-ene
+                // her finnes det ikke noe å slå opp løpet på.
+                Span::current().record("command_ids", tracing::field::debug(&command_ids));
+                info!(command_count, "kommandobatch mottatt og videresendt");
                 let response = ArkiveringKvittering::Ok { command_ids };
                 let payload = serde_json::to_vec(&response).unwrap_or_default();
                 let _ = self
@@ -144,7 +153,7 @@ impl CommandListener {
                     .await;
             }
             Err(e) => {
-                error!("Failed to process commands: {e}");
+                error!(command_count, error = %e, "kunne ikke ta imot kommandobatch");
                 let response = ArkiveringKvittering::Error {
                     message: "internal error".to_string(),
                 };
@@ -158,7 +167,6 @@ impl CommandListener {
         }
     }
 
-    #[tracing::instrument(skip_all, name = "command.ingest")]
     async fn ingest_sequence(&self, sequence: CommandSequence) -> anyhow::Result<Vec<uuid::Uuid>> {
         let commands: Vec<_> = sequence.into_iter().map(map_wire_envelope).collect();
         self.service.handle(commands).await

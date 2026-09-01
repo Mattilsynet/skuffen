@@ -4,11 +4,11 @@ use crate::command::status_event::{
 use crate::nats::client::NatsClient;
 use crate::nats::jetstream_setup::{ensure_stream, status_stream_config};
 use application::command::ports::status_publisher_port::StatusPublisher;
-use async_nats::HeaderMap;
+
 use async_nats::jetstream::{self, message::PublishMessage};
 use async_trait::async_trait;
 use domain::eksekvering::typer::{CommandStatus, Operasjonstatus};
-use tracing::Span;
+use tracing::{Span, info};
 
 /// Én statusstrøm. Strømmen **er** loggen — en klient som vil ha historikken
 /// lager en consumer med `DeliverPolicy::All`.
@@ -37,9 +37,7 @@ impl NatsStatusPublisher {
         .await?;
 
         let mut message = PublishMessage::build().payload(payload.into());
-        if let Some(trace_parent) = crate::telemetry::current_trace_parent() {
-            let mut headers = HeaderMap::new();
-            headers.insert("traceparent", trace_parent);
+        if let Some(headers) = crate::telemetry::trace_headers() {
             message = message.headers(headers);
         }
 
@@ -58,15 +56,24 @@ impl StatusPublisher for NatsStatusPublisher {
         name = "nats.publish.command_status",
         fields(
             command_id = %status.command_id,
-            correlation_id = ?status.correlation_id,
+            correlation_id = tracing::field::Empty,
             hendelse = status.hendelse.as_code(),
             terminal = status.terminal,
             subject = tracing::field::Empty
         )
     )]
     async fn publiser_command_status(&self, status: CommandStatus) -> Result<(), anyhow::Error> {
+        crate::telemetry::record_correlation_id(status.correlation_id);
         let subject = command_subject(status.command_id);
         let payload = serde_json::to_vec(&to_public_command_status(&status))?;
+        // Statusstrømmen er kommandoens ytre fortelling. Den samme milepælen
+        // logges, slik at et loggsøk på correlation_id gir hele forløpet uten
+        // at man må lese NATS.
+        info!(
+            hendelse = status.hendelse.as_code(),
+            error_code = status.error_code.map(|kode| kode.as_code()),
+            "kommandostatus publisert"
+        );
         // Dedupliseringsnøkkelen er id-er vi allerede har i databasen.
         self.publiser(subject, payload, status.message_id()).await
     }
@@ -76,6 +83,7 @@ impl StatusPublisher for NatsStatusPublisher {
         name = "nats.publish.operasjonstatus",
         fields(
             command_id = %status.command_id,
+            correlation_id = tracing::field::Empty,
             operasjon_id = %status.operasjon_id.0,
             operasjonstype = status.operasjonstype.as_code(),
             hendelse = status.hendelse.as_code(),
@@ -84,8 +92,14 @@ impl StatusPublisher for NatsStatusPublisher {
         )
     )]
     async fn publiser_operasjonstatus(&self, status: Operasjonstatus) -> Result<(), anyhow::Error> {
+        crate::telemetry::record_correlation_id(status.correlation_id);
         let subject = operasjon_subject(status.command_id, status.operasjon_id.0);
         let payload = serde_json::to_vec(&to_public_operasjonstatus(&status))?;
+        info!(
+            error_code = status.error_code.map(|kode| kode.as_code()),
+            terminal = status.terminal,
+            "operasjonstatus publisert"
+        );
         self.publiser(subject, payload, status.message_id()).await
     }
 }

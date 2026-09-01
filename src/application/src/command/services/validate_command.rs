@@ -74,7 +74,20 @@ impl ValidateCommandService {
         }
     }
 
+    #[tracing::instrument(
+        skip_all,
+        name = "command.validate",
+        fields(
+            command_id = %envelope.command_id,
+            correlation_id = tracing::field::Empty,
+        )
+    )]
     pub async fn handle(&self, envelope: CommandEnvelope<Command>) -> Result<ValidationOutcome> {
+        if let Some(correlation_id) = envelope.correlation_id {
+            tracing::Span::current()
+                .record("correlation_id", tracing::field::display(correlation_id));
+        }
+
         let outcome = match envelope.payload.clone() {
             Command::OpprettSak(c) => match validate_sakstittel_markup(&c) {
                 ValidationOutcome::Ok => ValidationOutcome::Ok,
@@ -105,6 +118,7 @@ impl ValidateCommandService {
                     None,
                 )
                 .await?;
+                tracing::info!("kommando validert");
                 Ok(ValidationOutcome::Ok)
             }
             ValidationOutcome::Irrecoverable {
@@ -114,6 +128,11 @@ impl ValidateCommandService {
                 // Klienten får den faktiske grunnen, ikke «Forespørselen ble
                 // avvist.». Meldingene er allerede sanitiserte: de sier hva
                 // som er galt uten å gjenta innholdet som var galt.
+                tracing::warn!(
+                    error_code = error_code.as_code(),
+                    arsak = %message,
+                    "kommando avvist"
+                );
                 self.emit(&envelope, CommandEvent::Avvist, &message, Some(error_code))
                     .await?;
                 Ok(ValidationOutcome::Irrecoverable {
@@ -122,8 +141,27 @@ impl ValidateCommandService {
                 })
             }
             // Blokkert og recoverable er transiente: kommandoen redeliveres av
-            // NATS. Vi publiserer ikke flakking, bare utfall (D33).
-            other => Ok(other),
+            // NATS. Vi publiserer ikke flakking, bare utfall (D33) — men
+            // loggen må vise hvorfor, ellers er ventingen uforklart.
+            other => {
+                if let ValidationOutcome::Blocked {
+                    message,
+                    error_code,
+                    ..
+                }
+                | ValidationOutcome::Recoverable {
+                    message,
+                    error_code,
+                } = &other
+                {
+                    tracing::info!(
+                        error_code = error_code.as_code(),
+                        arsak = %message,
+                        "kommando venter på ny levering"
+                    );
+                }
+                Ok(other)
+            }
         }
     }
 

@@ -1,7 +1,7 @@
 use async_nats::jetstream::{self, AckKind};
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use tracing::{Span, error, warn};
+use tracing::{Instrument, Span, error};
 
 use crate::command::wire_mapper::map_wire_envelope;
 use crate::nats::client::NatsClient;
@@ -10,7 +10,7 @@ use crate::nats::jetstream_setup::{
     validator_consumer_config,
 };
 use crate::nats::supervisor::TaskSupervisor;
-use application::command::services::validate_command::{ValidateCommandService, ValidationOutcome};
+use application::command::services::validate_command::ValidateCommandService;
 
 pub struct CommandValidationListener {
     client: NatsClient,
@@ -47,17 +47,20 @@ impl CommandValidationListener {
         ))
     }
 
-    #[tracing::instrument(
-        skip_all,
-        name = "command.validate",
-        fields(
+    /// Spanet får parent før det aktiveres, slik at valideringen havner i
+    /// samme trace som mottaket.
+    async fn process_message(&self, message: jetstream::Message) -> anyhow::Result<()> {
+        let span = tracing::info_span!(
+            "nats.validate",
             command_id = tracing::field::Empty,
             correlation_id = tracing::field::Empty,
-        )
-    )]
-    async fn process_message(&self, message: jetstream::Message) -> anyhow::Result<()> {
+        );
+        crate::telemetry::set_parent_on_span_from_nats_headers(&span, message.headers.as_ref());
+        self.handle_message(message).instrument(span).await
+    }
+
+    async fn handle_message(&self, message: jetstream::Message) -> anyhow::Result<()> {
         let (payload, acker) = message.split();
-        crate::telemetry::set_parent_from_nats_headers(payload.headers.as_ref());
 
         let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&payload.payload) {
             Ok(cmd) => cmd,
@@ -65,7 +68,7 @@ impl CommandValidationListener {
                 error!(
                     error_type = "deserialization",
                     payload_size = payload.payload.len(),
-                    "Failed to deserialize command: {err}"
+                    "kunne ikke deserialisere kommando: {err}"
                 );
                 ack_terminal(&acker).await?;
                 return Ok(());
@@ -73,47 +76,25 @@ impl CommandValidationListener {
         };
 
         Span::current().record("command_id", tracing::field::display(envelope.command_id));
-        Span::current().record(
-            "correlation_id",
-            tracing::field::debug(envelope.correlation_id),
-        );
+        crate::telemetry::record_correlation_id(envelope.correlation_id);
 
         let application_envelope = map_wire_envelope(envelope);
 
         let outcome = match self.service.handle(application_envelope).await {
             Ok(outcome) => outcome,
             Err(err) => {
-                error!("Validator failed: {err}");
+                error!(error = %err, "validering feilet, ber om ny levering");
                 nak_retryable(&acker).await?;
                 return Ok(());
             }
         };
 
-        match outcome {
-            ValidationOutcome::Ok => {
-                ack_terminal(&acker).await?;
-            }
-            ValidationOutcome::Recoverable {
-                message: reason, ..
-            } => {
-                warn!("Command recoverable, requesting redelivery: {reason}");
-                nak_retryable(&acker).await?;
-            }
-            ValidationOutcome::Blocked {
-                message: reason, ..
-            } => {
-                warn!("Command blocked, requesting redelivery: {reason}");
-                nak_retryable(&acker).await?;
-            }
-            ValidationOutcome::Irrecoverable {
-                message: reason, ..
-            } => {
-                error!(
-                    error_category = "irrecoverable",
-                    "Command irrecoverable: {reason}"
-                );
-                ack_terminal(&acker).await?;
-            }
+        // Utfallet og årsaken logges av valideringstjenesten. Her avgjøres
+        // bare om meldingen skal leveres på nytt.
+        if outcome.is_retryable() {
+            nak_retryable(&acker).await?;
+        } else {
+            ack_terminal(&acker).await?;
         }
 
         Ok(())

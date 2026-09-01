@@ -1,7 +1,7 @@
 use async_nats::jetstream::{self, AckKind};
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use tracing::{Span, error, warn};
+use tracing::{Instrument, Span, error, warn};
 
 use crate::command::wire_mapper::map_wire_envelope;
 use crate::nats::client::NatsClient;
@@ -49,24 +49,27 @@ impl DekomponeringListener {
         ))
     }
 
-    #[tracing::instrument(
-        skip_all,
-        name = "command.dekomponer",
-        fields(
+    /// Spanet får parent før det aktiveres. Dette er siste steg som har
+    /// meldingen i hånden — etter ack er trace-konteksten borte, og videre
+    /// oppfølging skjer på `command_id` og `correlation_id`.
+    async fn process_message(&self, message: jetstream::Message) -> anyhow::Result<()> {
+        let span = tracing::info_span!(
+            "nats.dekomponer",
             command_id = tracing::field::Empty,
             correlation_id = tracing::field::Empty,
-        )
-    )]
-    async fn process_message(&self, message: jetstream::Message) -> anyhow::Result<()> {
-        crate::telemetry::set_parent_from_nats_headers(message.headers.as_ref());
+        );
+        crate::telemetry::set_parent_on_span_from_nats_headers(&span, message.headers.as_ref());
+        self.handle_message(message).instrument(span).await
+    }
 
+    async fn handle_message(&self, message: jetstream::Message) -> anyhow::Result<()> {
         let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&message.payload) {
             Ok(cmd) => cmd,
             Err(err) => {
                 error!(
                     error_type = "deserialization",
                     payload_size = message.payload.len(),
-                    "Failed to deserialize command: {err}"
+                    "kunne ikke deserialisere kommando: {err}"
                 );
                 message.ack().await.map_err(|ack_err| {
                     anyhow::anyhow!("ack failed after deserialize error: {ack_err}")
@@ -76,10 +79,7 @@ impl DekomponeringListener {
         };
 
         Span::current().record("command_id", tracing::field::display(envelope.command_id));
-        Span::current().record(
-            "correlation_id",
-            tracing::field::debug(envelope.correlation_id),
-        );
+        crate::telemetry::record_correlation_id(envelope.correlation_id);
 
         let application_envelope = map_wire_envelope(envelope);
 
@@ -91,7 +91,7 @@ impl DekomponeringListener {
                     .map_err(|err| anyhow::anyhow!("ack failed: {err}"))?;
             }
             Err(err) => {
-                warn!("Kunne ikke dekomponere kommandoen: {err:#}");
+                warn!(error = %format!("{err:#}"), "kunne ikke dekomponere kommandoen");
                 message
                     .ack_with(AckKind::Nak(Some(std::time::Duration::from_secs(30))))
                     .await

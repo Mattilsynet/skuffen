@@ -73,18 +73,7 @@ fn is_local_env() -> bool {
 }
 
 pub(crate) fn safe_nats_server_label(server_url: &str) -> String {
-    let (scheme, rest) = server_url.split_once("://").unwrap_or(("nats", server_url));
-    let authority = rest.split('/').next().unwrap_or(rest);
-    let host_port = authority
-        .rsplit_once('@')
-        .map(|(_, value)| value)
-        .unwrap_or(authority);
-
-    if host_port.is_empty() {
-        return format!("{scheme}://<unknown>");
-    }
-
-    format!("{scheme}://{host_port}")
+    crate::url_etikett::trygg_url_etikett(server_url, "nats")
 }
 
 #[cfg(test)]

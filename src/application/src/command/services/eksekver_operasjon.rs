@@ -86,7 +86,34 @@ impl EksekverOperasjonService {
         Ok(true)
     }
 
+    /// Eksekveringen starter fra et databaseoppslag, ikke fra en melding, så
+    /// det finnes ingen innkommende trace å henge seg på. Forsøket får sin
+    /// egen, merket med id-ene som knytter den til forespørselen.
+    #[tracing::instrument(
+        skip_all,
+        name = "operasjon.utfor",
+        fields(
+            command_id = tracing::field::Empty,
+            correlation_id = tracing::field::Empty,
+            operasjon_id = %op.operasjon_id.0,
+            operasjonstype = op.operasjonstype.as_code(),
+            attempt_no = tracing::field::Empty,
+        )
+    )]
     pub async fn execute(&self, op: Operasjon) -> Result<()> {
+        // Kun til spanet. Publiseringen leser sin egen kopi etterpå, fordi
+        // kontekst endrer seg mens operasjonen kjører.
+        let command = self
+            .operasjon
+            .hent_command_metadata(op.operasjon_id)
+            .await?;
+
+        let span = tracing::Span::current();
+        span.record("command_id", tracing::field::display(command.command_id));
+        if let Some(correlation_id) = command.correlation_id {
+            span.record("correlation_id", tracing::field::display(correlation_id));
+        }
+
         let facts = self
             .fakta
             .hent_sak_med_barn(op.sak_id)
@@ -96,12 +123,15 @@ impl EksekverOperasjonService {
         match self.beslutt(&op, &facts).await? {
             Beslutning::Blokkert(grunn) => {
                 // Blokkeringsårsak er spørrbar tilstand (D33), så vi
-                // publiserer ikke ved `blokkert ↔ klar`-flakking.
+                // publiserer ikke ved `blokkert ↔ klar`-flakking. Loggen er
+                // det eneste stedet årsaken blir synlig i øyeblikket.
+                tracing::info!(grunn = grunn.safe_detail(), "operasjon blokkert");
                 self.operasjon
                     .marker_blokkert(op.operasjon_id, None, &grunn.safe_detail())
                     .await?;
             }
             Beslutning::AlleredeUtfort => {
+                tracing::info!("operasjon allerede utført");
                 self.operasjon
                     .fullfor_ok(op.operasjon_id, 0, Faktaoppdatering::Ingen)
                     .await?;
@@ -109,6 +139,7 @@ impl EksekverOperasjonService {
                     .await?;
             }
             Beslutning::Ugyldig(brudd) => {
+                tracing::warn!(brudd = brudd.safe_detail(), "operasjon er ugyldig");
                 self.operasjon
                     .marker_feilet(op.operasjon_id, 0, &brudd.safe_detail())
                     .await?;
@@ -143,6 +174,7 @@ impl EksekverOperasjonService {
             .operasjon
             .marker_kjorer(op.operasjon_id, &self.executor_id)
             .await?;
+        tracing::Span::current().record("attempt_no", attempt_no);
 
         // At-most-once-grensen. Idempotente operasjoner hopper over den og kan
         // retryes fritt i stedet for å havne i `krever_avklaring`.
@@ -158,12 +190,16 @@ impl EksekverOperasjonService {
                     .fullfor_ok(op.operasjon_id, attempt_no, oppdatering)
                     .await
                     .context("failed to commit successful operation")?;
+                tracing::info!(attempt_no, "operasjon utført");
                 self.publiser(op, Operasjonshendelse::Ok, attempt_no, "Utført.", None)
                     .await?;
             }
             Ok(Utfall::PollIgjen { oppdatering, om }) => {
                 let neste = chrono::Utc::now()
                     + chrono::Duration::from_std(om).unwrap_or(chrono::Duration::hours(1));
+                // Poller mot RPA og kan vente i timer. Uten denne er ventingen
+                // usynlig i loggen.
+                tracing::info!(attempt_no, neste_forsok_at = %neste, "operasjon venter, poller igjen");
                 self.operasjon
                     .fullfor_poll(op.operasjon_id, attempt_no, oppdatering, neste)
                     .await?;
@@ -173,6 +209,13 @@ impl EksekverOperasjonService {
                 // (SKU-0016 R6). Ingen maks antall forsøk.
                 let neste = crate::command::services::eksekvering_backoff::neste_backoff(
                     attempt_no.max(1) as u32 - 1,
+                );
+                tracing::warn!(
+                    attempt_no,
+                    kode = feil.kode,
+                    error_code = feil.error_code.as_code(),
+                    neste_forsok_at = %neste,
+                    "operasjonsforsøk feilet, nytt forsøk kommer"
                 );
                 self.operasjon
                     .marker_retry(op.operasjon_id, attempt_no, &feil.siste_detalj(), neste)
@@ -187,6 +230,12 @@ impl EksekverOperasjonService {
                 .await?;
             }
             Err(feil) => {
+                tracing::error!(
+                    attempt_no,
+                    kode = feil.kode,
+                    error_code = feil.error_code.as_code(),
+                    "operasjon feilet terminalt"
+                );
                 self.operasjon
                     .marker_feilet(op.operasjon_id, attempt_no, &feil.siste_detalj())
                     .await?;
@@ -507,6 +556,10 @@ impl EksekverOperasjonService {
         krev_journalpost_arkiv_id(journalpost.arkiv_id.as_deref())
     }
 
+    /// Metadata leses her, ikke gjenbrukes fra før kjøringen. Kontekst er et
+    /// øyeblikksbilde av fakta: `saksnummer` finnes ikke før operasjonen som
+    /// opprettet saken har committet, så et eldre oppslag ville sendt en tom
+    /// kontekst til klienten.
     async fn publiser(
         &self,
         op: &Operasjon,
@@ -544,6 +597,7 @@ impl EksekverOperasjonService {
     /// Foldet er monotont — når én operasjon har feilet terminalt kan
     /// resultatet aldri gå tilbake til ok — så eventet er sant i det øyeblikket
     /// det sendes og kan aldri trekkes tilbake.
+    ///
     async fn publiser_command_outcome(&self, command: &CommandMetadata) -> Result<()> {
         let utfall = self
             .operasjon
