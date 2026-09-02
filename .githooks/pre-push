@@ -1,19 +1,97 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Deterministic checks over the commits actually being published. Judgement
+# belongs to the review the agent orchestrates before the commit (ADR-0013).
+set -uo pipefail
 
 REPO=$(git rev-parse --show-toplevel)
+ZERO=0000000000000000000000000000000000000000
+RC=0
+
+say() { printf 'pre-push: %s\n' "$*" >&2; }
+
+# Git feeds the hook one line per ref being pushed:
+#   <local ref> <local sha> <remote ref> <remote sha>
+# Scanning only what is being published keeps the gate actionable. A finding
+# already on the remote cannot be fixed by refusing this push, and a gate that
+# cannot be satisfied is a gate that gets bypassed.
+RANGES=()
+SAW_REFS=0
+if [ ! -t 0 ]; then
+  while read -r _local_ref local_sha _remote_ref remote_sha; do
+    SAW_REFS=1
+    [ "$local_sha" = "$ZERO" ] && continue
+    if [ "$remote_sha" != "$ZERO" ] &&
+      git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+      RANGES+=("${remote_sha}..${local_sha}")
+    else
+      # A new ref, or a base this clone does not have: take everything that is
+      # not yet on any remote.
+      RANGES+=("${local_sha} --not --remotes")
+    fi
+  done
+fi
+
+if [ "${#RANGES[@]}" -eq 0 ]; then
+  if [ "$SAW_REFS" = 1 ]; then
+    say "only ref deletions — nothing to scan"
+    exit 0
+  fi
+  if ! git rev-parse --verify --quiet HEAD >/dev/null; then
+    say "no commits"
+    exit 0
+  fi
+  say "invoked without ref information — scanning commits not yet on a remote"
+  RANGES=("HEAD --not --remotes")
+fi
+
+published_paths() {
+  local range
+  for range in "${RANGES[@]}"; do
+    # Deliberately unquoted: a range may carry its own git log arguments.
+    # shellcheck disable=SC2086
+    git log --name-only --pretty=format: $range 2>/dev/null
+  done
+}
 
 if command -v gitleaks >/dev/null 2>&1; then
-  gitleaks git "$REPO" --redact
+  for range in "${RANGES[@]}"; do
+    gitleaks git "$REPO" --redact --log-opts="$range" || RC=1
+  done
 else
-  echo "pre-push: gitleaks unavailable" >&2
+  say "gitleaks unavailable"
 fi
 
 if [ -f "$REPO/Cargo.toml" ]; then
-  cargo fmt --check
-  if cargo audit --version >/dev/null 2>&1; then
-    cargo audit
+  if ! command -v cargo >/dev/null 2>&1; then
+    say "cargo unavailable"
+  elif ! published_paths |
+    grep -qE '\.rs$|(^|/)(Cargo\.(toml|lock)|rustfmt\.toml|clippy\.toml|deny\.toml|rust-toolchain(\.toml)?)$'; then
+    say "no Rust changes in the push range — skipping cargo checks"
   else
-    echo "pre-push: cargo-audit unavailable" >&2
+    git diff --quiet && git diff --cached --quiet ||
+      say "working tree not clean — cargo reads it, not the commits being pushed"
+
+    cargo fmt --check || RC=1
+    cargo check --all-targets --quiet || RC=1
+
+    # cargo-deny and cargo-audit read the same RustSec database through
+    # different policy files — deny.toml and .cargo/audit.toml — so each
+    # suppresses a different set. cargo-deny alone sees a yanked crate in the
+    # lockfile and a dependency from an unsanctioned source.
+    if [ -f "$REPO/deny.toml" ]; then
+      if cargo deny --version >/dev/null 2>&1; then
+        cargo deny check advisories sources || RC=1
+      else
+        say "deny.toml present but cargo-deny unavailable"
+      fi
+    fi
+
+    if cargo audit --version >/dev/null 2>&1; then
+      cargo audit || RC=1
+    else
+      say "cargo-audit unavailable"
+    fi
   fi
 fi
+
+exit "$RC"

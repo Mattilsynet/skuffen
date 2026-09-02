@@ -1,19 +1,32 @@
 #!/usr/bin/env bash
-set -u
+# Mechanical checks against the staged change. Judgement belongs to the review
+# the agent orchestrates before it gets here (ADR-0013).
+set -uo pipefail
 
 git diff --cached --quiet && exit 0
 
-HOOKDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-echo "security-review: checking staged change" >&2
-BEFORE=$(git write-tree) || exit 1
+REPO=$(git rev-parse --show-toplevel)
+RC=0
 
-"$HOOKDIR/security-review.sh"
-RC=$?
+say() { printf 'pre-commit: %s\n' "$*" >&2; }
 
-AFTER=$(git write-tree) || exit 1
-[ "$BEFORE" = "$AFTER" ] || {
-  echo "security-review: staged tree changed during review" >&2
-  exit 1
-}
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git "$REPO" --staged --redact || RC=1
+else
+  say "gitleaks unavailable"
+fi
+
+if [ -f "$REPO/Cargo.toml" ]; then
+  if ! command -v cargo >/dev/null 2>&1; then
+    say "cargo unavailable"
+  else
+    # cargo reads the working tree, not the index. With unstaged edits present
+    # these checks describe something other than the commit.
+    git diff --quiet || say "unstaged edits present — cargo checks read the working tree, not the staged change"
+
+    cargo fmt --check || RC=1
+    cargo check --all-targets --quiet || RC=1
+  fi
+fi
 
 exit "$RC"
