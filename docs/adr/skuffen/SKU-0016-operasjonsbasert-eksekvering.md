@@ -1,7 +1,7 @@
 # SKU-0016. Operasjonsbasert eksekvering
 
 Date: 2026-08-18
-Last-reviewed: 2026-08-18
+Last-reviewed: 2026-09-02
 Tier: A
 Status: Accepted
 Crates: skuffen, domain, application, infrastructure, sikri_client, skuffen-integration-tests
@@ -71,5 +71,9 @@ transaksjon. Executor leser aldri command payload og rører aldri wire-typer.
 Operasjonsstatus blir spørrbar og adresserbar utad. At-most-once koster en ekstra
 commit per arkivskriv og innfører `krever_avklaring` som en tilstand drift må
 rydde manuelt. Kommandostatus finnes ikke som kolonne — den er et fold over
-`operasjon`. `command_execution`, `id_mapping` og `tilstand_historikk` utgår, og
-hendelsesdrevet wake-up erstattes av et periodisk evalueringspass.
+`operasjon`. `command_execution`, `id_mapping` og `tilstand_historikk` utgår.
+
+Hendelsesdrevet wake-up ble opprinnelig erstattet av et periodisk evalueringspass.
+Passet viste seg å være et andre beslutningssted som skrev terminale utfall uten å
+publisere dem, og SKU-0020 fjerner det til fordel for én forfallsklokke og ett
+beslutningssted. R1–R12 står uendret.

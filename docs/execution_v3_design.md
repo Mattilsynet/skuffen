@@ -5,6 +5,25 @@ eksekveringssystemet, og er nå den gjeldende beskrivelsen. Det erstatter
 `docs/execution_v2_design.md` og `docs/command_executor.md`, som er slettet.
 Normativ ADR: [SKU-0016](adr/skuffen/SKU-0016-operasjonsbasert-eksekvering.md).
 
+## Endret etter implementasjon (SKU-0020)
+
+Evalueringspasset som dette dokumentet beskriver, er fjernet. Det viste seg å være
+et andre beslutningssted: `EvaluerOperasjonerService` kalte samme `vurder` som
+executoren og skrev samme tilstand, men publiserte ingen status. Operasjoner fødes
+`blokkert`, så hver operasjon passerte passet først — og ble første beslutning
+`AlleredeUtfort` eller `Ugyldig`, gikk operasjonen terminal uten event.
+
+Erstatningen er én forfallsklokke. `neste_forsok_at` er `NOT NULL DEFAULT now()`,
+og `hent_neste_kjorbare` plukker `klar`, `retry_venter` og `blokkert` som har
+forfalt. `EksekverOperasjonService::execute` håndterte allerede alle fire
+beslutningene, så den er nå eneste beslutningssted. Når en operasjon fullfører,
+settes blokkerte søsken på samme sak forfalt — et latenshint oppå timeren, ikke
+en erstatning for den.
+
+Alt under som beskriver «evalueringspasset» skal leses som «executoren når den
+plukker en forfalt blokkert operasjon». Se
+[SKU-0020](adr/skuffen/SKU-0020-ett-beslutningssted-for-operasjonsutfall.md).
+
 Avvik fra planen, besluttet under implementasjonen:
 
 - **`muterer_arkivet(RenderDokument) = false`.** D7 sa `AvventJournalført` var eneste `false`, men
@@ -419,8 +438,8 @@ Beholder navn og tilstandsmaskiner. Endres slik:
 - Kommandostatus finnes **ikke** som kolonne — den er et fold over `operasjon` (D14). Riktig
   normalisering, men en `GROUP BY command_id` per publisert event. Kan materialiseres senere hvis
   det viser seg å koste; ikke gjør det nå.
-- `blokkert_av` skrives av evalueringspasset og er alltid ferskt. Derivert debughjelp, aldri
-  autoritativ.
+- `blokkert_av` skrives når en operasjon vurderes blokkert og er alltid ferskt. Derivert
+  debughjelp, aldri autoritativ.
 - Hele dekomponeringen — entitet, state og alle operasjonsrader — skjer i **én transaksjon**. I dag
   er dette 7+ uavhengige autocommit-statements, og en delvis skriving er permanent PK-violation ved
   redelivery.
@@ -478,7 +497,8 @@ Blank slate. Ingenting av dette skal overleve i omskrevet form «for sikkerhets 
 - `services/registrer_i_eksekveringssystem.rs`, `services/execution_registration.rs`
 - `services/command_state_decision.rs`, `services/eksekvering_worker.rs`
 - `services/reevaluer_ventende_kommandoer.rs` + `ports/ventende_kommando_wakeup_port.rs` —
-  hendelsesdrevet wake-up erstattes av et periodisk evalueringspass over `blokkert`-operasjoner
+  hendelsesdrevet wake-up erstattes av at executoren plukker forfalte `blokkert`-operasjoner
+  (SKU-0020)
 - `ports/command_execution_port.rs`
 - `EksekveringKvitteringPublisher`
 - Dobbeltimplementasjonen `CommandStatusPublisher` / `EksekveringStatusPublisher` — kollapses til én

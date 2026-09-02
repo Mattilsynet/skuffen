@@ -351,6 +351,12 @@ Strømmen **er** loggen; en klient som vil ha historikken lager en consumer med 
 `terminal: true` betyr at **utfallet er avgjort**, ikke at flere meldinger er utelukket.
 Operasjonsmeldinger kan fortsette etterpå, fordi søskenoperasjoner kjører videre best effort.
 
+Meldingene dedupliseres i dag på `Nats-Msg-Id` innenfor JetStreams `duplicate_window`
+(serverdefault to minutter). Behandle likevel strømmen som **at-least-once** — vinduet er
+kort, og dedupliseringen fjernes (SKU-0020 R5). Det
+gjelder særlig `Feilet` på `.command`: den publiseres hver gang en operasjon feiler
+terminalt, så feiler to vedlegg på samme journalpost kommer den to ganger.
+
 Alle JetStream-streams og `arkiv_media` object store konfigureres med `num_replicas = 3`.
 
 Interne JetStreams (med `commandId` i subject for enklere debugging, retention 180 dager):
@@ -381,6 +387,8 @@ arkivkall, med egen id, egen status, egen retry og egen statuslinje utad.
   dekomponert til operasjonsrader — alt i én transaksjon, så en replay setter inn null rader.
 - Eksekvering styres av en intern worker som plukker operasjoner i `klar`, eller `retry_venter` med
   forfalt frist. Ett periodisk evalueringspass frigjør `blokkert`-operasjoner når fakta tilsier det.
+  *Planlagt: passet erstattes av én forfallsklokke der også `blokkert` plukkes når fristen er ute
+  (SKU-0020).*
 - Skriveoperasjoner commiter `klar → sendt` **før** arkivkallet, og `sendt → ok` med arkivsvar og
   faktaoppdatering i én transaksjon etterpå. En operasjon funnet i `sendt` ved oppstart har ukjent
   utfall og går til `krever_avklaring` for manuell opprydding.
@@ -396,9 +404,12 @@ arkivkall, med egen id, egen status, egen retry og egen statuslinje utad.
 
 ## Runtime-prioritering
 
-- `command_listener`, `media_listener` og `health_check` regnes som kritiske for opptak. `command_listener` har et begrenset internt restartbudsjett. `media_listener` drives av `ChunkedUploadServer`; hvis serveren stopper eller feiler, avsluttes prosessen slik at Cloud Run kan restarte instansen. Ved shutdown stopper den nye `begin`-requests og gir aktive receiver-sessioner fem sekunder til å fullfoere.
+- `command_listener`, `media_listener` og `health_check` regnes som kritiske for opptak. `command_listener` har et begrenset internt restartbudsjett. `media_listener` drives av `ChunkedUploadServer`; hvis serveren stopper eller feiler, avsluttes prosessen slik at Cloud Run kan restarte instansen. Ved shutdown stopper den nye `begin`-requests og gir aktive receiver-sessioner fem sekunder til å fullføre.
 - `validation_listener`, `execution_listener`, `execution_worker`, `query_listener`, `admin_listener` og `ready_replier` regnes som degradérbare: hvis de stopper eller feiler, logger Skuffen feilen og holder prosessen i live. `query_listener` dekker `arkiv.request.sak.hent`, `arkiv.request.journalpost.hent` og `arkiv.request.bruker.mt_enheter`. `admin_listener` dekker `arkiv.admin.read.command.hent` og `arkiv.admin.read.sak.hent`.
 - Ved SIGTERM avslutter Skuffen kontrollert: tasks får åtte sekunder på å avslutte selv, og resten aborteres. Det holder oss innenfor Cloud Runs ti sekunder.
+- Helsesjekken svarer i dag 200 på `/` uten å sjekke noe.
+
+*Planlagt (SKU-0021): alle arbeidstasks under supervisor med endelig restartbudsjett på fem, tømt budsjett avslutter prosessen uansett kritikalitet, og `/health/live` + `/health/ready` der readiness aggregerer migrasjoner, NATS og tasktilstand. Konfigurer ikke Cloud Run-prober mot disse stiene før steget er implementert.*
 
 ---
 
@@ -473,7 +484,7 @@ Eksempler:
 ### Mapping
 
 Skuffen har en stabil intern ID(skuffen-id) for alle entiteter. Denne er skjult for omverden.
-Klienter sender med sin egen client-reference for entiteter som kan brukes til å referere til entieter. Eks. hvis arkivet et nede så kan man sende inn opprett sak<client-reference: 123> og senere sende inn OpprettJournalpost<client-reference: abc, sak: 123>.
+Klienter sender med sin egen client-reference for entiteter, som kan brukes til å referere til entiteter som ennå ikke finnes i arkivet. Eks. `OpprettSak<client-reference: 123>` og deretter `OpprettJournalpost<client-reference: abc, sak: 123>` i samme sekvens — journalposten peker på saken uten å vente på at arkivet har svart. Er arkivet nede, tar Skuffen imot begge og utfører dem når arkivet er tilbake. Referansen er en forover-peker, ikke et reparasjonsmønster: å sende samme kommando på nytt med ny `command_id` er ikke en støttet måte å rette opp en feilet kommando på.
 Skuffen aksepterer også arkivet sine IDer.
 
 Det finnes altså en mapping mellom alle 3:

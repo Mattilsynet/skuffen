@@ -1,7 +1,7 @@
 # SKU-0008. NATS wire contract for arkivering og queries
 
 Date: 2026-05-22
-Last-reviewed: 2026-08-05
+Last-reviewed: 2026-09-02
 Tier: B
 Status: Accepted
 Crates: skuffen, infrastructure, application, skuffen-integration-tests
@@ -30,9 +30,9 @@ R5 [5]: Synkrone read/query subjects er `arkiv.request.sak.hent`, `arkiv.request
 
 R6 [5]: Query replies bruker `NatsResponse<T>`; `arkiv.request.bruker.mt_enheter` er en live stub som returnerer `NatsResponse::Error { message: "Not implemented" }`.
 
-R7 [5]: `arkiv.request.journalpost.hent` er koblet opp, men bruker fake/testdata repository inntil ekte backing integration erstatter denne adapteren.
+R7 [5]: `arkiv.request.journalpost.hent` er koblet opp, men produksjonsadapteren returnerer en tydelig feil inntil ekte backing finnes. Fake-data brukes kun når `SKUFFEN_FAKE_SIKRI` er aktiv; ekte klienter får aldri syntetiske svar som ser gyldige ut.
 
-R8 [5]: `lib-schemas` og `lib-nats` skal ikke bruke git `rev` i `Cargo.toml`; latest HEAD eller tag brukes, med `Cargo.lock` som resolved build boundary.
+R8 [5]: `lib-schemas` og `lib-nats` skal ikke bruke git `rev` i `Cargo.toml`; tag foretrekkes, med `Cargo.lock` som resolved build boundary. Alle tre bibliotekene fra `landdyrtilsyn-libs` skal være tag-pinnet.
 
 R9 [5]: `lib-sql` kan fortsatt bruke release tag; lockfile eller `cargo update` for `landdyrtilsyn-libs` krever schema- og kompatibilitetsreview.
 
@@ -61,3 +61,10 @@ cutover-grunnlag som over):
 R1-R10 formuleringene over står uendret; `ArkiveringKvittering`- og
 `NatsResponse<T>`-rammene beholdes. Detaljerte regler for skjerming, merking,
 gateway-utledning og audit eies av SKU-0015.
+
+### Statusstrømmen (SKU-0020)
+
+`arkiv.status.>` er ikke dekket av R1-R10, som gjelder request-reply. SKU-0020 R5
+fastslår at strømmen er at-least-once uten deduplisering: en klient må tåle å se
+samme hendelse flere ganger, særlig `Feilet` når flere operasjoner på samme
+kommando feiler terminalt.

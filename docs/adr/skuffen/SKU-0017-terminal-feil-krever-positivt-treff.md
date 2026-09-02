@@ -1,7 +1,7 @@
 # SKU-0017. Terminal feil krever positivt treff
 
 Date: 2026-08-25
-Last-reviewed: 2026-08-25
+Last-reviewed: 2026-09-02
 Tier: C
 Status: Accepted
 Crates: sikri_client, domain, application, infrastructure
@@ -56,6 +56,11 @@ R7 [7]: Tester som låser klassifisering skal gå gjennom kallveien, ikke kalle
 mappingfunksjonen direkte. Isolerte mappingtester var grønne mens kallveien var
 brutt.
 
+R8 [6]: Prinsippet gjelder også dekomponering. En dekomponeringsfeil er transient
+og NAK-es med eskalerende forsinkelse, med mindre den treffer et eksplisitt
+regelsett for permanente feil — da ackes den terminalt og `Feilet` publiseres til
+klienten.
+
 ## Consequences
 
 Feil som faktisk er irrecoverable blir nåbare for første gang. Operasjoner som i
@@ -77,3 +82,9 @@ slike tilfeller synlige, slik at regelsettet kan utvides.
 for `AvventJournalfort`, der det kan bety en journalpost som ennå ikke er synlig.
 Valget er låst i test. Begynner polling å terminere, er det den regelen som skal
 revurderes — ikke bunnen i R1.
+
+R8 lukker det samme hullet ett lag lenger ut. Dekomponeringen NAK-et enhver feil,
+også `entitet type mismatch` og `for mange dokumenter`, som aldri kan bli bedre av
+å prøve igjen. Klienten hadde da fått `Validert` og ventet på et utfall som aldri
+kom, mens meldingen sirkulerte til `max_age`. Uten `max_deliver` og uten DLQ er en
+terminal sti i koden eneste vei ut.

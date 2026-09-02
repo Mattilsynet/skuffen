@@ -202,12 +202,33 @@ known, and only once.
 | `kommando dekomponert` | `DekomponerCommandService`, with `nye_operasjoner` |
 | `operasjon blokkert` / `allerede utført` / `er ugyldig` | `EksekverOperasjonService`, with `grunn` |
 | `operasjon utført` / `venter, poller igjen` / `feilet terminalt` | `EksekverOperasjonService`, with `attempt_no` and `kode` |
-| `evalueringspass flyttet blokkerte operasjoner` | `EvaluerOperasjonerService`, only when something moved |
 | `executor overtok lederskapet` | `OperasjonWorker`, with the recovery counts |
 | `kommandostatus publisert` / `operasjonstatus publisert` | `NatsStatusPublisher`, mirroring the status stream |
 
 The blocked and polling paths matter most: they write to the database without
 publishing status, so the log is the only place their reason becomes visible.
+
+## Archive identifiers always belong in the log
+
+SKU-0015 R11: `saksnummer`, `journalpost_id`, `client_reference`, `command_id`,
+`operasjon_id` and `correlation_id` are what make a log line correlatable to a
+case, and a log you cannot correlate has no operational value. All six are either
+Skuffen's own UUIDs or the archive's own references — `client_reference` is a
+`Uuid` in the wire contract, so none of them can carry client free text.
+
+Log them as **structured fields**, never interpolated into free text, so Cloud
+Logging can query them under a consistent name:
+
+```rust
+error!(saksnummer = %saksnummer, "fant ikke Skuffen-id for arkiv-id");   // yes
+anyhow!("Skuffen ID ikke funnet for arkiv_id: {}", saksnummer)           // no
+```
+
+What stays forbidden on `info!`/`error!` is unchanged: personal data (names,
+national identity numbers, addresses, correspondence parties, document content)
+and raw external response text. The reason `sikri_client` avoids `reqwest::Error`
+`Display` is that the URL may carry credentials in query parameters — not that it
+carries a case number. Redact the credentials, log the case number.
 
 ## Shutdown
 
