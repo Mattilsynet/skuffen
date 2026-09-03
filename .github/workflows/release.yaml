@@ -27,7 +27,7 @@ jobs:
     needs: upload
     strategy:
       matrix:
-        env: ['dev']
+        env: ['test', 'prod']
     uses: ./.github/workflows/deploy.yaml
     with:
      env: ${{ matrix.env }}
