@@ -147,7 +147,7 @@ impl MediaStore for ObjectStoreMediaStore {
             event = "media_get_start",
             operation = "get",
             media_id = %id,
-            "media get started"
+            "media get started: {id}"
         );
         let mut object = match self.store.get(object_name.as_str()).await {
             Ok(object) => object,
@@ -201,7 +201,7 @@ impl MediaStore for ObjectStoreMediaStore {
             media_id = %id,
             byte_len,
             object_name = %info.name,
-            "media get ok: {} bytes", byte_len
+            "media get ok: {id} {} bytes", byte_len
         );
 
         Ok(Some(MediaFile {

@@ -80,6 +80,7 @@ impl ValidateCommandService {
         fields(
             command_id = %envelope.command_id,
             correlation_id = tracing::field::Empty,
+            command_type = command_type(&envelope.payload).as_code(),
         )
     )]
     pub async fn handle(&self, envelope: CommandEnvelope<Command>) -> Result<ValidationOutcome> {
@@ -109,7 +110,10 @@ impl ValidateCommandService {
                     None,
                 )
                 .await?;
-                tracing::info!("kommando validert");
+                tracing::info!(
+                    "kommando validert: {}",
+                    command_type(&envelope.payload).as_code()
+                );
                 Ok(ValidationOutcome::Ok)
             }
             ValidationOutcome::Irrecoverable {
@@ -122,7 +126,8 @@ impl ValidateCommandService {
                 tracing::warn!(
                     error_code = error_code.as_code(),
                     arsak = %message,
-                    "kommando avvist"
+                    "kommando avvist: {}",
+                    command_type(&envelope.payload).as_code()
                 );
                 self.emit(&envelope, CommandEvent::Avvist, &message, Some(error_code))
                     .await?;
@@ -148,7 +153,8 @@ impl ValidateCommandService {
                     tracing::info!(
                         error_code = error_code.as_code(),
                         arsak = %message,
-                        "kommando venter på ny levering"
+                        "kommando venter på ny levering: {}",
+                        command_type(&envelope.payload).as_code()
                     );
                 }
                 Ok(other)

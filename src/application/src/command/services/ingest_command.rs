@@ -74,7 +74,10 @@ impl IngestCommandService {
             .context("failed to record command receipt")?;
 
         if !mottak.maa_dispatches() {
-            tracing::info!("kommando allerede dispatchet, hopper over");
+            tracing::info!(
+                "kommando allerede dispatchet, hopper over: {}",
+                command_type(&envelope.payload).as_code()
+            );
             return Ok(());
         }
 
@@ -104,7 +107,10 @@ impl IngestCommandService {
             .await
             .context("failed to publish mottatt status")?;
 
-        tracing::info!("kommando mottatt og dispatchet");
+        tracing::info!(
+            "kommando mottatt og dispatchet: {}",
+            command_type(&envelope.payload).as_code()
+        );
         Ok(())
     }
 

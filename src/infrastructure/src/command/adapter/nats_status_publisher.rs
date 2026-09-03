@@ -62,6 +62,7 @@ impl StatusPublisher for NatsStatusPublisher {
         fields(
             command_id = %status.command_id,
             correlation_id = tracing::field::Empty,
+            command_type = status.command_type.as_code(),
             hendelse = status.hendelse.as_code(),
             terminal = status.terminal,
             subject = tracing::field::Empty
@@ -77,7 +78,9 @@ impl StatusPublisher for NatsStatusPublisher {
         info!(
             hendelse = status.hendelse.as_code(),
             error_code = status.error_code.map(|kode| kode.as_code()),
-            "kommandostatus publisert"
+            "kommandostatus publisert: {} {}",
+            status.command_type.as_code(),
+            status.hendelse.as_code()
         );
         self.publiser(subject, payload).await
     }
@@ -102,7 +105,9 @@ impl StatusPublisher for NatsStatusPublisher {
         info!(
             error_code = status.error_code.map(|kode| kode.as_code()),
             terminal = status.terminal,
-            "operasjonstatus publisert"
+            "operasjonstatus publisert: {} {}",
+            status.operasjonstype.as_code(),
+            status.hendelse.as_code()
         );
         self.publiser(subject, payload).await
     }

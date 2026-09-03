@@ -132,7 +132,9 @@ impl DekomponerCommandService {
         tracing::info!(
             nye_operasjoner = resultat.nye_operasjoner,
             forste_gang = resultat.var_forste_gang(),
-            "kommando dekomponert"
+            "kommando dekomponert: {} til {} operasjoner",
+            command_type(&envelope.payload).as_code(),
+            resultat.nye_operasjoner
         );
 
         if resultat.var_forste_gang() {

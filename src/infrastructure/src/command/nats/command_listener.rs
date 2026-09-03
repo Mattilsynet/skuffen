@@ -154,7 +154,10 @@ impl CommandListener {
                 // Batchen er inngangen til alt som skjer videre. Uten id-ene
                 // her finnes det ikke noe å slå opp løpet på.
                 Span::current().record("command_ids", tracing::field::debug(&command_ids));
-                info!(command_count, "kommandobatch mottatt og videresendt");
+                info!(
+                    command_count,
+                    "kommandobatch mottatt og videresendt: {command_count} kommandoer"
+                );
                 let response = ArkiveringKvittering::Ok { command_ids };
                 let payload = serde_json::to_vec(&response).unwrap_or_default();
                 let _ = self

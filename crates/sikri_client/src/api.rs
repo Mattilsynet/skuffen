@@ -119,7 +119,7 @@ async fn ensure_success(
     let status = response.status();
     let endpoint = safe_endpoint_label(url);
     if status.is_success() {
-        info!(target: "sikri.http", method, endpoint, status = %status, "Sikri response received");
+        info!(target: "sikri.http", method, endpoint, status = %status, "Sikri response received: {method} {endpoint} {status}");
         return Ok(response);
     }
 

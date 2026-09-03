@@ -44,6 +44,14 @@ Application/domain errors should provide:
 - short error code (stable identifier)
 - human-readable message
 
+Message lines must identify their subject. Cloud Logging's list view shows only
+`message`, so a milestone that reads `operasjon utført` is unreadable when a
+batch runs many operations at once. The discriminator — command type,
+operasjonstype, status event, media id, count — goes into the message text as
+well as into the structured field: `operasjon utført: opprett_journalpost
+(forsøk 1)`. Only bounded enum codes and ids belong there; the payload rules
+below are unchanged.
+
 Log level rules:
 - `info!`: nominal pipeline progress (message received, dispatched, acknowledged)
 - `warn!`: retryable failures, blocked commands awaiting redelivery
@@ -196,14 +204,19 @@ known, and only once.
 
 | Event | Emitted by |
 |---|---|
-| `kommandobatch mottatt og videresendt` | `command_listener`, with `command_count` and `command_ids` |
-| `kommando mottatt og dispatchet` / `allerede dispatchet` | `IngestCommandService` |
-| `kommando validert` / `avvist` / `venter på ny levering` | `ValidateCommandService`, with `error_code` and `arsak` |
-| `kommando dekomponert` | `DekomponerCommandService`, with `nye_operasjoner` |
-| `operasjon blokkert` / `allerede utført` / `er ugyldig` | `EksekverOperasjonService`, with `grunn` |
-| `operasjon utført` / `venter, poller igjen` / `feilet terminalt` | `EksekverOperasjonService`, with `attempt_no` and `kode` |
+| `kommandobatch mottatt og videresendt: <n> kommandoer` | `command_listener`, with `command_count` and `command_ids` |
+| `kommando mottatt og dispatchet: <command_type>` / `allerede dispatchet` | `IngestCommandService` |
+| `kommando validert: <command_type>` / `avvist` / `venter på ny levering` | `ValidateCommandService`, with `error_code` and `arsak` |
+| `kommando dekomponert: <command_type> til <n> operasjoner` | `DekomponerCommandService`, with `nye_operasjoner` |
+| `operasjon blokkert: <operasjonstype>` / `allerede utført` / `er ugyldig` | `EksekverOperasjonService`, with `grunn` |
+| `operasjon utført: <operasjonstype> (forsøk <n>)` / `venter, poller igjen` / `feilet terminalt` | `EksekverOperasjonService`, with `attempt_no` and `kode` |
 | `executor overtok lederskapet` | `OperasjonWorker`, with the recovery counts |
-| `kommandostatus publisert` / `operasjonstatus publisert` | `NatsStatusPublisher`, mirroring the status stream |
+| `kommandostatus publisert: <command_type> <hendelse>` / `operasjonstatus publisert: <operasjonstype> <hendelse>` | `NatsStatusPublisher`, mirroring the status stream |
+
+Each milestone keeps its old wording as a prefix, so a log filter written
+against the bare label still matches by `contains` — but an exact-equality or
+anchored-regex filter does not.
+
 
 The blocked and polling paths matter most: they write to the database without
 publishing status, so the log is the only place their reason becomes visible.
@@ -216,8 +229,10 @@ case, and a log you cannot correlate has no operational value. All six are eithe
 Skuffen's own UUIDs or the archive's own references — `client_reference` is a
 `Uuid` in the wire contract, so none of them can carry client free text.
 
-Log them as **structured fields**, never interpolated into free text, so Cloud
-Logging can query them under a consistent name:
+Log them as **structured fields** so Cloud Logging can query them under a
+consistent name. The message text may echo one when it is what identifies the
+line — `media get ok: <uuid> 89698 bytes` pairs with its own start line — but
+the field is what makes it findable, and free text is never a substitute for it:
 
 ```rust
 error!(saksnummer = %saksnummer, "fant ikke Skuffen-id for arkiv-id");   // yes

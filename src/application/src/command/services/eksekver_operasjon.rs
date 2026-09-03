@@ -130,13 +130,17 @@ impl EksekverOperasjonService {
                 // Blokkeringsårsak er spørrbar tilstand (D33), så vi
                 // publiserer ikke ved `blokkert ↔ klar`-flakking. Loggen er
                 // det eneste stedet årsaken blir synlig i øyeblikket.
-                tracing::info!(grunn = grunn.safe_detail(), "operasjon blokkert");
+                tracing::info!(
+                    grunn = grunn.safe_detail(),
+                    "operasjon blokkert: {}",
+                    op.operasjonstype.as_code()
+                );
                 self.operasjon_repo
                     .marker_blokkert(op.operasjon_id, None, &grunn.safe_detail())
                     .await?;
             }
             Beslutning::AlleredeUtfort => {
-                tracing::info!("operasjon allerede utført");
+                tracing::info!("operasjon allerede utført: {}", op.operasjonstype.as_code());
                 self.operasjon_repo
                     .fullfor_ok(op.operasjon_id, 0, Faktaoppdatering::Ingen)
                     .await?;
@@ -144,7 +148,11 @@ impl EksekverOperasjonService {
                     .await?;
             }
             Beslutning::Ugyldig(brudd) => {
-                tracing::warn!(brudd = brudd.safe_detail(), "operasjon er ugyldig");
+                tracing::warn!(
+                    brudd = brudd.safe_detail(),
+                    "operasjon er ugyldig: {}",
+                    op.operasjonstype.as_code()
+                );
                 self.operasjon_repo
                     .marker_feilet(op.operasjon_id, 0, &brudd.safe_detail())
                     .await?;
@@ -198,7 +206,11 @@ impl EksekverOperasjonService {
                     .fullfor_ok(op.operasjon_id, attempt_no, oppdatering)
                     .await
                     .context("failed to commit successful operation")?;
-                tracing::info!(attempt_no, "operasjon utført");
+                tracing::info!(
+                    attempt_no,
+                    "operasjon utført: {} (forsøk {attempt_no})",
+                    op.operasjonstype.as_code()
+                );
                 self.publiser(op, Operasjonshendelse::Ok, attempt_no, "Utført.", None)
                     .await?;
             }
@@ -207,7 +219,12 @@ impl EksekverOperasjonService {
                     + chrono::Duration::from_std(om).unwrap_or(chrono::Duration::hours(1));
                 // Poller mot RPA og kan vente i timer. Uten denne er ventingen
                 // usynlig i loggen.
-                tracing::info!(attempt_no, neste_forsok_at = %neste, "operasjon venter, poller igjen");
+                tracing::info!(
+                    attempt_no,
+                    neste_forsok_at = %neste,
+                    "operasjon venter, poller igjen: {}",
+                    op.operasjonstype.as_code()
+                );
                 self.operasjon_repo
                     .fullfor_poll(op.operasjon_id, attempt_no, oppdatering, neste)
                     .await?;
@@ -223,7 +240,8 @@ impl EksekverOperasjonService {
                     kode = feil.kode,
                     error_code = feil.error_code.as_code(),
                     neste_forsok_at = %neste,
-                    "operasjonsforsøk feilet, nytt forsøk kommer"
+                    "operasjonsforsøk feilet, nytt forsøk kommer: {} (forsøk {attempt_no})",
+                    op.operasjonstype.as_code()
                 );
                 self.operasjon_repo
                     .marker_retry(op.operasjon_id, attempt_no, &feil.siste_detalj(), neste)
@@ -242,7 +260,8 @@ impl EksekverOperasjonService {
                     attempt_no,
                     kode = feil.kode,
                     error_code = feil.error_code.as_code(),
-                    "operasjon feilet terminalt"
+                    "operasjon feilet terminalt: {} (forsøk {attempt_no})",
+                    op.operasjonstype.as_code()
                 );
                 self.operasjon_repo
                     .marker_feilet(op.operasjon_id, attempt_no, &feil.siste_detalj())
