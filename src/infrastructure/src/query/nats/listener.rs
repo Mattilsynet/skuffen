@@ -134,6 +134,8 @@ where
     Req: serde::de::DeserializeOwned + Send + Debug,
     Res: serde::Serialize + Send + Debug,
 {
+    /// En avsluttet subscription returnerer `Err`, slik at `try_join!` ikke
+    /// venter for alltid og supervisoren får kontroll (SKU-0021 R7).
     #[tracing::instrument(skip_all)]
     pub async fn run(&self) -> anyhow::Result<()> {
         info!("Lytter etter meldinger på subject '{}'", self.subject);
@@ -150,7 +152,10 @@ where
             self.process_message(msg).await;
         }
 
-        Ok(())
+        Err(anyhow::anyhow!(
+            "subscription on {} ended unexpectedly",
+            self.subject
+        ))
     }
 
     async fn process_message(&self, msg: async_nats::Message) {

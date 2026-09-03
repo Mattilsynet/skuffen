@@ -168,9 +168,11 @@ async fn to_admin_listenere_i_samme_queue_group_gir_noyaktig_ett_svar() -> Resul
 
     // Andre listener mot samme NATS og database, i de samme queue groupene.
     let shutdown = tokio_util::sync::CancellationToken::new();
+    let helse = infrastructure::http::helse::Helse::new();
     let andre_listener = infrastructure::bootstrap::build_admin_listener(
-        infrastructure::nats::setup::setup_nats().await?,
+        infrastructure::nats::setup::setup_nats(helse.clone()).await?,
         infrastructure::database::setup::setup_database().await?,
+        helse,
         shutdown.clone(),
     );
     let handle = tokio::spawn(async move { andre_listener.run().await });

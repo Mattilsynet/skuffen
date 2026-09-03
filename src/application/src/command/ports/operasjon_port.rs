@@ -50,6 +50,9 @@ pub enum CommandOutcome {
     Fullfort,
     /// Minst én terminalt feilet. Monotont: kan ikke gå tilbake.
     Feilet,
+    /// Minst én operasjon har ukjent utfall etter recovery (SKU-0016 R5).
+    /// Ikke terminal — den kan bli `ok` etter admin write.
+    KreverAvklaring,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -102,7 +105,8 @@ pub trait OperasjonRepository: Send + Sync {
         plan: Dekomponeringsplan,
     ) -> Result<Dekomponeringsresultat, anyhow::Error>;
 
-    /// Neste operasjon som er `klar`, eller `retry_venter` med forfalt frist.
+    /// Neste operasjon som har forfalt: `klar`, `retry_venter` eller
+    /// `blokkert` med `neste_forsok_at <= now()` (SKU-0020 R2).
     async fn hent_neste_kjorbare(&self) -> Result<Option<Operasjon>, anyhow::Error>;
 
     /// `klar|retry_venter → kjorer`. Returnerer nytt `attempt_no`.
@@ -119,7 +123,8 @@ pub trait OperasjonRepository: Send + Sync {
         attempt_no: i32,
     ) -> Result<(), anyhow::Error>;
 
-    /// `→ ok` med faktaoppdatering i samme transaksjon.
+    /// `→ ok` med faktaoppdatering i samme transaksjon. Blokkerte søsken på
+    /// samme sak settes forfalt i samme transaksjon (SKU-0020 R4).
     async fn fullfor_ok(
         &self,
         operasjon_id: OperasjonId,
@@ -153,6 +158,8 @@ pub trait OperasjonRepository: Send + Sync {
     ) -> Result<(), anyhow::Error>;
 
     /// `→ blokkert`. `blokkert_av` er derivert debughjelp, aldri autoritativ.
+    /// Fristen skyves frem, så raden sjekkes på nytt med fast frekvens i
+    /// stedet for kontinuerlig (SKU-0020 R3).
     async fn marker_blokkert(
         &self,
         operasjon_id: OperasjonId,
@@ -160,17 +167,19 @@ pub trait OperasjonRepository: Send + Sync {
         detalj: &str,
     ) -> Result<(), anyhow::Error>;
 
-    async fn marker_klar(&self, operasjon_id: OperasjonId) -> Result<(), anyhow::Error>;
-
     /// Startup recovery: `kjorer → klar` og `sendt → krever_avklaring`.
     async fn gjenopprett_etter_restart(&self) -> Result<Gjenoppretting, anyhow::Error>;
 
-    /// Kandidatene evalueringspasset skal se på.
-    async fn hent_blokkerte(&self, grense: i64) -> Result<Vec<Operasjon>, anyhow::Error>;
-
-    /// Operasjoner med ukjent utfall. Ikke kjørbare igjen — de venter på at et
-    /// menneske rydder (SKU-0016 R5).
+    /// Operasjoner med ukjent utfall som ennå ikke er varslet. Ikke kjørbare
+    /// igjen — de venter på at et menneske rydder (SKU-0016 R5).
     async fn hent_krever_avklaring(&self) -> Result<Vec<Operasjon>, anyhow::Error>;
+
+    /// Markerer at `krever_avklaring` er publisert for operasjonen, slik at
+    /// neste oppstart ikke gjentar varselet (SKU-0020 R6).
+    async fn marker_avklaring_varslet(
+        &self,
+        operasjon_id: OperasjonId,
+    ) -> Result<(), anyhow::Error>;
 
     /// Søskenoperasjoner på saken. Hentes kun for `AvsluttSak` (D4).
     async fn hent_sammendrag_for_sak(

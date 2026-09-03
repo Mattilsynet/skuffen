@@ -1,11 +1,11 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use domain::command::{
     Dekomponeringsinput, DokumentSpesifikasjon, Dokumentkilde as DomeneDokumentkilde,
 };
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::operasjon::{EntitetType, OperasjonId, dekomponer};
 use domain::eksekvering::tilstand::JournalpostType;
-use domain::eksekvering::typer::{CommandEvent, CommandStatus};
+use domain::eksekvering::typer::{CommandEvent, CommandStatus, StatusErrorCode};
 use uuid::Uuid;
 
 use crate::command::materialisering::{
@@ -22,26 +22,65 @@ use crate::command::{
     Tilgjengelighet,
 };
 
+/// Utfallet av en dekomponering som ikke lyktes (SKU-0017 R8).
+///
+/// Bunnen er `Transient`: en ukjent feil retryes til noen legger inn en regel
+/// for den. `Permanent` krever positivt treff, og da er kommandoen ferdig —
+/// klienten har allerede fått `Feilet`.
+#[derive(Debug)]
+pub enum DekomponeringsFeil {
+    Permanent {
+        /// Stabil og greppbar. Går i loggen, ikke til klienten.
+        kode: &'static str,
+        klientmelding: String,
+    },
+    Transient(anyhow::Error),
+}
+
+impl DekomponeringsFeil {
+    fn permanent(kode: &'static str, klientmelding: impl Into<String>) -> Self {
+        Self::Permanent {
+            kode,
+            klientmelding: klientmelding.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for DekomponeringsFeil {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Permanent { kode, .. } => write!(f, "{kode}"),
+            Self::Transient(err) => write!(f, "{err:#}"),
+        }
+    }
+}
+
+impl From<anyhow::Error> for DekomponeringsFeil {
+    fn from(err: anyhow::Error) -> Self {
+        Self::Transient(err)
+    }
+}
+
 /// Dekomponering fra kommando til operasjoner (SKU-0016 R2).
 ///
 /// Skjer én gang, når den validerte kommandoen leses inn. Operasjonslisten er
 /// en ren funksjon av command payload, og alt skrives i én transaksjon sammen
 /// med de materialiserte attributtene (R12).
 pub struct DekomponerCommandService {
-    entitet: Box<dyn EntitetRepository>,
-    operasjon: Box<dyn OperasjonRepository>,
+    entitet_repo: Box<dyn EntitetRepository>,
+    operasjon_repo: Box<dyn OperasjonRepository>,
     status_publisher: Box<dyn StatusPublisher>,
 }
 
 impl DekomponerCommandService {
     pub fn new(
-        entitet: Box<dyn EntitetRepository>,
-        operasjon: Box<dyn OperasjonRepository>,
+        entitet_repo: Box<dyn EntitetRepository>,
+        operasjon_repo: Box<dyn OperasjonRepository>,
         status_publisher: Box<dyn StatusPublisher>,
     ) -> Self {
         Self {
-            entitet,
-            operasjon,
+            entitet_repo,
+            operasjon_repo,
             status_publisher,
         }
     }
@@ -55,15 +94,35 @@ impl DekomponerCommandService {
             command_type = command_type(&envelope.payload).as_code(),
         )
     )]
-    pub async fn handle(&self, envelope: CommandEnvelope<Command>) -> Result<()> {
+    pub async fn handle(
+        &self,
+        envelope: CommandEnvelope<Command>,
+    ) -> Result<(), DekomponeringsFeil> {
         if let Some(correlation_id) = envelope.correlation_id {
             tracing::Span::current()
                 .record("correlation_id", tracing::field::display(correlation_id));
         }
 
-        let plan = self.bygg_plan(&envelope).await?;
+        let plan = match self.bygg_plan(&envelope).await {
+            Ok(plan) => plan,
+            Err(DekomponeringsFeil::Permanent {
+                kode,
+                klientmelding,
+            }) => {
+                // Beslutning og publisering hører sammen i én kodesti. Uten
+                // dette ville klienten sittet igjen med `Validert` og ventet
+                // på et utfall som aldri kom.
+                self.publiser_feilet(&envelope, &klientmelding).await?;
+                return Err(DekomponeringsFeil::Permanent {
+                    kode,
+                    klientmelding,
+                });
+            }
+            Err(transient) => return Err(transient),
+        };
+
         let resultat = self
-            .operasjon
+            .operasjon_repo
             .lagre_dekomponering(plan)
             .await
             .context("failed to persist decomposition")?;
@@ -94,7 +153,35 @@ impl DekomponerCommandService {
         Ok(())
     }
 
-    async fn bygg_plan(&self, envelope: &CommandEnvelope<Command>) -> Result<Dekomponeringsplan> {
+    /// Terminalt utfall for kommandoen. `Feilet` er monotont (SKU-0016 R8), og
+    /// dekomponeringen har ikke skrevet en eneste operasjonsrad, så det kan
+    /// ikke motsies senere.
+    async fn publiser_feilet(
+        &self,
+        envelope: &CommandEnvelope<Command>,
+        klientmelding: &str,
+    ) -> Result<()> {
+        self.status_publisher
+            .publiser_command_status(CommandStatus::new(
+                envelope.command_id,
+                envelope.correlation_id,
+                command_type(&envelope.payload),
+                CommandEvent::Feilet,
+                klientmelding,
+                // Alle permanente dekomponeringsfeil er feil i det klienten
+                // sendte: en ukjent referanse, feil entitetstype, eller for
+                // mange dokumenter.
+                Some(StatusErrorCode::InvalidRequest),
+                kontekst(&envelope.payload),
+            ))
+            .await
+            .context("failed to publish feilet status")
+    }
+
+    async fn bygg_plan(
+        &self,
+        envelope: &CommandEnvelope<Command>,
+    ) -> Result<Dekomponeringsplan, DekomponeringsFeil> {
         let command_id = envelope.command_id;
 
         match &envelope.payload {
@@ -165,7 +252,7 @@ impl DekomponerCommandService {
         command_id: Uuid,
         command: &OpprettJournalpostCommand,
         journalposttype: JournalpostType,
-    ) -> Result<Dekomponeringsplan> {
+    ) -> Result<Dekomponeringsplan, DekomponeringsFeil> {
         let felles: &JournalpostCommon = command.felles();
         let sak_id = self.skuffen_sak_id_for_key(&felles.sak_key).await?;
         let journalpost_id = self
@@ -179,8 +266,12 @@ impl DekomponerCommandService {
         // (D27), i stedet for å overleve som bivirkning av at id-ene genereres
         // i payload-rekkefølge.
         for (indeks, dokument) in felles.dokumenter.iter().enumerate() {
-            let rekkefolge = u16::try_from(indeks)
-                .map_err(|_| anyhow!("for mange dokumenter på journalposten"))?;
+            let rekkefolge = u16::try_from(indeks).map_err(|_| {
+                DekomponeringsFeil::permanent(
+                    "dekomponering_for_mange_dokumenter",
+                    "Journalposten har for mange dokumenter.",
+                )
+            })?;
             let dokument_id = self
                 .skuffen_dokument_id_for_client_reference(dokument.client_reference)
                 .await?;
@@ -304,7 +395,10 @@ impl DekomponerCommandService {
         })
     }
 
-    async fn skuffen_sak_id_for_key(&self, sak_key: &SakKey) -> Result<SkuffenSakId> {
+    async fn skuffen_sak_id_for_key(
+        &self,
+        sak_key: &SakKey,
+    ) -> Result<SkuffenSakId, DekomponeringsFeil> {
         match sak_key {
             SakKey::ClientReference(client_reference) => {
                 self.skuffen_sak_id_for_client_reference(*client_reference)
@@ -312,7 +406,7 @@ impl DekomponerCommandService {
             }
             SakKey::ArkivId(arkiv_id) => {
                 let skuffen_id = self
-                    .entitet
+                    .entitet_repo
                     .hent_eller_opprett_for_arkiv_id(EntitetType::Sak, arkiv_id)
                     .await
                     .context("failed to resolve sak by arkiv id")?;
@@ -324,7 +418,7 @@ impl DekomponerCommandService {
     async fn skuffen_sak_id_for_client_reference(
         &self,
         client_reference: Uuid,
-    ) -> Result<SkuffenSakId> {
+    ) -> Result<SkuffenSakId, DekomponeringsFeil> {
         Ok(SkuffenSakId::from(
             self.skuffen_id(client_reference, EntitetType::Sak).await?,
         ))
@@ -333,7 +427,7 @@ impl DekomponerCommandService {
     async fn skuffen_journalpost_id_for_client_reference(
         &self,
         client_reference: Uuid,
-    ) -> Result<SkuffenJournalpostId> {
+    ) -> Result<SkuffenJournalpostId, DekomponeringsFeil> {
         Ok(SkuffenJournalpostId::from(
             self.skuffen_id(client_reference, EntitetType::Journalpost)
                 .await?,
@@ -343,7 +437,7 @@ impl DekomponerCommandService {
     async fn skuffen_dokument_id_for_client_reference(
         &self,
         client_reference: Uuid,
-    ) -> Result<SkuffenDokumentId> {
+    ) -> Result<SkuffenDokumentId, DekomponeringsFeil> {
         Ok(SkuffenDokumentId::from(
             self.skuffen_id(client_reference, EntitetType::Dokument)
                 .await?,
@@ -358,19 +452,27 @@ impl DekomponerCommandService {
     ///
     /// Typesjekken hindrer at en gjenbrukt `client_reference` gir en
     /// journalposts id inn som `sak_id`.
-    async fn skuffen_id(&self, client_reference: Uuid, forventet: EntitetType) -> Result<Uuid> {
+    async fn skuffen_id(
+        &self,
+        client_reference: Uuid,
+        forventet: EntitetType,
+    ) -> Result<Uuid, DekomponeringsFeil> {
         let entitet = self
-            .entitet
+            .entitet_repo
             .hent_for_client_reference(client_reference)
             .await
             .context("failed to look up entitet")?
-            .ok_or_else(|| anyhow!("no entitet registered for client reference"))?;
+            .ok_or_else(|| {
+                DekomponeringsFeil::permanent(
+                    "dekomponering_ukjent_client_reference",
+                    "Forespørselen viser til en referanse Skuffen ikke kjenner.",
+                )
+            })?;
 
         if entitet.entitet_type != forventet {
-            return Err(anyhow!(
-                "entitet type mismatch for client reference: expected {}, got {}",
-                forventet.as_code(),
-                entitet.entitet_type.as_code()
+            return Err(DekomponeringsFeil::permanent(
+                "dekomponering_feil_entitet_type",
+                "Referansen peker på en annen entitetstype enn forespørselen krever.",
             ));
         }
 
@@ -380,13 +482,13 @@ impl DekomponerCommandService {
 
 fn tilgang(tilgjengelighet: &Tilgjengelighet) -> Tilgang {
     match tilgjengelighet {
-        Tilgjengelighet::Offentlig => Tilgang::default(),
+        Tilgjengelighet::Offentlig => Tilgang::Offentlig,
         Tilgjengelighet::Skjermet {
             tilgangskode,
             tilgangshjemmel,
-        } => Tilgang {
-            tilgangskode: Some(tilgangskode.as_str().to_string()),
-            tilgangshjemmel: Some(tilgangshjemmel.as_str().to_string()),
+        } => Tilgang::Skjermet {
+            tilgangskode: tilgangskode.clone(),
+            tilgangshjemmel: tilgangshjemmel.clone(),
         },
     }
 }

@@ -406,10 +406,7 @@ impl FaktaRepository for PostgresFaktaRepository {
             ordningsverdi,
             saksbehandler_id: saksbehandler_id.unwrap_or_default(),
             saksbehandler_enhet: saksbehandler_enhet.unwrap_or_default(),
-            tilgang: Tilgang {
-                tilgangskode,
-                tilgangshjemmel,
-            },
+            tilgang: Tilgang::try_from((tilgangskode, tilgangshjemmel))?,
         }))
     }
 
@@ -468,10 +465,7 @@ impl FaktaRepository for PostgresFaktaRepository {
             med_utsending,
             saksbehandler_id: saksbehandler_id.unwrap_or_default(),
             saksbehandler_enhet: saksbehandler_enhet.unwrap_or_default(),
-            tilgang: Tilgang {
-                tilgangskode,
-                tilgangshjemmel,
-            },
+            tilgang: Tilgang::try_from((tilgangskode, tilgangshjemmel))?,
             korrespondanseparter: korrespondanseparter(parter)?,
             kildesystem,
         }))

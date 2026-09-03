@@ -17,6 +17,7 @@ use serde_json::json;
 use tracing_subscriber::layer::SubscriberExt;
 
 use super::*;
+use crate::http::helse::Helse;
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -221,7 +222,7 @@ fn bygg_listener(
 ) -> (AdminListener, Arc<FakeRepository>) {
     let service = Arc::new(AdminReadService::new(repository.clone()));
     (
-        AdminListener::new(transport, service, CancellationToken::new()),
+        AdminListener::new(transport, service, Helse::new(), CancellationToken::new()),
         repository,
     )
 }
@@ -464,7 +465,7 @@ async fn shutdown_avslutter_subscriptions_uten_feil() {
         Svar::IkkeFunnet,
         Svar::IkkeFunnet,
     ))));
-    let listener = AdminListener::new(transport, service, shutdown.clone());
+    let listener = AdminListener::new(transport, service, Helse::new(), shutdown.clone());
 
     shutdown.cancel();
 

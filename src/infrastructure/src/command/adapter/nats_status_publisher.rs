@@ -2,50 +2,55 @@ use crate::command::status_event::{
     command_subject, operasjon_subject, to_public_command_status, to_public_operasjonstatus,
 };
 use crate::nats::client::NatsClient;
-use crate::nats::jetstream_setup::{ensure_stream, status_stream_config};
 use application::command::ports::status_publisher_port::StatusPublisher;
 
 use async_nats::jetstream::{self, message::PublishMessage};
 use async_trait::async_trait;
 use domain::eksekvering::typer::{CommandStatus, Operasjonstatus};
-use tracing::{Span, info};
+use tracing::{Span, error, info};
 
 /// Én statusstrøm. Strømmen **er** loggen — en klient som vil ha historikken
 /// lager en consumer med `DeliverPolicy::All`.
+///
+/// Strømmen er at-least-once og deduplisert av ingen (SKU-0020 R5). En nøkkel
+/// koblet til `attempt_no` ga en illusjon om exactly-once innenfor et
+/// udokumentert tominuttersvindu, og kolliderte for de fire hendelsene som
+/// deler `attempt_no = 0`.
+///
+/// Strømmen opprettes i `prepare_runtime`, ikke her.
 #[derive(Clone)]
 pub struct NatsStatusPublisher {
-    client: NatsClient,
+    jetstream: jetstream::Context,
 }
 
 impl NatsStatusPublisher {
     pub fn new(client: NatsClient) -> Self {
-        Self { client }
+        Self {
+            jetstream: jetstream::new(client.inner().clone()),
+        }
     }
 
-    async fn publiser(
-        &self,
-        subject: String,
-        payload: Vec<u8>,
-        message_id: String,
-    ) -> Result<(), anyhow::Error> {
-        let jetstream = jetstream::new(self.client.inner().clone());
+    /// Uten outbox er loggen eneste spor når publiseringen feiler. Utfallet
+    /// er avgjort og skrevet i databasen; klienten er den som ikke får vite
+    /// det.
+    async fn publiser(&self, subject: String, payload: Vec<u8>) -> Result<(), anyhow::Error> {
         Span::current().record("subject", tracing::field::display(subject.as_str()));
-        ensure_stream(
-            &jetstream,
-            status_stream_config(self.client.jetstream_replicas()),
-        )
-        .await?;
 
         let mut message = PublishMessage::build().payload(payload.into());
         if let Some(headers) = crate::telemetry::trace_headers() {
             message = message.headers(headers);
         }
 
-        jetstream
-            .send_publish(subject, message.message_id(message_id))
-            .await?
-            .await?;
-        Ok(())
+        match self.jetstream.send_publish(subject, message).await {
+            Ok(kvittering) => kvittering.await.map(|_| ()).map_err(|err| {
+                error!(error = %err, "statushendelse ble ikke bekreftet av JetStream");
+                anyhow::Error::new(err)
+            }),
+            Err(err) => {
+                error!(error = %err, "statushendelse kunne ikke publiseres");
+                Err(anyhow::Error::new(err))
+            }
+        }
     }
 }
 
@@ -74,8 +79,7 @@ impl StatusPublisher for NatsStatusPublisher {
             error_code = status.error_code.map(|kode| kode.as_code()),
             "kommandostatus publisert"
         );
-        // Dedupliseringsnøkkelen er id-er vi allerede har i databasen.
-        self.publiser(subject, payload, status.message_id()).await
+        self.publiser(subject, payload).await
     }
 
     #[tracing::instrument(
@@ -100,6 +104,6 @@ impl StatusPublisher for NatsStatusPublisher {
             terminal = status.terminal,
             "operasjonstatus publisert"
         );
-        self.publiser(subject, payload, status.message_id()).await
+        self.publiser(subject, payload).await
     }
 }

@@ -68,3 +68,11 @@ gateway-utledning og audit eies av SKU-0015.
 fastslår at strømmen er at-least-once uten deduplisering: en klient må tåle å se
 samme hendelse flere ganger, særlig `Feilet` når flere operasjoner på samme
 kommando feiler terminalt.
+
+`SkuffenCommandEvent` fikk i tillegg varianten `krever_avklaring`. Uten den fikk
+`arkiv.status.<cmd>.command` ingenting når en operasjon kom ut av recovery med
+ukjent utfall, og en klient som følger `.command` — den anbefalte subscriptionen
+for «bare utfallet» — så stillhet. Den publiseres med `terminal: false`, fordi
+utfallet ikke er avgjort, og taper for `feilet`, som er monotont. Enumet har
+ingen `#[serde(other)]`, så en klient som deserialiserer strengt må ta inn
+taggen. Cutover-grunnlaget er det samme som over: ingen aktive klienter.

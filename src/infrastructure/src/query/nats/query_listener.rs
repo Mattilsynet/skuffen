@@ -22,15 +22,15 @@ impl QueryListener {
         }
     }
 
+    /// `try_join!`, aldri `join!` (SKU-0021 R7). `join!` venter på alle tre,
+    /// så én avsluttet subscription ville blokkert for alltid uten at
+    /// supervisoren fikk vite det.
     pub async fn run(&self) -> anyhow::Result<()> {
-        let (sak_result, journalpost_result, bruker_mt_enheter_result) = tokio::join!(
+        tokio::try_join!(
             self.hent_sak_replier.run(),
             self.hent_journalpost_replier.run(),
             self.bruker_mt_enheter_replier.run()
-        );
-        sak_result?;
-        journalpost_result?;
-        bruker_mt_enheter_result?;
+        )?;
         Ok(())
     }
 }

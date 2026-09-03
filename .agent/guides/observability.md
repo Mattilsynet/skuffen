@@ -250,10 +250,14 @@ Application-rendered document failures propagate stable safe detail codes:
 - `intern_lagring_av_rendret_dokument_feilet` — Rendered document persist failed (recoverable)
 
 Mapping failures in the Sikri adapter use the `arkivmapping_` prefix
-(`arkivmapping_mottaker_mangler`, `arkivmapping_ufullstendig_skjerming`,
-`arkivmapping_postadresse_mangler`). These are our own mapping errors, always
-irrecoverable, and the client-facing message carries the `client_reference` so the
-caller knows which document or correspondence party to fix.
+(`arkivmapping_mottaker_mangler`, `arkivmapping_postadresse_mangler`). These are
+our own mapping errors, always irrecoverable, and the client-facing message
+carries the `client_reference` so the caller knows which document or
+correspondence party to fix.
+
+`arkivmapping_ufullstendig_skjerming` finnes ikke lenger: `Tilgang` er en enum
+der halv skjerming ikke er representerbar (SKU-0015 R10), så feilen kan ikke
+oppstå.
 
 Failures originating inside Skuffen use the `intern_` prefix, which makes them easy to
 separate from `sikri_` codes in a log query.

@@ -34,6 +34,7 @@ fn command_event(hendelse: CommandEvent) -> SkuffenCommandEvent {
         CommandEvent::Utfores => SkuffenCommandEvent::Utfores,
         CommandEvent::Fullfort => SkuffenCommandEvent::Fullfort,
         CommandEvent::Feilet => SkuffenCommandEvent::Feilet,
+        CommandEvent::KreverAvklaring => SkuffenCommandEvent::KreverAvklaring,
     }
 }
 

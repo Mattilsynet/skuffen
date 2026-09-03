@@ -1,15 +1,20 @@
-use async_nats::jetstream::{self, AckKind};
+use async_nats::jetstream;
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
-use tracing::{Instrument, Span, error, warn};
+use tracing::{Instrument, Span, error};
 
+use crate::command::nats::ack::{ack_terminal, leveringsnummer, logg_ny_levering, nak_med_backoff};
 use crate::command::wire_mapper::map_wire_envelope;
+use crate::http::helse::Helse;
 use crate::nats::client::NatsClient;
 use crate::nats::jetstream_setup::{
     command_ready_stream_config, ensure_pull_consumer, ensure_stream, executor_consumer_config,
 };
-use crate::nats::supervisor::TaskSupervisor;
-use application::command::services::dekomponer_command::DekomponerCommandService;
+use crate::nats::supervisor::{RESTARTBUDSJETT, TaskSupervisor, tasknavn};
+use application::command::services::dekomponer_command::{
+    DekomponerCommandService, DekomponeringsFeil,
+};
+use tokio_util::sync::CancellationToken;
 
 /// Leser validerte kommandoer og dekomponerer dem til operasjoner.
 ///
@@ -18,17 +23,32 @@ use application::command::services::dekomponer_command::DekomponerCommandService
 pub struct DekomponeringListener {
     client: NatsClient,
     service: DekomponerCommandService,
+    helse: Helse,
+    shutdown: CancellationToken,
 }
 
 impl DekomponeringListener {
-    pub fn new(client: NatsClient, service: DekomponerCommandService) -> Self {
-        Self { client, service }
+    pub fn new(
+        client: NatsClient,
+        service: DekomponerCommandService,
+        helse: Helse,
+        shutdown: CancellationToken,
+    ) -> Self {
+        Self {
+            client,
+            service,
+            helse,
+            shutdown,
+        }
     }
 
     #[tracing::instrument(skip_all, name = "nats.dekomponering_listener")]
     pub async fn run(&self) -> anyhow::Result<()> {
-        let supervisor = TaskSupervisor::background("dekomponering_listener");
-        supervisor.run(|| self.run_once()).await
+        TaskSupervisor::critical(tasknavn::DEKOMPONERING_LISTENER, RESTARTBUDSJETT)
+            .with_shutdown(self.shutdown.clone())
+            .with_helse(&self.helse)
+            .run(|| self.run_once())
+            .await
     }
 
     async fn run_once(&self) -> anyhow::Result<()> {
@@ -63,17 +83,18 @@ impl DekomponeringListener {
     }
 
     async fn handle_message(&self, message: jetstream::Message) -> anyhow::Result<()> {
-        let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&message.payload) {
+        let delivered = leveringsnummer(&message);
+        let (payload, acker) = message.split();
+
+        let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&payload.payload) {
             Ok(cmd) => cmd,
             Err(err) => {
                 error!(
                     error_type = "deserialization",
-                    payload_size = message.payload.len(),
+                    payload_size = payload.payload.len(),
                     "kunne ikke deserialisere kommando: {err}"
                 );
-                message.ack().await.map_err(|ack_err| {
-                    anyhow::anyhow!("ack failed after deserialize error: {ack_err}")
-                })?;
+                ack_terminal(&acker).await?;
                 return Ok(());
             }
         };
@@ -81,21 +102,25 @@ impl DekomponeringListener {
         Span::current().record("command_id", tracing::field::display(envelope.command_id));
         crate::telemetry::record_correlation_id(envelope.correlation_id);
 
+        let command_id = envelope.command_id;
         let application_envelope = map_wire_envelope(envelope);
 
         match self.service.handle(application_envelope).await {
-            Ok(()) => {
-                message
-                    .ack()
-                    .await
-                    .map_err(|err| anyhow::anyhow!("ack failed: {err}"))?;
+            Ok(()) => ack_terminal(&acker).await?,
+            // Tjenesten har allerede publisert `Feilet`. Uten `max_deliver` og
+            // uten DLQ er denne acken eneste vei ut for en melding som aldri
+            // kan lykkes (SKU-0017 R8).
+            Err(DekomponeringsFeil::Permanent { kode, .. }) => {
+                error!(
+                    kode,
+                    delivered, "dekomponeringen kan ikke lykkes, kommandoen avsluttes"
+                );
+                ack_terminal(&acker).await?;
             }
-            Err(err) => {
-                warn!(error = %format!("{err:#}"), "kunne ikke dekomponere kommandoen");
-                message
-                    .ack_with(AckKind::Nak(Some(std::time::Duration::from_secs(30))))
-                    .await
-                    .map_err(|nak_err| anyhow::anyhow!("nak failed: {nak_err}"))?;
+            Err(DekomponeringsFeil::Transient(err)) => {
+                logg_ny_levering(delivered, Some(command_id), "dekomponeringen feilet");
+                error!(error = %format!("{err:#}"), "kunne ikke dekomponere kommandoen");
+                nak_med_backoff(&acker, delivered).await?;
             }
         }
 

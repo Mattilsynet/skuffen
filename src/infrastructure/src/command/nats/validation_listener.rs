@@ -1,31 +1,49 @@
-use async_nats::jetstream::{self, AckKind};
+use async_nats::jetstream;
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use tracing::{Instrument, Span, error};
 
+use crate::command::nats::ack::{ack_terminal, leveringsnummer, logg_ny_levering, nak_med_backoff};
 use crate::command::wire_mapper::map_wire_envelope;
+use crate::http::helse::Helse;
 use crate::nats::client::NatsClient;
 use crate::nats::jetstream_setup::{
     command_inbox_stream_config, command_ready_stream_config, ensure_pull_consumer, ensure_stream,
     validator_consumer_config,
 };
-use crate::nats::supervisor::TaskSupervisor;
+use crate::nats::supervisor::{RESTARTBUDSJETT, TaskSupervisor, tasknavn};
 use application::command::services::validate_command::ValidateCommandService;
+use tokio_util::sync::CancellationToken;
 
 pub struct CommandValidationListener {
     client: NatsClient,
     service: ValidateCommandService,
+    helse: Helse,
+    shutdown: CancellationToken,
 }
 
 impl CommandValidationListener {
-    pub fn new(client: NatsClient, service: ValidateCommandService) -> Self {
-        Self { client, service }
+    pub fn new(
+        client: NatsClient,
+        service: ValidateCommandService,
+        helse: Helse,
+        shutdown: CancellationToken,
+    ) -> Self {
+        Self {
+            client,
+            service,
+            helse,
+            shutdown,
+        }
     }
 
     #[tracing::instrument(skip_all, name = "nats.validation_listener")]
     pub async fn run(&self) -> anyhow::Result<()> {
-        let supervisor = TaskSupervisor::background("validation_listener");
-        supervisor.run(|| self.run_once()).await
+        TaskSupervisor::critical(tasknavn::VALIDATION_LISTENER, RESTARTBUDSJETT)
+            .with_shutdown(self.shutdown.clone())
+            .with_helse(&self.helse)
+            .run(|| self.run_once())
+            .await
     }
 
     async fn run_once(&self) -> anyhow::Result<()> {
@@ -60,6 +78,7 @@ impl CommandValidationListener {
     }
 
     async fn handle_message(&self, message: jetstream::Message) -> anyhow::Result<()> {
+        let delivered = leveringsnummer(&message);
         let (payload, acker) = message.split();
 
         let envelope: CommandEnvelope<Command> = match serde_json::from_slice(&payload.payload) {
@@ -78,13 +97,15 @@ impl CommandValidationListener {
         Span::current().record("command_id", tracing::field::display(envelope.command_id));
         crate::telemetry::record_correlation_id(envelope.correlation_id);
 
+        let command_id = envelope.command_id;
         let application_envelope = map_wire_envelope(envelope);
 
         let outcome = match self.service.handle(application_envelope).await {
             Ok(outcome) => outcome,
             Err(err) => {
+                logg_ny_levering(delivered, Some(command_id), "valideringen feilet");
                 error!(error = %err, "validering feilet, ber om ny levering");
-                nak_retryable(&acker).await?;
+                nak_med_backoff(&acker, delivered).await?;
                 return Ok(());
             }
         };
@@ -92,25 +113,12 @@ impl CommandValidationListener {
         // Utfallet og årsaken logges av valideringstjenesten. Her avgjøres
         // bare om meldingen skal leveres på nytt.
         if outcome.is_retryable() {
-            nak_retryable(&acker).await?;
+            logg_ny_levering(delivered, Some(command_id), "valideringen er ikke avklart");
+            nak_med_backoff(&acker, delivered).await?;
         } else {
             ack_terminal(&acker).await?;
         }
 
         Ok(())
     }
-}
-
-async fn ack_terminal(acker: &jetstream::message::Acker) -> anyhow::Result<()> {
-    acker
-        .ack()
-        .await
-        .map_err(|err| anyhow::anyhow!("ack failed: {err}"))
-}
-
-async fn nak_retryable(acker: &jetstream::message::Acker) -> anyhow::Result<()> {
-    acker
-        .ack_with(AckKind::Nak(None))
-        .await
-        .map_err(|err| anyhow::anyhow!("nak failed: {err}"))
 }

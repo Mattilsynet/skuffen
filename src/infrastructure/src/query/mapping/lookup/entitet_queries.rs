@@ -2,7 +2,7 @@ use anyhow::Result;
 use application::command::ports::entitet_port::EntitetRepository;
 use domain::eksekvering::operasjon::EntitetType;
 use domain::model::sak::Saksnummer;
-// use tracing::error;
+use tracing::error;
 use uuid::Uuid;
 
 use std::sync::{Arc, OnceLock, RwLock};
@@ -34,10 +34,12 @@ pub async fn lookup_skuffen_id_fra_arkiv_id(saksnummer: Saksnummer) -> Result<Uu
 
     match maybe_entitet {
         Some(entitet) => Ok(entitet.skuffen_id),
-        None => Err(anyhow::anyhow!(
-            "Skuffen ID ikke funnet for arkiv_id: {}",
-            saksnummer.as_str()
-        )),
+        None => {
+            // Arkividentifikatoren hører hjemme i loggen som strukturert felt,
+            // ikke interpolert inn i feilteksten (SKU-0015 R11).
+            error!(saksnummer = %saksnummer.as_str(), "fant ikke Skuffen-id for arkiv-id");
+            Err(anyhow::anyhow!("Skuffen ID ikke funnet for arkiv_id"))
+        }
     }
 }
 
@@ -47,9 +49,9 @@ pub async fn lookup_arkiv_id_fra_skuffen_id(skuffen_id: Uuid) -> Result<Saksnumm
 
     match maybe_arkiv_id {
         Some(s) => Saksnummer::new(s),
-        None => Err(anyhow::anyhow!(
-            "Arkiv ID ikke funnet for skuffen_id: {}",
-            skuffen_id
-        )),
+        None => {
+            error!(skuffen_id = %skuffen_id, "fant ikke arkiv-id for Skuffen-id");
+            Err(anyhow::anyhow!("Arkiv ID ikke funnet for skuffen_id"))
+        }
     }
 }

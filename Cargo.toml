@@ -31,7 +31,7 @@ enum_glob_use = "deny"
 anyhow = "1.0.103"
 application = { path = "src/application" }
 assert_cmd = "2"
-async-nats = "0.49.1"
+async-nats = "0.50.0"
 async-trait = "0.1.89"
 aws-lc-rs = "1.17.1"
 aws-lc-sys = "0.42.0"
@@ -42,13 +42,13 @@ chrono = "0.4.45"
 clap = "4"
 domain = { path = "src/domain" }
 dotenvy = "0.15.7"
-futures = "0.3.32"
+futures = "0.3.34"
 gcp_auth = "0.12.7"
 http = "1.4.2"
 infrastructure = { path = "src/infrastructure" }
-lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats", tag = "1.7.0" }
-lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas" }
-lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.6.1.1" }
+lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats", tag = "1.7.2" }
+lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas", tag = "1.7.2" }
+lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.7.2" }
 opentelemetry = "0.32.0"
 opentelemetry-otlp = "0.32.0"
 opentelemetry_sdk = "0.32.1"
@@ -68,6 +68,7 @@ thiserror = "2.0.18"
 tokio = "1.52.3"
 tokio-util = "0.7.18"
 toml = "1"
+tower = { version = "0.5.3", default-features = false }
 tracing = "0.1.44"
 tracing-log = "0.2.0"
 tracing-opentelemetry = "0.33.0"

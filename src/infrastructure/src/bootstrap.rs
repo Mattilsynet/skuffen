@@ -33,8 +33,9 @@ use crate::command::nats::command_listener::CommandListener;
 use crate::command::nats::dekomponering_listener::DekomponeringListener;
 use crate::command::nats::validation_listener::CommandValidationListener;
 use crate::http::health_check::health_check;
+use crate::http::helse::Helse;
 use crate::nats::client::NatsClient;
-use crate::nats::jetstream_setup::ensure_media_object_store;
+use crate::nats::jetstream_setup::{ensure_media_object_store, ensure_publiseringsstroemmer};
 use crate::nats::setup::setup_nats;
 use crate::query::adapter::fake_journalpost_repository::FakeJournalpostRepository;
 use crate::query::adapter::fake_sak_repository::FakeSakRepository;
@@ -53,15 +54,27 @@ pub struct RuntimeDeps {
     pub db_pool: lib_sql::database_config::DbPool,
     pub media_store: std::sync::Arc<ObjectStoreMediaStore>,
     pub use_fake_sikri: bool,
+    pub helse: Helse,
 }
 
 pub async fn prepare_runtime() -> anyhow::Result<RuntimeDeps> {
-    let nats = setup_nats().await?;
-    let health_check_handle = health_check().await?;
+    let helse = Helse::new();
+    // Porten først av alt: er NATS nede, ville startup-proben ellers feilet på
+    // at ingenting lytter, uansett hva readiness sier (SKU-0021 R6).
+    let health_check_handle = health_check(helse.clone()).await?;
+
+    let nats = setup_nats(helse.clone()).await?;
     let use_fake_sikri = use_fake_sikri()?;
+
+    ensure_publiseringsstroemmer(
+        &jetstream::new(nats.inner().clone()),
+        nats.jetstream_replicas(),
+    )
+    .await?;
 
     let db_pool = crate::database::setup::setup_database().await?;
     crate::database::setup::run_migrations(&db_pool).await?;
+    helse.sett_migrert(true);
 
     entitet_queries::init_entitet_repo(std::sync::Arc::new(PostgresEntitetRepository::new(
         db_pool.clone(),
@@ -75,6 +88,7 @@ pub async fn prepare_runtime() -> anyhow::Result<RuntimeDeps> {
         db_pool,
         media_store,
         use_fake_sikri,
+        helse,
     })
 }
 
@@ -141,6 +155,8 @@ pub fn build_command_listener(
     nats: NatsClient,
     db_pool: lib_sql::database_config::DbPool,
     media_store: std::sync::Arc<ObjectStoreMediaStore>,
+    helse: Helse,
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> CommandListener {
     let command_service = application::command::services::ingest_command::IngestCommandService::new(
         Box::new(PostgresCommandRepository::new(db_pool.clone())),
@@ -149,13 +165,14 @@ pub fn build_command_listener(
         Box::new(NatsStatusPublisher::new(nats.clone())),
     );
 
-    CommandListener::new(nats, command_service, media_store)
+    CommandListener::new(nats, command_service, media_store, helse, shutdown)
 }
 
 /// Admin read deler ett repository mellom de to use casene.
 pub fn build_admin_listener(
     nats: NatsClient,
     db_pool: lib_sql::database_config::DbPool,
+    helse: Helse,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> AdminListener {
     let repository = std::sync::Arc::new(PostgresAdminReadRepository::new(db_pool));
@@ -164,6 +181,7 @@ pub fn build_admin_listener(
     AdminListener::new(
         std::sync::Arc::new(NatsAdminTransport::new(nats)),
         service,
+        helse,
         shutdown,
     )
 }
@@ -172,6 +190,8 @@ pub fn build_validator_listener(
     nats: NatsClient,
     db_pool: lib_sql::database_config::DbPool,
     use_fake_sikri: bool,
+    helse: Helse,
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> CommandValidationListener {
     let validator_service =
         application::command::services::validate_command::ValidateCommandService::new(
@@ -181,7 +201,7 @@ pub fn build_validator_listener(
             Box::new(NatsStatusPublisher::new(nats.clone())),
         );
 
-    CommandValidationListener::new(nats, validator_service)
+    CommandValidationListener::new(nats, validator_service, helse, shutdown)
 }
 
 pub fn build_eksekvering_components(
@@ -189,6 +209,7 @@ pub fn build_eksekvering_components(
     db_pool: lib_sql::database_config::DbPool,
     media_store: std::sync::Arc<ObjectStoreMediaStore>,
     use_fake_sikri: bool,
+    helse: Helse,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<(
     DekomponeringListener,
@@ -197,12 +218,10 @@ pub fn build_eksekvering_components(
     use application::command::services::{
         dekomponer_command::DekomponerCommandService,
         eksekver_operasjon::EksekverOperasjonService,
-        evaluer_operasjoner::EvaluerOperasjonerService,
         operasjon_worker::{OperasjonWorker, WorkerInnstillinger},
     };
 
-    let operasjon = std::sync::Arc::new(PostgresOperasjonRepository::new(db_pool.clone()));
-    let fakta = std::sync::Arc::new(PostgresFaktaRepository::new(db_pool.clone()));
+    let operasjon_repo = std::sync::Arc::new(PostgresOperasjonRepository::new(db_pool.clone()));
     let publisher = std::sync::Arc::new(NatsStatusPublisher::new(nats.clone()));
 
     let dekomponer_service = DekomponerCommandService::new(
@@ -226,23 +245,23 @@ pub fn build_eksekvering_components(
         avvent_journalfort_poll_intervall(use_fake_sikri),
     );
 
-    let evaluator = EvaluerOperasjonerService::new(operasjon.clone(), fakta, EVALUERINGSGRENSE);
-
+    let shutdown_listener = shutdown.clone();
     let worker = OperasjonWorker::new(
         executor,
-        evaluator,
-        operasjon,
+        operasjon_repo,
         publisher,
         EXECUTOR_ID,
         WorkerInnstillinger::default(),
         shutdown,
     );
 
-    Ok((DekomponeringListener::new(nats, dekomponer_service), worker))
+    Ok((
+        DekomponeringListener::new(nats, dekomponer_service, helse, shutdown_listener),
+        worker,
+    ))
 }
 
 const EXECUTOR_ID: &str = "worker-1";
-const EVALUERINGSGRENSE: i64 = 200;
 /// RPA journalfører i begge utgående løp, med observert latens på en halv til
 /// én time. Intervallet skal tunes mot faktisk RPA-latens.
 ///

@@ -24,6 +24,17 @@ Alt under som beskriver «evalueringspasset» skal leses som «executoren når d
 plukker en forfalt blokkert operasjon». Se
 [SKU-0020](adr/skuffen/SKU-0020-ett-beslutningssted-for-operasjonsutfall.md).
 
+D32 er utvidet: kommandohendelsene er `mottatt | validert | avvist | utfores | fullfort |
+feilet | krever_avklaring`. Den siste kom til fordi `hent_command_outcome` bare telte `ok`
+og `feilet`, så en operasjon med ukjent utfall etter recovery ga stillhet på
+`arkiv.status.<cmd>.command`. Den publiseres med `terminal: false` — utfallet *er* ikke
+avgjort — og taper for `feilet`, som er monotont.
+
+D33 er også utgått: statusstrømmen har ingen `Nats-Msg-Id`. Nøkkelen
+`<operasjon_id>:<attempt_no>` kolliderte for de fire hendelsene som deler
+`attempt_no = 0`, og `duplicate_window` var uansett usatt. Strømmen er
+at-least-once, og sier det nå (SKU-0020 R5).
+
 Avvik fra planen, besluttet under implementasjonen:
 
 - **`muterer_arkivet(RenderDokument) = false`.** D7 sa `AvventJournalført` var eneste `false`, men

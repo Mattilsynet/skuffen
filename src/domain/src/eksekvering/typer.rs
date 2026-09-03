@@ -80,6 +80,11 @@ pub enum CommandEvent {
     Utfores,
     Fullfort,
     Feilet,
+    /// Minst én operasjon har ukjent utfall og må avklares manuelt.
+    ///
+    /// Bevisst ikke terminal: utfallet *er* ikke avgjort, og operasjonen kan
+    /// bli `ok` etter admin write. Monotonien i foldet må bevares.
+    KreverAvklaring,
 }
 
 impl CommandEvent {
@@ -91,6 +96,7 @@ impl CommandEvent {
             Self::Utfores => "utfores",
             Self::Fullfort => "fullfort",
             Self::Feilet => "feilet",
+            Self::KreverAvklaring => "krever_avklaring",
         }
     }
 
@@ -193,11 +199,6 @@ impl CommandStatus {
             timestamp: Utc::now().to_rfc3339(),
         }
     }
-
-    /// Deduplisering bruker id-er vi allerede har i databasen (D33).
-    pub fn message_id(&self) -> String {
-        format!("{}:{}", self.command_id, self.hendelse.as_code())
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,12 +239,6 @@ impl Operasjonstatus {
             error_code,
             timestamp: Utc::now().to_rfc3339(),
         }
-    }
-
-    /// Publiseres kun ved forsøksutfall (D33). Blokkeringsårsak er spørrbar
-    /// tilstand.
-    pub fn message_id(&self) -> String {
-        format!("{}:{}", self.operasjon_id.0, self.attempt_no)
     }
 }
 
@@ -381,34 +376,6 @@ mod tests {
         assert!(!Operasjonshendelse::Varsel.er_terminal());
         assert!(!Operasjonshendelse::ForsokFeilet.er_terminal());
         assert!(!Operasjonshendelse::KreverAvklaring.er_terminal());
-    }
-
-    #[test]
-    fn message_id_bruker_id_er_vi_allerede_har() {
-        let command_id = Uuid::from_u128(1);
-        let command = CommandStatus::new(
-            command_id,
-            None,
-            CommandTypeCode::OpprettSak,
-            CommandEvent::Fullfort,
-            "Ferdig.",
-            None,
-            Statuskontekst::default(),
-        );
-        assert_eq!(command.message_id(), format!("{command_id}:fullfort"));
-
-        let operasjon_id = OperasjonId(Uuid::from_u128(2));
-        let operasjon = Operasjonstatus::new(
-            command_id,
-            None,
-            operasjon_id,
-            Operasjonstype::OpprettSak,
-            Operasjonshendelse::ForsokFeilet,
-            3,
-            "Midlertidig feil.",
-            Some(StatusErrorCode::TemporaryUnavailable),
-        );
-        assert_eq!(operasjon.message_id(), format!("{}:3", operasjon_id.0));
     }
 
     #[test]

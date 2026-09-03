@@ -6,20 +6,67 @@
 use domain::eksekvering::html_template::TemplateFelt;
 use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use domain::eksekvering::tilstand::JournalpostType;
+use domain::model::tilgang::{Tilgangshjemmel, Tilgangskode};
 use uuid::Uuid;
 
 use crate::command::model::{Arkivdel, Korrespondansepart, Utsendingsmottaker};
 
-/// Skjerming, flatet ut slik state-tabellene lagrer den.
+/// Skjerming, paret ved konstruksjon (SKU-0015 R10).
+///
+/// Halv skjerming er ikke representerbar. Tidligere var det to uavhengige
+/// `Option`-felter, og `opprett_sak` behandlet halvtilstanden som en
+/// stilltiende offentlig sak. `CHECK ((tilgangskode IS NULL) = (tilgangshjemmel
+/// IS NULL))` i databasen er nå en backstop, ikke eneste vokter.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Tilgang {
-    pub tilgangskode: Option<String>,
-    pub tilgangshjemmel: Option<String>,
+pub enum Tilgang {
+    #[default]
+    Offentlig,
+    Skjermet {
+        tilgangskode: Tilgangskode,
+        tilgangshjemmel: Tilgangshjemmel,
+    },
 }
 
 impl Tilgang {
+    pub fn tilgangskode(&self) -> Option<&str> {
+        match self {
+            Self::Offentlig => None,
+            Self::Skjermet { tilgangskode, .. } => Some(tilgangskode.as_str()),
+        }
+    }
+
+    pub fn tilgangshjemmel(&self) -> Option<&str> {
+        match self {
+            Self::Offentlig => None,
+            Self::Skjermet {
+                tilgangshjemmel, ..
+            } => Some(tilgangshjemmel.as_str()),
+        }
+    }
+
     pub fn er_skjermet(&self) -> bool {
-        self.tilgangskode.is_some()
+        matches!(self, Self::Skjermet { .. })
+    }
+}
+
+/// Lesing fra de flate state-kolonnene. Halvtilstanden feiler her, der den er
+/// oppdaget, i stedet for å bli tolket som offentlig lenger ute.
+impl TryFrom<(Option<String>, Option<String>)> for Tilgang {
+    type Error = anyhow::Error;
+
+    fn try_from(
+        (tilgangskode, tilgangshjemmel): (Option<String>, Option<String>),
+    ) -> Result<Self, Self::Error> {
+        match (tilgangskode, tilgangshjemmel) {
+            (None, None) => Ok(Self::Offentlig),
+            (Some(kode), Some(hjemmel)) => Ok(Self::Skjermet {
+                tilgangskode: Tilgangskode::new(kode)?,
+                tilgangshjemmel: Tilgangshjemmel::new(hjemmel)?,
+            }),
+            _ => Err(anyhow::anyhow!(
+                "ufullstendig skjerming: tilgangskode og tilgangshjemmel hører sammen"
+            )),
+        }
     }
 }
 

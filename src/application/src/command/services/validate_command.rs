@@ -49,7 +49,7 @@ impl ValidationOutcome {
 /// - `command_execution`
 pub struct ValidateCommandService {
     state_repo: Box<dyn ArkivSakTilstandRepository>,
-    entitet: Box<dyn EntitetRepository>,
+    entitet_repo: Box<dyn EntitetRepository>,
     dispatcher: Box<dyn ValidatedCommandDispatcher>,
     status_publisher: Box<dyn StatusPublisher>,
 }
@@ -62,13 +62,13 @@ impl ValidateCommandService {
     /// `command_execution`.
     pub fn new(
         state_repo: Box<dyn ArkivSakTilstandRepository>,
-        entitet: Box<dyn EntitetRepository>,
+        entitet_repo: Box<dyn EntitetRepository>,
         dispatcher: Box<dyn ValidatedCommandDispatcher>,
         status_publisher: Box<dyn StatusPublisher>,
     ) -> Self {
         Self {
             state_repo,
-            entitet,
+            entitet_repo,
             dispatcher,
             status_publisher,
         }
@@ -88,23 +88,14 @@ impl ValidateCommandService {
                 .record("correlation_id", tracing::field::display(correlation_id));
         }
 
+        // Flat match: alle tre journalpost-variantene bærer samme
+        // `OpprettJournalpostCommand`, og hver gren returnerer tidlig inne i
+        // sin egen funksjon i stedet for å nøste vurderinger.
         let outcome = match envelope.payload.clone() {
-            Command::OpprettSak(c) => match validate_sakstittel_markup(&c) {
-                ValidationOutcome::Ok => ValidationOutcome::Ok,
-                avvist => avvist,
-            },
-            Command::OpprettInngaaendeJournalpost(c) => match validate_journalpost_lokalt(&c) {
-                ValidationOutcome::Ok => self.validate_sak_ref(c.felles().sak_key.clone()).await,
-                avvist => avvist,
-            },
-            Command::OpprettUtgaaendeJournalpost(c) => match validate_journalpost_lokalt(&c) {
-                ValidationOutcome::Ok => self.validate_sak_ref(c.felles().sak_key.clone()).await,
-                avvist => avvist,
-            },
-            Command::OpprettInterntNotatJournalpost(c) => match validate_journalpost_lokalt(&c) {
-                ValidationOutcome::Ok => self.validate_sak_ref(c.felles().sak_key.clone()).await,
-                avvist => avvist,
-            },
+            Command::OpprettSak(c) => self.valider_opprett_sak(&c).await,
+            Command::OpprettInngaaendeJournalpost(c)
+            | Command::OpprettUtgaaendeJournalpost(c)
+            | Command::OpprettInterntNotatJournalpost(c) => self.valider_journalpost(&c).await,
             Command::AvsluttSak(c) => self.validate_sak_ref(c.sak_key).await,
             Command::SettSaksansvarlig(c) => self.validate_sak_ref(c.sak_key).await,
         };
@@ -185,11 +176,57 @@ impl ValidateCommandService {
             .await
     }
 
+    /// `OpprettSak` mot en `client_reference` som allerede er arkivert avvises
+    /// her, ikke i ingest (SKU-0009 R8). Ingest skal ikke ha arkivavhengighet;
+    /// valideringen har den allerede.
+    async fn valider_opprett_sak(
+        &self,
+        command: &crate::command::OpprettSakCommand,
+    ) -> ValidationOutcome {
+        match validate_sakstittel_markup(command) {
+            ValidationOutcome::Ok => {}
+            avvist => return avvist,
+        }
+
+        match self
+            .entitet_repo
+            .hent_for_client_reference(command.client_reference)
+            .await
+        {
+            Ok(Some(entitet)) if entitet.arkiv_id.is_some() => ValidationOutcome::Irrecoverable {
+                message: "Saken er allerede opprettet i arkivet".to_string(),
+                error_code: StatusErrorCode::Conflict,
+            },
+            Ok(_) => ValidationOutcome::Ok,
+            // `message` er klientvendt (SKU-0017 R6). Adapterfeilen hører
+            // hjemme i loggen, ikke i et felt som kan bli publisert senere.
+            Err(err) => {
+                tracing::warn!(error = %format!("{err:#}"), "entitetsoppslag feilet under validering");
+                ValidationOutcome::Recoverable {
+                    message: "Kunne ikke slå opp saken. Nytt forsøk kommer.".to_string(),
+                    error_code: StatusErrorCode::TemporaryUnavailable,
+                }
+            }
+        }
+    }
+
+    async fn valider_journalpost(
+        &self,
+        command: &crate::command::OpprettJournalpostCommand,
+    ) -> ValidationOutcome {
+        match validate_journalpost_lokalt(command) {
+            ValidationOutcome::Ok => {}
+            avvist => return avvist,
+        }
+        self.validate_sak_ref(command.felles().sak_key.clone())
+            .await
+    }
+
     async fn validate_sak_ref(&self, sak_key: SakKey) -> ValidationOutcome {
         match sak_key {
             SakKey::ClientReference(client_reference) => {
                 match self
-                    .entitet
+                    .entitet_repo
                     .hent_for_client_reference(client_reference)
                     .await
                 {

@@ -638,3 +638,77 @@ async fn test_validate_arkiv_id_lookup_error_is_retrying() {
     assert_ingen_status(&events);
     assert_eq!(entitet.calls.lock().unwrap().write_calls, 0);
 }
+
+/// SKU-0009 R8: en `client_reference` som allerede har `arkiv_id` peker på en
+/// sak som finnes i arkivet. En ny `OpprettSak` mot den ville laget en duplikat
+/// sak, og skal avvises her — ikke i ingest, som ikke skal ha
+/// arkivavhengighet.
+#[tokio::test]
+async fn opprett_sak_mot_allerede_arkivert_client_reference_avvises() {
+    let state_repo = FakeArkivSakTilstandRepository::default();
+    let entitet = FakeEntitetRepository::default();
+    entitet.set_skuffen_id_response(SkuffenIdResponse::Ok(Some(Uuid::now_v7())));
+    entitet.set_arkiv_id_response(ArkivIdResponse::Ok(Some("2026/000123".to_string())));
+    let dispatcher = FakeValidatedCommandDispatcher::default();
+    let status_publisher = FakeCommandStatusPublisher::default();
+
+    let service = build_service(
+        state_repo.clone(),
+        entitet.clone(),
+        dispatcher.clone(),
+        status_publisher.clone(),
+    );
+
+    let envelope = wrap_command(make_opprett_sak_command());
+    let command_id = envelope.command_id;
+
+    let outcome = service.handle(envelope).await.unwrap();
+
+    assert!(matches!(
+        outcome,
+        ValidationOutcome::Irrecoverable {
+            error_code: StatusErrorCode::Conflict,
+            ..
+        }
+    ));
+    assert!(
+        dispatcher.dispatched.lock().unwrap().is_empty(),
+        "en avvist kommando skal ikke dekomponeres"
+    );
+
+    let events = status_publisher.events.lock().unwrap();
+    assert_statuses(
+        &events,
+        command_id,
+        CommandEvent::Avvist,
+        Some(StatusErrorCode::Conflict),
+    );
+}
+
+/// En kjent `client_reference` uten `arkiv_id` er en sak Skuffen har mintet
+/// id-er for, men som ennå ikke er opprettet i arkivet. En replay av samme
+/// kommando skal fortsatt slippe gjennom.
+#[tokio::test]
+async fn opprett_sak_mot_kjent_men_uarkivert_client_reference_slipper_gjennom() {
+    let state_repo = FakeArkivSakTilstandRepository::default();
+    let entitet = FakeEntitetRepository::default();
+    entitet.set_skuffen_id_response(SkuffenIdResponse::Ok(Some(Uuid::now_v7())));
+    entitet.set_arkiv_id_response(ArkivIdResponse::Ok(None));
+    let dispatcher = FakeValidatedCommandDispatcher::default();
+    let status_publisher = FakeCommandStatusPublisher::default();
+
+    let service = build_service(
+        state_repo.clone(),
+        entitet.clone(),
+        dispatcher.clone(),
+        status_publisher.clone(),
+    );
+
+    let outcome = service
+        .handle(wrap_command(make_opprett_sak_command()))
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, ValidationOutcome::Ok));
+    assert_eq!(dispatcher.dispatched.lock().unwrap().len(), 1);
+}

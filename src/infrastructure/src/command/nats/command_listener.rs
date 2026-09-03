@@ -1,7 +1,8 @@
 use crate::command::media::MediaStore;
 use crate::command::wire_mapper::map_wire_envelope;
+use crate::http::helse::Helse;
 use crate::nats::client::NatsClient;
-use crate::nats::supervisor::TaskSupervisor;
+use crate::nats::supervisor::{RESTARTBUDSJETT, TaskSupervisor, tasknavn};
 use application::command::services::ingest_command::IngestCommandService;
 use async_nats::Message;
 use futures::StreamExt;
@@ -10,12 +11,15 @@ use lib_schemas::skuffen::command::commands::{
 };
 use lib_schemas::skuffen::dokument::{Dokument, Dokumentform, Felt};
 use std::collections::HashSet;
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, error, info};
 
 pub struct CommandListener {
     client: NatsClient,
     service: IngestCommandService,
     media_store: std::sync::Arc<dyn MediaStore>,
+    helse: Helse,
+    shutdown: CancellationToken,
 }
 
 impl CommandListener {
@@ -23,18 +27,25 @@ impl CommandListener {
         client: NatsClient,
         service: IngestCommandService,
         media_store: std::sync::Arc<dyn MediaStore>,
+        helse: Helse,
+        shutdown: CancellationToken,
     ) -> Self {
         Self {
             client,
             service,
             media_store,
+            helse,
+            shutdown,
         }
     }
 
     #[tracing::instrument(skip_all, name = "nats.command_listener")]
     pub async fn run(&self) -> anyhow::Result<()> {
-        let supervisor = TaskSupervisor::critical("command_listener", 3);
-        supervisor.run(|| self.run_once()).await
+        TaskSupervisor::critical(tasknavn::COMMAND_LISTENER, RESTARTBUDSJETT)
+            .with_shutdown(self.shutdown.clone())
+            .with_helse(&self.helse)
+            .run(|| self.run_once())
+            .await
     }
 
     async fn run_once(&self) -> anyhow::Result<()> {

@@ -648,3 +648,162 @@ async fn ugyldig_payload_avvises_paa_wire_grensen() -> Result<()> {
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Ett beslutningssted (SKU-0020 R1)
+// ---------------------------------------------------------------------------
+//
+// Regresjonstestene for hovedbugen. Før SKU-0020 traff evalueringspasset
+// operasjonen først, skrev den terminal og publiserte ingenting. For
+// kommandoer som dekomponerer til én operasjon ble hele kommandoen stille for
+// alltid — klienten fikk `Utfores` og deretter ingenting.
+
+fn opprett_sak_for(client_reference: Uuid, tittel: &str) -> CommandEnvelope<Command> {
+    CommandEnvelope {
+        command_id: Uuid::new_v4(),
+        correlation_id: Some(Uuid::new_v4()),
+        payload: Command::OpprettSak(OpprettSak {
+            client_reference,
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
+                "{tittel} {}",
+                Uuid::new_v4()
+            ))
+            .unwrap(),
+            arkivdel: Arkivdel::Tilsynsdivisjonene,
+            saksbehandler_id: "Z12345".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())
+                .unwrap(),
+            tilgjengelighet: Tilgjengelighet::Offentlig,
+        }),
+    }
+}
+
+fn avslutt_sak_for(client_reference: Uuid) -> CommandEnvelope<Command> {
+    CommandEnvelope {
+        command_id: Uuid::new_v4(),
+        correlation_id: Some(Uuid::new_v4()),
+        payload: Command::AvsluttSak(AvsluttSak {
+            sak_key: DtoSakKey::ClientReference(client_reference),
+        }),
+    }
+}
+
+fn assert_terminal_hendelse(
+    events: &[SkuffenCommandStatusV1],
+    command_id: Uuid,
+    forventet: SkuffenCommandEvent,
+) {
+    let mine: Vec<&SkuffenCommandStatusV1> = events
+        .iter()
+        .filter(|event| event.command_id == command_id)
+        .collect();
+
+    let terminal = mine
+        .iter()
+        .find(|event| event.terminal)
+        .unwrap_or_else(|| panic!("ingen terminal hendelse for {command_id}, fikk {mine:?}"));
+
+    assert_eq!(
+        terminal.hendelse, forventet,
+        "feil terminal hendelse for {command_id}, fikk {mine:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn avslutt_sak_to_ganger_gir_terminalt_utfall_begge_ganger() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let sak_client_reference = Uuid::new_v4();
+    let opprett_sak = opprett_sak_for(sak_client_reference, "Avslutt to ganger");
+    let forste = avslutt_sak_for(sak_client_reference);
+
+    send_command_batch(&env.nats_url, &[opprett_sak.clone(), forste.clone()]).await?;
+    let events = wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id, forste.command_id],
+        Duration::from_secs(30),
+    )
+    .await?;
+    assert_terminal_hendelse(&events, forste.command_id, SkuffenCommandEvent::Fullfort);
+
+    // Andre gang er saken allerede avsluttet. `AlleredeUtfort` er et
+    // ok-utfall, og skal nå klienten som et terminalt event.
+    let andre = avslutt_sak_for(sak_client_reference);
+    send_command_batch(&env.nats_url, std::slice::from_ref(&andre)).await?;
+    let events =
+        wait_for_status_events(&env.nats_url, [andre.command_id], Duration::from_secs(30)).await?;
+
+    assert_terminal_hendelse(&events, andre.command_id, SkuffenCommandEvent::Fullfort);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sett_saksansvarlig_uten_endring_gir_terminalt_utfall() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let sak_client_reference = Uuid::new_v4();
+    let opprett_sak = opprett_sak_for(sak_client_reference, "Saksansvarlig uten endring");
+    let sak_key = || DtoSakKey::ClientReference(sak_client_reference);
+
+    let scenario = CommandScenario::new();
+    let forste = scenario.sett_saksansvarlig(sak_key(), "Z99999", "42");
+
+    send_command_batch(&env.nats_url, &[opprett_sak.clone(), forste.clone()]).await?;
+    let events = wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id, forste.command_id],
+        Duration::from_secs(30),
+    )
+    .await?;
+    assert_terminal_hendelse(&events, forste.command_id, SkuffenCommandEvent::Fullfort);
+
+    // Samme verdi en gang til: ingenting å gjøre i arkivet, men klienten skal
+    // likevel få vite at forespørselen er ferdig.
+    let andre = scenario.sett_saksansvarlig(sak_key(), "Z99999", "42");
+    send_command_batch(&env.nats_url, std::slice::from_ref(&andre)).await?;
+    let events =
+        wait_for_status_events(&env.nats_url, [andre.command_id], Duration::from_secs(30)).await?;
+
+    assert_terminal_hendelse(&events, andre.command_id, SkuffenCommandEvent::Fullfort);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn html_mal_som_vedlegg_gir_terminal_feilet_ikke_stillhet() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let scenario = CommandScenario::new();
+    publish_media(&env.nats_url, scenario.dokument_referanse).await?;
+    publish_media(&env.nats_url, scenario.mal_referanse).await?;
+
+    let opprett_sak = scenario.opprett_sak_med_tilgjengelighet(
+        "Z12345",
+        "42",
+        format!("HTML-mal som vedlegg {}", Uuid::new_v4()),
+        Tilgjengelighet::Offentlig,
+    );
+    send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
+    wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id],
+        Duration::from_secs(30),
+    )
+    .await?;
+
+    // `LeggTilVedlegg` er `Ugyldig` ved første vurdering. Beslutningen tas i
+    // executoren, som også publiserer — den kan ikke skrives terminal noe
+    // annet sted.
+    let notat = scenario.opprett_internt_notat_med_html_vedlegg(
+        "Z12345",
+        "42",
+        DtoSakKey::ClientReference(scenario.sak_client_reference),
+        "Notat med mal som vedlegg",
+    );
+    send_command_batch(&env.nats_url, std::slice::from_ref(&notat)).await?;
+    let events =
+        wait_for_status_events(&env.nats_url, [notat.command_id], Duration::from_secs(30)).await?;
+
+    assert_terminal_hendelse(&events, notat.command_id, SkuffenCommandEvent::Feilet);
+    Ok(())
+}

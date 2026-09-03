@@ -35,8 +35,8 @@ enum Utfall {
 /// transaksjon etterpå. Der ligger at-most-once-grensen — en DB-feil etter et
 /// vellykket arkivskriv gir `krever_avklaring`, ikke et duplikat.
 pub struct EksekverOperasjonService {
-    operasjon: Box<dyn OperasjonRepository>,
-    fakta: Box<dyn FaktaRepository>,
+    operasjon_repo: Box<dyn OperasjonRepository>,
+    fakta_repo: Box<dyn FaktaRepository>,
     gateway: Box<dyn ArkivGateway>,
     render: Box<dyn RenderOperasjon>,
     publisher: Box<dyn StatusPublisher>,
@@ -58,8 +58,8 @@ pub trait RenderOperasjon: Send + Sync {
 
 impl EksekverOperasjonService {
     pub fn new(
-        operasjon: Box<dyn OperasjonRepository>,
-        fakta: Box<dyn FaktaRepository>,
+        operasjon_repo: Box<dyn OperasjonRepository>,
+        fakta_repo: Box<dyn FaktaRepository>,
         gateway: Box<dyn ArkivGateway>,
         render: Box<dyn RenderOperasjon>,
         publisher: Box<dyn StatusPublisher>,
@@ -67,8 +67,8 @@ impl EksekverOperasjonService {
         poll_intervall: Duration,
     ) -> Self {
         Self {
-            operasjon,
-            fakta,
+            operasjon_repo,
+            fakta_repo,
             gateway,
             render,
             publisher,
@@ -79,7 +79,7 @@ impl EksekverOperasjonService {
 
     /// Kjører neste kjørbare operasjon. `Ok(false)` betyr at køen er tom.
     pub async fn run_next(&self) -> Result<bool> {
-        let Some(op) = self.operasjon.hent_neste_kjorbare().await? else {
+        let Some(op) = self.operasjon_repo.hent_neste_kjorbare().await? else {
             return Ok(false);
         };
         self.execute(op).await?;
@@ -104,7 +104,7 @@ impl EksekverOperasjonService {
         // Kun til spanet. Publiseringen leser sin egen kopi etterpå, fordi
         // kontekst endrer seg mens operasjonen kjører.
         let command = self
-            .operasjon
+            .operasjon_repo
             .hent_command_metadata(op.operasjon_id)
             .await?;
 
@@ -114,8 +114,13 @@ impl EksekverOperasjonService {
             span.record("correlation_id", tracing::field::display(correlation_id));
         }
 
+        // Asserterer en databaseinvariant, ikke en tilstand som kan oppstå:
+        // `operasjon.sak_id` peker på `sak_tilstand(sak_id)` uten CASCADE, og
+        // `sak_tilstand.sak_id` på `entitet(skuffen_id)`. Finnes operasjonen,
+        // må begge radene finnes. `None` betyr at noen har droppet
+        // fremmednøklene manuelt.
         let facts = self
-            .fakta
+            .fakta_repo
             .hent_sak_med_barn(op.sak_id)
             .await?
             .ok_or_else(|| anyhow!("sak facts missing for operasjon"))?;
@@ -126,13 +131,13 @@ impl EksekverOperasjonService {
                 // publiserer ikke ved `blokkert ↔ klar`-flakking. Loggen er
                 // det eneste stedet årsaken blir synlig i øyeblikket.
                 tracing::info!(grunn = grunn.safe_detail(), "operasjon blokkert");
-                self.operasjon
+                self.operasjon_repo
                     .marker_blokkert(op.operasjon_id, None, &grunn.safe_detail())
                     .await?;
             }
             Beslutning::AlleredeUtfort => {
                 tracing::info!("operasjon allerede utført");
-                self.operasjon
+                self.operasjon_repo
                     .fullfor_ok(op.operasjon_id, 0, Faktaoppdatering::Ingen)
                     .await?;
                 self.publiser(&op, Operasjonshendelse::Ok, 0, "Allerede utført.", None)
@@ -140,7 +145,7 @@ impl EksekverOperasjonService {
             }
             Beslutning::Ugyldig(brudd) => {
                 tracing::warn!(brudd = brudd.safe_detail(), "operasjon er ugyldig");
-                self.operasjon
+                self.operasjon_repo
                     .marker_feilet(op.operasjon_id, 0, &brudd.safe_detail())
                     .await?;
                 self.publiser(
@@ -162,7 +167,10 @@ impl EksekverOperasjonService {
         if op.operasjonstype == Operasjonstype::AvsluttSak {
             // Eneste unntak fra facts-only-regelen (D4): den trenger å vite at
             // alle andre operasjoner på saken er terminalt ok.
-            let sosken = self.operasjon.hent_sammendrag_for_sak(op.sak_id).await?;
+            let sosken = self
+                .operasjon_repo
+                .hent_sammendrag_for_sak(op.sak_id)
+                .await?;
             Ok(vurder_avslutt_sak(op, facts, &sosken))
         } else {
             Ok(vurder(op, facts))
@@ -171,7 +179,7 @@ impl EksekverOperasjonService {
 
     async fn utfor(&self, op: &Operasjon, facts: &SakMedBarn) -> Result<()> {
         let attempt_no = self
-            .operasjon
+            .operasjon_repo
             .marker_kjorer(op.operasjon_id, &self.executor_id)
             .await?;
         tracing::Span::current().record("attempt_no", attempt_no);
@@ -179,14 +187,14 @@ impl EksekverOperasjonService {
         // At-most-once-grensen. Idempotente operasjoner hopper over den og kan
         // retryes fritt i stedet for å havne i `krever_avklaring`.
         if muterer_arkivet(op.operasjonstype) {
-            self.operasjon
+            self.operasjon_repo
                 .marker_sendt(op.operasjon_id, attempt_no)
                 .await?;
         }
 
         match self.arkivkall(op, facts).await {
             Ok(Utfall::Ferdig(oppdatering)) => {
-                self.operasjon
+                self.operasjon_repo
                     .fullfor_ok(op.operasjon_id, attempt_no, oppdatering)
                     .await
                     .context("failed to commit successful operation")?;
@@ -200,7 +208,7 @@ impl EksekverOperasjonService {
                 // Poller mot RPA og kan vente i timer. Uten denne er ventingen
                 // usynlig i loggen.
                 tracing::info!(attempt_no, neste_forsok_at = %neste, "operasjon venter, poller igjen");
-                self.operasjon
+                self.operasjon_repo
                     .fullfor_poll(op.operasjon_id, attempt_no, oppdatering, neste)
                     .await?;
             }
@@ -217,7 +225,7 @@ impl EksekverOperasjonService {
                     neste_forsok_at = %neste,
                     "operasjonsforsøk feilet, nytt forsøk kommer"
                 );
-                self.operasjon
+                self.operasjon_repo
                     .marker_retry(op.operasjon_id, attempt_no, &feil.siste_detalj(), neste)
                     .await?;
                 self.publiser(
@@ -236,7 +244,7 @@ impl EksekverOperasjonService {
                     error_code = feil.error_code.as_code(),
                     "operasjon feilet terminalt"
                 );
-                self.operasjon
+                self.operasjon_repo
                     .marker_feilet(op.operasjon_id, attempt_no, &feil.siste_detalj())
                     .await?;
                 self.publiser(
@@ -301,7 +309,7 @@ impl EksekverOperasjonService {
 
     async fn opprett_sak(&self, op: &Operasjon) -> Result<Utfall, EksekveringFeil> {
         let attributter = self
-            .fakta
+            .fakta_repo
             .hent_sak_attributter(op.sak_id)
             .await
             .map_err(|err| {
@@ -349,7 +357,7 @@ impl EksekverOperasjonService {
     ) -> Result<Utfall, EksekveringFeil> {
         let dokument_id = krev_dokument(op)?;
         let attributter = self
-            .fakta
+            .fakta_repo
             .hent_dokument_attributter(dokument_id)
             .await
             .map_err(|err| {
@@ -403,7 +411,7 @@ impl EksekverOperasjonService {
         let journalpost_arkiv_id = krev_journalpost_arkiv_id(journalpost.arkiv_id.as_deref())?;
 
         let attributter = self
-            .fakta
+            .fakta_repo
             .hent_dokument_attributter(dokument_id)
             .await
             .map_err(|err| {
@@ -434,7 +442,7 @@ impl EksekverOperasjonService {
         let saksnummer = krev_arkiv_id(facts.arkiv_id.as_deref(), "intern_sak_arkiv_id_mangler")?;
 
         let attributter = self
-            .fakta
+            .fakta_repo
             .hent_journalpost_attributter(journalpost_id)
             .await
             .map_err(|err| {
@@ -444,7 +452,7 @@ impl EksekverOperasjonService {
             .ok_or_else(|| EksekveringFeil::intern("intern_journalpost_attributter_mangler"))?;
 
         let dokumenter = self
-            .fakta
+            .fakta_repo
             .hent_dokumenter_for_journalpost(journalpost_id)
             .await
             .map_err(|err| {
@@ -492,7 +500,7 @@ impl EksekverOperasjonService {
         let journalpost_id = krev_journalpost(op)?;
         let arkiv_id = self.journalpost_arkiv_id(facts, op)?;
         let attributter = self
-            .fakta
+            .fakta_repo
             .hent_journalpost_attributter(journalpost_id)
             .await
             .map_err(|err| {
@@ -569,7 +577,7 @@ impl EksekverOperasjonService {
         error_code: Option<StatusErrorCode>,
     ) -> Result<()> {
         let command = self
-            .operasjon
+            .operasjon_repo
             .hent_command_metadata(op.operasjon_id)
             .await?;
 
@@ -600,7 +608,7 @@ impl EksekverOperasjonService {
     ///
     async fn publiser_command_outcome(&self, command: &CommandMetadata) -> Result<()> {
         let utfall = self
-            .operasjon
+            .operasjon_repo
             .hent_command_outcome(command.command_id)
             .await?;
 
@@ -612,6 +620,11 @@ impl EksekverOperasjonService {
             CommandOutcome::Feilet => (
                 CommandEvent::Feilet,
                 "Forespørselen kunne ikke fullføres.",
+                Some(StatusErrorCode::ProcessingFailed),
+            ),
+            CommandOutcome::KreverAvklaring => (
+                CommandEvent::KreverAvklaring,
+                "Utfallet er ukjent og må avklares manuelt.",
                 Some(StatusErrorCode::ProcessingFailed),
             ),
         };

@@ -8,9 +8,33 @@ use crate::error_mapping::SikriFeil;
 use crate::secret::get_secret;
 use reqwest::Client;
 use std::env;
+use std::sync::OnceLock;
+use std::time::Duration;
 use tracing::{debug, error, info};
 
 const SIKRI_ERROR_RESPONSE_LOG_CHUNK_BYTES: usize = 60_000;
+
+/// Hvor lenge vi venter på TCP-oppkobling mot arkivet.
+const ARKIV_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Taket for et helt arkivkall. Dekker verste dokumentopplasting — 100 MB rå
+/// blir ~134 MB base64 i en JSON-body — med margin.
+///
+/// Uten et tak stopper én hengende forbindelse **all** eksekvering:
+/// executoren er enleder via advisory lock, og reqwest har ingen default.
+const ARKIV_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Delt klient for arkivkall. Gir connection pooling og TLS-gjenbruk i
+/// tillegg til timeouten.
+fn arkiv_client() -> &'static Client {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .connect_timeout(ARKIV_CONNECT_TIMEOUT)
+            .timeout(ARKIV_TIMEOUT)
+            .build()
+            .expect("arkivklienten har statisk konfigurasjon")
+    })
+}
 
 fn base_url() -> String {
     env::var("BASE_URL_SIKRI").unwrap_or_else(|_| {
@@ -228,7 +252,7 @@ pub async fn alive() -> Result<(), SikriFeil> {
 
     let url = format!("{}/api/Archive/Test", base_url());
     info!(target: "sikri.http", method = "GET", endpoint = safe_endpoint_label(&url), "Sending request to Sikri");
-    let resp = Client::new()
+    let resp = arkiv_client()
         .get(&url)
         .basic_auth(username, Some(password))
         .send()
@@ -262,7 +286,7 @@ pub async fn get_sak(
         "Sending request to Sikri"
     );
 
-    let resp = Client::new()
+    let resp = arkiv_client()
         .get(&url)
         .query(&params)
         .basic_auth(username, Some(password))
@@ -304,7 +328,7 @@ pub async fn hent_journalpost(
         "Sending request to Sikri"
     );
 
-    let resp = Client::new()
+    let resp = arkiv_client()
         .get(&url)
         .query(&[("journalpostId", journalpost_id.to_string())])
         .basic_auth(username, Some(password))
@@ -342,7 +366,7 @@ pub async fn create_sak(
         endpoint = safe_endpoint_label(&url),
         "Sending OpprettArkivsak request to Sikri"
     );
-    let resp = Client::new()
+    let resp = arkiv_client()
         .post(&url)
         .basic_auth(username, Some(password))
         .json(&data)
@@ -378,7 +402,7 @@ pub async fn opprett_journalpost(
         endpoint = safe_endpoint_label(&url),
         "Sending OpprettJournalpost request to Sikri"
     );
-    let mut request = Client::new()
+    let mut request = arkiv_client()
         .post(&url)
         .basic_auth(username, Some(password));
     if let Some(kildesystem) = kildesystem {
@@ -419,7 +443,7 @@ pub async fn legg_til_vedlegg(
         dokument_count = dokumenter.len(),
         "Sending LeggTilVedlegg request to Sikri"
     );
-    let resp = Client::new()
+    let resp = arkiv_client()
         .post(&url)
         .basic_auth(username, Some(password))
         .query(&[("journalpostId", journalpost_id.to_string())])
@@ -454,7 +478,7 @@ pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Resul
         journalpost_status = status,
         "Sending request to Sikri"
     );
-    let resp = Client::new()
+    let resp = arkiv_client()
         .put(&url)
         .basic_auth(username, Some(password))
         .query(&[
@@ -475,7 +499,7 @@ pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Resul
 )]
 pub async fn avskriv_journalpost(request: AvskrivJournalpost<'_>) -> Result<(), SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
-    send_avskriv_journalpost(&Client::new(), &base_url(), &username, &password, request).await
+    send_avskriv_journalpost(arkiv_client(), &base_url(), &username, &password, request).await
 }
 
 async fn send_avskriv_journalpost(
@@ -525,7 +549,7 @@ pub async fn avslutt_sak(saksnummer: &str) -> Result<(), SikriFeil> {
         endpoint = safe_endpoint_label(&url),
         "Sending request to Sikri"
     );
-    let resp = Client::new()
+    let resp = arkiv_client()
         .put(&url)
         .basic_auth(username, Some(password))
         .query(&[("saksnr", saksnummer), ("nySaksstatus", "A")])
@@ -550,7 +574,7 @@ pub async fn sett_saksansvarlig(
         endpoint = safe_endpoint_label(&url),
         "Sending SetSaksansvarligIdForArkivSak request to Sikri"
     );
-    let resp = Client::new()
+    let resp = arkiv_client()
         .put(&url)
         .basic_auth(username, Some(password))
         .query(&[

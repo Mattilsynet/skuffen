@@ -182,20 +182,19 @@ impl OperasjonRepository for FakeOperasjonRepository {
         Ok(())
     }
 
-    async fn marker_klar(&self, _operasjon_id: OperasjonId) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
     async fn gjenopprett_etter_restart(&self) -> Result<Gjenoppretting, anyhow::Error> {
         Ok(Gjenoppretting::default())
     }
 
-    async fn hent_blokkerte(&self, _grense: i64) -> Result<Vec<Operasjon>, anyhow::Error> {
+    async fn hent_krever_avklaring(&self) -> Result<Vec<Operasjon>, anyhow::Error> {
         Ok(Vec::new())
     }
 
-    async fn hent_krever_avklaring(&self) -> Result<Vec<Operasjon>, anyhow::Error> {
-        Ok(Vec::new())
+    async fn marker_avklaring_varslet(
+        &self,
+        _operasjon_id: OperasjonId,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
     }
 
     async fn hent_sammendrag_for_sak(
@@ -287,12 +286,16 @@ impl FaktaRepository for FakeFaktaRepository {
     }
 }
 
+/// Argumentene et avskrivingskall ble gjort med: journalpostnummer,
+/// avskrivingsmåte og avskrevet av.
+type Avskrivingsargumenter = (i32, Option<String>, Option<String>);
+
 /// Gateway som feiler med nøyaktig den feilen testen ber om.
 #[derive(Clone)]
 struct FeilendeArkivGateway {
     feil: EksekveringFeil,
     kall: Arc<Mutex<usize>>,
-    avskrivingskall: Arc<Mutex<Option<(i32, Option<String>, Option<String>)>>>,
+    avskrivingskall: Arc<Mutex<Option<Avskrivingsargumenter>>>,
 }
 
 impl FeilendeArkivGateway {
@@ -313,7 +316,7 @@ impl FeilendeArkivGateway {
         Err(self.feil.clone())
     }
 
-    fn avskrivingskall(&self) -> Option<(i32, Option<String>, Option<String>)> {
+    fn avskrivingskall(&self) -> Option<Avskrivingsargumenter> {
         self.avskrivingskall.lock().unwrap().clone()
     }
 }

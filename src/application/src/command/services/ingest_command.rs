@@ -16,22 +16,22 @@ use crate::command::{Command, CommandEnvelope, SakKey};
 /// og først da sett milepælen. Feiler dispatch, står milepælen som `NULL`, og
 /// en klient-retry sender kommandoen på nytt.
 pub struct IngestCommandService {
-    command: Box<dyn CommandRepository>,
-    entitet: Box<dyn EntitetRepository>,
+    command_repo: Box<dyn CommandRepository>,
+    entitet_repo: Box<dyn EntitetRepository>,
     dispatcher: Box<dyn CommandDispatcher>,
     status_publisher: Box<dyn StatusPublisher>,
 }
 
 impl IngestCommandService {
     pub fn new(
-        command: Box<dyn CommandRepository>,
-        entitet: Box<dyn EntitetRepository>,
+        command_repo: Box<dyn CommandRepository>,
+        entitet_repo: Box<dyn EntitetRepository>,
         dispatcher: Box<dyn CommandDispatcher>,
         status_publisher: Box<dyn StatusPublisher>,
     ) -> Self {
         Self {
-            command,
-            entitet,
+            command_repo,
+            entitet_repo,
             dispatcher,
             status_publisher,
         }
@@ -68,7 +68,7 @@ impl IngestCommandService {
         }
 
         let mottak = self
-            .command
+            .command_repo
             .registrer_mottatt(&envelope)
             .await
             .context("failed to record command receipt")?;
@@ -86,7 +86,7 @@ impl IngestCommandService {
             .context("failed to dispatch command")?;
 
         // Milepælen settes først når dispatch faktisk lyktes.
-        self.command
+        self.command_repo
             .marker_dispatchet(command_id)
             .await
             .context("failed to mark command dispatched")?;
@@ -159,7 +159,7 @@ impl IngestCommandService {
     /// fra en kommando som faktisk oppretter saken.
     async fn knytt_arkiv_id(&self, sak_key: &SakKey) -> Result<()> {
         if let SakKey::ArkivId(arkiv_id) = sak_key {
-            self.entitet
+            self.entitet_repo
                 .hent_eller_opprett_for_arkiv_id(EntitetType::Sak, arkiv_id)
                 .await
                 .context("failed to resolve sak by arkiv id")?;
@@ -173,7 +173,7 @@ impl IngestCommandService {
         client_reference: Option<Uuid>,
         arkiv_id: Option<String>,
     ) -> Result<()> {
-        self.entitet
+        self.entitet_repo
             .registrer(NyEntitet {
                 skuffen_id: Uuid::now_v7(),
                 entitet_type,

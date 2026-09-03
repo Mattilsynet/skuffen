@@ -351,11 +351,17 @@ Strømmen **er** loggen; en klient som vil ha historikken lager en consumer med 
 `terminal: true` betyr at **utfallet er avgjort**, ikke at flere meldinger er utelukket.
 Operasjonsmeldinger kan fortsette etterpå, fordi søskenoperasjoner kjører videre best effort.
 
-Meldingene dedupliseres i dag på `Nats-Msg-Id` innenfor JetStreams `duplicate_window`
-(serverdefault to minutter). Behandle likevel strømmen som **at-least-once** — vinduet er
-kort, og dedupliseringen fjernes (SKU-0020 R5). Det
-gjelder særlig `Feilet` på `.command`: den publiseres hver gang en operasjon feiler
-terminalt, så feiler to vedlegg på samme journalpost kommer den to ganger.
+Hendelser på `.command`: `mottatt`, `validert`, `avvist`, `utfores`, `fullfort`, `feilet` og
+`krever_avklaring`. De tre siste er utfall; `avvist`, `fullfort` og `feilet` er terminale.
+`krever_avklaring` er det ikke: et arkivkall gikk ut med ukjent utfall og må ryddes manuelt,
+og operasjonen kan bli `ok` etterpå. Den publiseres ved oppstart etter en avbrutt kjøring,
+og bare når ingen søskenoperasjon allerede har feilet terminalt — `feilet` er monotont.
+
+Statusstrømmen er **at-least-once og deduplisert av ingen** (SKU-0020 R5). Klienten må
+tåle duplikater. Det gjelder særlig `Feilet` på `.command`: den publiseres hver gang en
+operasjon feiler terminalt, så feiler to vedlegg på samme journalpost kommer den to
+ganger. Inbox- og ready-strømmene beholder `Nats-Msg-Id` på `command_id`, fordi de
+beskytter mot dobbel dekomponering — en annen sak.
 
 Alle JetStream-streams og `arkiv_media` object store konfigureres med `num_replicas = 3`.
 
@@ -385,10 +391,11 @@ arkivkall, med egen id, egen status, egen retry og egen statuslinje utad.
   recoverable og blokkerte utfall NAKes for redelivery.
 - NATS `arkiv.command.ready.*` brukes til dekomponering. Meldingen ACKes når kommandoen er
   dekomponert til operasjonsrader — alt i én transaksjon, så en replay setter inn null rader.
-- Eksekvering styres av en intern worker som plukker operasjoner i `klar`, eller `retry_venter` med
-  forfalt frist. Ett periodisk evalueringspass frigjør `blokkert`-operasjoner når fakta tilsier det.
-  *Planlagt: passet erstattes av én forfallsklokke der også `blokkert` plukkes når fristen er ute
-  (SKU-0020).*
+- Eksekvering styres av en intern worker som plukker operasjoner etter en forfallsklokke:
+  `klar`, `retry_venter` og `blokkert` med `neste_forsok_at <= now()`, i forfallsrekkefølge. En
+  blokkert operasjon vurderes på nytt hvert 30. sekund, og blokkerte søsken på samme sak settes
+  forfalt når en operasjon fullfører. Utfall avgjøres kun av executoren
+  ([SKU-0020](docs/adr/skuffen/SKU-0020-ett-beslutningssted-for-operasjonsutfall.md)).
 - Skriveoperasjoner commiter `klar → sendt` **før** arkivkallet, og `sendt → ok` med arkivsvar og
   faktaoppdatering i én transaksjon etterpå. En operasjon funnet i `sendt` ved oppstart har ukjent
   utfall og går til `krever_avklaring` for manuell opprydding.
@@ -405,11 +412,11 @@ arkivkall, med egen id, egen status, egen retry og egen statuslinje utad.
 ## Runtime-prioritering
 
 - `command_listener`, `media_listener` og `health_check` regnes som kritiske for opptak. `command_listener` har et begrenset internt restartbudsjett. `media_listener` drives av `ChunkedUploadServer`; hvis serveren stopper eller feiler, avsluttes prosessen slik at Cloud Run kan restarte instansen. Ved shutdown stopper den nye `begin`-requests og gir aktive receiver-sessioner fem sekunder til å fullføre.
-- `validation_listener`, `execution_listener`, `execution_worker`, `query_listener`, `admin_listener` og `ready_replier` regnes som degradérbare: hvis de stopper eller feiler, logger Skuffen feilen og holder prosessen i live. `query_listener` dekker `arkiv.request.sak.hent`, `arkiv.request.journalpost.hent` og `arkiv.request.bruker.mt_enheter`. `admin_listener` dekker `arkiv.admin.read.command.hent` og `arkiv.admin.read.sak.hent`.
+- `validation_listener`, `execution_listener`, `execution_worker`, `query_listener`, `admin_listener` og `ready_replier` regnes som degradérbare. `query_listener` dekker `arkiv.request.sak.hent`, `arkiv.request.journalpost.hent` og `arkiv.request.bruker.mt_enheter`. `admin_listener` dekker `arkiv.admin.read.command.hent` og `arkiv.admin.read.sak.hent`.
+- Alle åtte arbeidstasks kjører under `TaskSupervisor` med et rullende restartbudsjett på fem forsøk og nedstengingssignalet. **Tømt budsjett avslutter prosessen uansett kritikalitet** ([SKU-0021](docs/adr/skuffen/SKU-0021-bakgrunnstasks-er-supervisert.md) R3): en task som ikke kom seg opp av fem restarter er ikke degradert, den er død. Kritikalitet styrer bare hva som skjer når en task avslutter rent utenfor nedstenging.
 - Ved SIGTERM avslutter Skuffen kontrollert: tasks får åtte sekunder på å avslutte selv, og resten aborteres. Det holder oss innenfor Cloud Runs ti sekunder.
-- Helsesjekken svarer i dag 200 på `/` uten å sjekke noe.
-
-*Planlagt (SKU-0021): alle arbeidstasks under supervisor med endelig restartbudsjett på fem, tømt budsjett avslutter prosessen uansett kritikalitet, og `/health/live` + `/health/ready` der readiness aggregerer migrasjoner, NATS og tasktilstand. Konfigurer ikke Cloud Run-prober mot disse stiene før steget er implementert.*
+- Helsesjekken har to endepunkter. `/health/live` svarer alltid 200 og beviser bare at runtimen svarer — den avhenger av ingenting. `/health/ready` svarer 200 når migrasjonene er ferdige, NATS er tilkoblet og alle superviserte tasks er oppe, ellers 503. `/` er alias for `/health/live`. Porten bindes først av alt, før NATS og migrasjoner, slik at startup-proben kan lykkes.
+- Readiness styrer ikke NATS-trafikk, som går utenom Cloud Runs load balancer. Readiness er et signal til mennesker; liveness og prosess-exit er håndhevelsen.
 
 ---
 

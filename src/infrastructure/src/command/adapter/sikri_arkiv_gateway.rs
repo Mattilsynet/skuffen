@@ -104,17 +104,17 @@ impl ArkivGateway for SikriArkivGateway {
             saksbehandler_id: attributter.saksbehandler_id.clone(),
             saksbehandler_enhet: attributter.saksbehandler_enhet.clone(),
             ordningsverdi: attributter.ordningsverdi.clone(),
-            tilgang: match (
-                attributter.tilgang.tilgangskode.as_ref(),
-                attributter.tilgang.tilgangshjemmel.as_ref(),
-            ) {
-                (Some(tilgangskode), Some(tilgangshjemmel)) => {
-                    Some(sikri_client::domain::ny_sak::Tilgang {
-                        tilgangskode: tilgangskode.clone(),
-                        tilgangshjemmel: tilgangshjemmel.clone(),
-                    })
-                }
-                _ => None,
+            // Ingen `_ => None`: halv skjerming er ikke representerbar, så
+            // en skjermet sak kan ikke bli offentlig ved et uhell (SKU-0015 R10).
+            tilgang: match &attributter.tilgang {
+                Tilgang::Offentlig => None,
+                Tilgang::Skjermet {
+                    tilgangskode,
+                    tilgangshjemmel,
+                } => Some(sikri_client::domain::ny_sak::Tilgang {
+                    tilgangskode: tilgangskode.as_str().to_string(),
+                    tilgangshjemmel: tilgangshjemmel.as_str().to_string(),
+                }),
             },
             virksomhetsmappe_id: None,
         };
@@ -243,7 +243,7 @@ impl SikriArkivGateway {
         hoveddokument: &DokumentAttributter,
     ) -> Result<ElementsJournalpost, EksekveringFeil> {
         let client_reference = journalpost.client_reference;
-        let skjerming = skjerming_fra_tilgang(&journalpost.tilgang, client_reference)?;
+        let skjerming = &journalpost.tilgang;
         let dokumenter = vec![self.map_dokument(hoveddokument, true).await?];
 
         let journalstatus = match journalpost.journalposttype {
@@ -253,7 +253,7 @@ impl SikriArkivGateway {
         };
 
         let avsendere_mottakere =
-            self.map_korrespondanseparter(journalpost, &skjerming, client_reference)?;
+            self.map_korrespondanseparter(journalpost, skjerming, client_reference)?;
 
         let elements = ElementsJournalpost {
             tittel: Some(journalpost.tittel.clone()),
@@ -261,8 +261,8 @@ impl SikriArkivGateway {
             journalstatus,
             avskriv_direkte: None,
             avskrivningsmaate: None,
-            tilgangskode: skjerming.tilgangskode(),
-            tilgangshjemmel: skjerming.tilgangshjemmel(),
+            tilgangskode: skjerming.tilgangskode().map(str::to_string),
+            tilgangshjemmel: skjerming.tilgangshjemmel().map(str::to_string),
             saksbehandler: Some(journalpost.saksbehandler_id.clone()),
             saksbehandler_enhet: Some(journalpost.saksbehandler_enhet.clone()),
             avsendere_mottakere,
@@ -270,14 +270,14 @@ impl SikriArkivGateway {
             dokument_dato: Some(journalpost.dokument_dato.clone()),
         };
 
-        verifiser_skjerming(&elements, &skjerming, client_reference)?;
+        verifiser_skjerming(&elements, skjerming, client_reference)?;
         Ok(elements)
     }
 
     fn map_korrespondanseparter(
         &self,
         journalpost: &JournalpostAttributter,
-        skjerming: &Skjerming,
+        skjerming: &Tilgang,
         client_reference: uuid::Uuid,
     ) -> Result<Option<Vec<ElementsAvsenderMottaker>>, EksekveringFeil> {
         // GENERELL trigger SvarUt; DIG brukes når utsending ikke benyttes.
@@ -372,60 +372,7 @@ impl SikriArkivGateway {
     }
 }
 
-enum Skjerming {
-    Offentlig,
-    Skjermet {
-        tilgangskode: String,
-        tilgangshjemmel: String,
-    },
-}
-
-impl Skjerming {
-    fn er_skjermet(&self) -> bool {
-        matches!(self, Skjerming::Skjermet { .. })
-    }
-
-    fn tilgangskode(&self) -> Option<String> {
-        match self {
-            Skjerming::Skjermet { tilgangskode, .. } => Some(tilgangskode.clone()),
-            Skjerming::Offentlig => None,
-        }
-    }
-
-    fn tilgangshjemmel(&self) -> Option<String> {
-        match self {
-            Skjerming::Skjermet {
-                tilgangshjemmel, ..
-            } => Some(tilgangshjemmel.clone()),
-            Skjerming::Offentlig => None,
-        }
-    }
-}
-
-fn skjerming_fra_tilgang(
-    tilgang: &Tilgang,
-    client_reference: uuid::Uuid,
-) -> Result<Skjerming, EksekveringFeil> {
-    match (
-        tilgang.tilgangskode.as_ref(),
-        tilgang.tilgangshjemmel.as_ref(),
-    ) {
-        (None, None) => Ok(Skjerming::Offentlig),
-        (Some(tilgangskode), Some(tilgangshjemmel)) => Ok(Skjerming::Skjermet {
-            tilgangskode: tilgangskode.clone(),
-            tilgangshjemmel: tilgangshjemmel.clone(),
-        }),
-        // Skjemet krever begge; halv skjerming er en mappingfeil, ikke noe å
-        // gjette på (SKU-0015).
-        _ => Err(arkivmapping_feil(
-            "arkivmapping_ufullstendig_skjerming",
-            "Ufullstendig skjerming: tilgangskode og tilgangshjemmel må settes sammen.",
-            client_reference,
-        )),
-    }
-}
-
-fn unntatt_offentlighet(skjerming: &Skjerming) -> Option<bool> {
+fn unntatt_offentlighet(skjerming: &Tilgang) -> Option<bool> {
     Some(skjerming.er_skjermet())
 }
 
@@ -439,7 +386,7 @@ fn person_flagg(parttype: Parttype) -> bool {
 fn korrespondansepart_avsender_mottaker(
     part: &Korrespondansepart,
     er_mottaker: bool,
-    skjerming: &Skjerming,
+    skjerming: &Tilgang,
 ) -> Result<ElementsAvsenderMottaker, EksekveringFeil> {
     Ok(ElementsAvsenderMottaker {
         er_mottaker: Some(er_mottaker),
@@ -463,7 +410,7 @@ fn korrespondansepart_avsender_mottaker(
 
 fn utsendingsmottaker_avsender_mottaker(
     mottaker: &Utsendingsmottaker,
-    skjerming: &Skjerming,
+    skjerming: &Tilgang,
     client_reference: uuid::Uuid,
 ) -> Result<ElementsAvsenderMottaker, EksekveringFeil> {
     // postnummer er en validert Postnummer-newtype (4 siffer), så kun de rå
@@ -509,7 +456,7 @@ fn utsendingsmottaker_avsender_mottaker(
 
 fn verifiser_skjerming(
     journalpost: &ElementsJournalpost,
-    skjerming: &Skjerming,
+    skjerming: &Tilgang,
     client_reference: uuid::Uuid,
 ) -> Result<(), EksekveringFeil> {
     if skjerming.er_skjermet() {

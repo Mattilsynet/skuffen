@@ -1,4 +1,5 @@
 use anyhow::Context;
+use infrastructure::nats::supervisor::tasknavn;
 use tokio::task::JoinSet;
 
 use std::sync::Once;
@@ -37,38 +38,52 @@ pub async fn run() -> anyhow::Result<()> {
     let runtime = infrastructure::bootstrap::prepare_runtime().await?;
     let shutdown = tokio_util::sync::CancellationToken::new();
 
+    let helse = runtime.helse.clone();
+    // Registreres før noen task er spawnet. Uten dette ville readiness vært
+    // sann i vinduet mellom ferdige migrasjoner og første `with_helse`, som er
+    // nøyaktig den halvveise tilstanden SKU-0021 skal fjerne. Navnene må
+    // stemme med supervisorenes egne — `registrer_task` er idempotent, så
+    // supervisoren gjenbruker flagget.
+    for navn in infrastructure::nats::supervisor::tasknavn::ALLE {
+        helse.registrer_task(navn);
+    }
+
     let query_listener = infrastructure::bootstrap::build_query_listener(
         runtime.nats.clone(),
         runtime.use_fake_sikri,
     );
     let ready_replier = infrastructure::bootstrap::build_ready_replier(runtime.nats.clone());
 
-    let media_listener = infrastructure::command::nats::media_listener::MediaListener::new(
-        runtime.nats.clone(),
-        runtime.media_store.clone(),
-    )?;
     let command_listener = infrastructure::bootstrap::build_command_listener(
         runtime.nats.clone(),
         runtime.db_pool.clone(),
         runtime.media_store.clone(),
+        helse.clone(),
+        shutdown.clone(),
     );
     let validator_listener = infrastructure::bootstrap::build_validator_listener(
         runtime.nats.clone(),
         runtime.db_pool.clone(),
         runtime.use_fake_sikri,
+        helse.clone(),
+        shutdown.clone(),
     );
     // Må bygges før poolen flyttes inn i execution-wiringen.
     let admin_listener = infrastructure::bootstrap::build_admin_listener(
         runtime.nats.clone(),
         runtime.db_pool.clone(),
+        helse.clone(),
         shutdown.clone(),
     );
+    let media_nats = runtime.nats.clone();
+    let media_store = runtime.media_store.clone();
     let (eksekvering_listener, eksekvering_worker) =
         infrastructure::bootstrap::build_eksekvering_components(
             runtime.nats.clone(),
             runtime.db_pool,
             runtime.media_store,
             runtime.use_fake_sikri,
+            helse.clone(),
             shutdown.clone(),
         )?;
 
@@ -88,23 +103,45 @@ pub async fn run() -> anyhow::Result<()> {
             }
         },
     );
-    spawn_named_task(
-        &mut tasks,
-        "query_listener",
-        TaskCriticality::Degraded,
-        async move { query_listener.run().await.context("query listener failed") },
-    );
-    spawn_named_task(
-        &mut tasks,
-        "ready_replier",
-        TaskCriticality::Degraded,
-        async move { ready_replier.run().await.context("ready replier failed") },
-    );
+    spawn_named_task(&mut tasks, "query_listener", TaskCriticality::Degraded, {
+        let supervisor = supervisor(tasknavn::QUERY_LISTENER, &helse, &shutdown);
+        async move {
+            supervisor
+                .run(|| query_listener.run())
+                .await
+                .context("query listener failed")
+        }
+    });
+    spawn_named_task(&mut tasks, "ready_replier", TaskCriticality::Degraded, {
+        let supervisor = supervisor(tasknavn::READY_REPLIER, &helse, &shutdown);
+        async move {
+            supervisor
+                .run(|| ready_replier.run())
+                .await
+                .context("ready replier failed")
+        }
+    });
     spawn_named_task(&mut tasks, "media_listener", TaskCriticality::Critical, {
+        let supervisor = supervisor(tasknavn::MEDIA_LISTENER, &helse, &shutdown);
         let shutdown = shutdown.clone();
         async move {
-            media_listener
-                .run(shutdown)
+            // `MediaListener::run` konsumerer `self`, så supervisoren må bygge
+            // den på nytt hver runde. Både klienten og lageret er billige å
+            // klone.
+            supervisor
+                .run(|| {
+                    let nats = media_nats.clone();
+                    let store = media_store.clone();
+                    let shutdown = shutdown.clone();
+                    async move {
+                        infrastructure::command::nats::media_listener::MediaListener::new(
+                            nats, store,
+                        )?
+                        .run(shutdown)
+                        .await
+                        .map_err(anyhow::Error::from)
+                    }
+                })
                 .await
                 .context("media listener failed")
         }
@@ -149,12 +186,11 @@ pub async fn run() -> anyhow::Result<()> {
         },
     );
     spawn_named_task(&mut tasks, "execution_worker", TaskCriticality::Degraded, {
-        let shutdown = shutdown.clone();
+        let supervisor = supervisor(tasknavn::EXECUTION_WORKER, &helse, &shutdown);
         async move {
             // Én forbigående DB-feil skal ikke etterlate prosessen uten
             // executor. Restart slipper og gjenerobrer også lederskapet.
-            infrastructure::nats::supervisor::TaskSupervisor::background("execution_worker")
-                .with_shutdown(shutdown)
+            supervisor
                 .run(|| eksekvering_worker.run())
                 .await
                 .context("execution worker failed")
@@ -198,19 +234,14 @@ pub async fn run() -> anyhow::Result<()> {
                     }
                 }
             }
-            Err(err) => match outcome.criticality {
-                TaskCriticality::Critical => {
-                    tasks.abort_all();
-                    while tasks.join_next().await.is_some() {}
-                    return Err(anyhow::anyhow!(
-                        "critical task {} failed: {err}",
-                        outcome.name
-                    ));
-                }
-                TaskCriticality::Degraded => {
-                    tracing::error!(task = outcome.name, error = %err, "degraded background task failed");
-                }
-            },
+            // Tømt restartbudsjett er eneste måten en superviserte task kan
+            // returnere `Err`. Fem restarter hjalp ikke, så tasken er død —
+            // ikke degradert. Kritikalitet gater ikke dette (SKU-0021 R3).
+            Err(err) => {
+                tasks.abort_all();
+                while tasks.join_next().await.is_some() {}
+                return Err(anyhow::anyhow!("task {} failed: {err}", outcome.name));
+            }
         }
     }
 
@@ -255,6 +286,22 @@ async fn avslutt_kontrollert(mut tasks: JoinSet<TaskOutcome>) -> anyhow::Result<
 
     tracing::info!("skuffen avsluttet kontrollert");
     Ok(())
+}
+
+/// Alle arbeidstasks har samme budsjett og samme nedstengingssignal
+/// (SKU-0021 R1, R2). `with_shutdown` er ikke kosmetikk: uten den sover en
+/// task i backoff med en ukansellerbar sleep når SIGTERM kommer.
+fn supervisor(
+    name: &'static str,
+    helse: &infrastructure::http::helse::Helse,
+    shutdown: &tokio_util::sync::CancellationToken,
+) -> infrastructure::nats::supervisor::TaskSupervisor {
+    infrastructure::nats::supervisor::TaskSupervisor::critical(
+        name,
+        infrastructure::nats::supervisor::RESTARTBUDSJETT,
+    )
+    .with_shutdown(shutdown.clone())
+    .with_helse(helse)
 }
 
 fn spawn_named_task<F>(

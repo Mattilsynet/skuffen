@@ -19,6 +19,12 @@ use uuid::Uuid;
 /// Fast nøkkel for executor-låsen.
 const EXECUTOR_LOCK_KEY: i64 = 4711;
 
+/// Hvor lenge en blokkert operasjon hviler før den vurderes på nytt
+/// (SKU-0020 R3). Fast, ikke eskalerende: `attempt_no` inkrementeres kun rett
+/// før et arkivkall, som en blokkert operasjon aldri når, så en trapp ville
+/// krevd en egen teller.
+pub const BLOKKERT_SJEKKFREKVENS: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Holder sessionen som eier låsen. Droppes den, lukkes connection-en.
 struct PostgresExecutorLease {
     _connection: sqlx::PgConnection,
@@ -248,15 +254,19 @@ impl OperasjonRepository for PostgresOperasjonRepository {
         })
     }
 
+    /// Forfallsklokka (SKU-0020 R2). `blokkert` er med i utvalget fordi
+    /// blokkering er en beslutning executoren tar på nytt, ikke en cache noen
+    /// annen kodesti låser opp. `ORDER BY neste_forsok_at` roterer gjennom
+    /// alle rader, så permanent blokkerte operasjoner ikke kan sulte ut køen.
     async fn hent_neste_kjorbare(&self) -> Result<Option<Operasjon>> {
         let rad: Option<(Uuid, String, Uuid, Uuid, String)> = sqlx::query_as(
             r#"
             SELECT o.operasjon_id, o.operasjonstype, o.entitet_id, o.sak_id, e.entitet_type::text
             FROM operasjon o
             JOIN entitet e ON e.skuffen_id = o.entitet_id
-            WHERE o.status = 'klar'
-               OR (o.status = 'retry_venter' AND o.neste_forsok_at <= now())
-            ORDER BY o.created_at
+            WHERE o.status IN ('klar', 'retry_venter', 'blokkert')
+              AND o.neste_forsok_at <= now()
+            ORDER BY o.neste_forsok_at, o.created_at
             LIMIT 1
             "#,
         )
@@ -271,7 +281,7 @@ impl OperasjonRepository for PostgresOperasjonRepository {
         let mut tx = self.pool.begin().await?;
         let attempt_no: i32 = sqlx::query_scalar(
             r#"UPDATE operasjon
-               SET status = 'kjorer', attempt_no = attempt_no + 1, neste_forsok_at = NULL
+               SET status = 'kjorer', attempt_no = attempt_no + 1, neste_forsok_at = now()
                WHERE operasjon_id = $1
                RETURNING attempt_no"#,
         )
@@ -307,7 +317,8 @@ impl OperasjonRepository for PostgresOperasjonRepository {
         Ok(())
     }
 
-    /// Statusovergang, forsøksutfall og faktaoppdatering i **én** transaksjon.
+    /// Statusovergang, forsøksutfall, faktaoppdatering og søskenvekking i
+    /// **én** transaksjon.
     ///
     /// Dette er at-most-once-grensen (SKU-0016 R4). Splittes den i flere
     /// commits, kan et vellykket arkivskriv bli usynlig for oss og gi duplikat
@@ -345,6 +356,18 @@ impl OperasjonRepository for PostgresOperasjonRepository {
         }
 
         skriv_fakta(&mut tx, SkuffenSakId::from(sak_id), oppdatering).await?;
+
+        // Denne fullføringen er ofte akkurat det blokkerte søsken venter på.
+        // Vekkingen er et latenshint oppå forfallsklokka, ikke mekanismen som
+        // garanterer fremdrift (SKU-0020 R4).
+        sqlx::query(
+            r#"UPDATE operasjon SET neste_forsok_at = now()
+               WHERE sak_id = $1 AND status = 'blokkert'"#,
+        )
+        .bind(sak_id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to wake blocked siblings")?;
 
         tx.commit().await.context("failed to commit operasjon ok")?;
         Ok(())
@@ -441,21 +464,14 @@ impl OperasjonRepository for PostgresOperasjonRepository {
     ) -> Result<()> {
         sqlx::query(
             r#"UPDATE operasjon
-               SET status = 'blokkert', siste_detalj = $2, neste_forsok_at = NULL
+               SET status = 'blokkert',
+                   siste_detalj = $2,
+                   neste_forsok_at = now() + make_interval(secs => $3)
                WHERE operasjon_id = $1"#,
         )
         .bind(Uuid::from(operasjon_id))
         .bind(detalj)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn marker_klar(&self, operasjon_id: OperasjonId) -> Result<()> {
-        sqlx::query(
-            "UPDATE operasjon SET status = 'klar', neste_forsok_at = NULL WHERE operasjon_id = $1",
-        )
-        .bind(Uuid::from(operasjon_id))
+        .bind(BLOKKERT_SJEKKFREKVENS.as_secs_f64())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -464,12 +480,15 @@ impl OperasjonRepository for PostgresOperasjonRepository {
     async fn gjenopprett_etter_restart(&self) -> Result<Gjenoppretting> {
         let mut tx = self.pool.begin().await?;
 
-        // Avbrutt før arkivkallet: trygt å prøve igjen.
-        let gjenopptatt =
-            sqlx::query("UPDATE operasjon SET status = 'klar' WHERE status = 'kjorer'")
-                .execute(&mut *tx)
-                .await?
-                .rows_affected();
+        // Avbrutt før arkivkallet: trygt å prøve igjen. Fristen settes
+        // eksplisitt — raden skal være kjørbar nå, ikke arve verdien
+        // `marker_kjorer` tilfeldigvis etterlot.
+        let gjenopptatt = sqlx::query(
+            "UPDATE operasjon SET status = 'klar', neste_forsok_at = now() WHERE status = 'kjorer'",
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
 
         // Ukjent utfall: et menneske må rydde (SKU-0016 R5).
         let krever_avklaring =
@@ -494,24 +513,6 @@ impl OperasjonRepository for PostgresOperasjonRepository {
         })
     }
 
-    async fn hent_blokkerte(&self, grense: i64) -> Result<Vec<Operasjon>> {
-        let rader: Vec<(Uuid, String, Uuid, Uuid, String)> = sqlx::query_as(
-            r#"
-            SELECT o.operasjon_id, o.operasjonstype, o.entitet_id, o.sak_id, e.entitet_type::text
-            FROM operasjon o
-            JOIN entitet e ON e.skuffen_id = o.entitet_id
-            WHERE o.status = 'blokkert'
-            ORDER BY o.created_at
-            LIMIT $1
-            "#,
-        )
-        .bind(grense)
-        .fetch_all(&self.pool)
-        .await?;
-
-        rader.into_iter().map(les_operasjon).collect()
-    }
-
     async fn hent_krever_avklaring(&self) -> Result<Vec<Operasjon>> {
         let rader: Vec<(Uuid, String, Uuid, Uuid, String)> = sqlx::query_as(
             r#"
@@ -519,6 +520,7 @@ impl OperasjonRepository for PostgresOperasjonRepository {
             FROM operasjon o
             JOIN entitet e ON e.skuffen_id = o.entitet_id
             WHERE o.status = 'krever_avklaring'
+              AND o.avklaring_varslet_at IS NULL
             ORDER BY o.created_at
             "#,
         )
@@ -526,6 +528,14 @@ impl OperasjonRepository for PostgresOperasjonRepository {
         .await?;
 
         rader.into_iter().map(les_operasjon).collect()
+    }
+
+    async fn marker_avklaring_varslet(&self, operasjon_id: OperasjonId) -> Result<()> {
+        sqlx::query("UPDATE operasjon SET avklaring_varslet_at = now() WHERE operasjon_id = $1")
+            .bind(Uuid::from(operasjon_id))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     async fn hent_sammendrag_for_sak(
@@ -642,18 +652,28 @@ impl OperasjonRepository for PostgresOperasjonRepository {
     /// Foldet over kommandoens operasjoner (SKU-0016 R8). CommandStatus er
     /// ikke en kolonne.
     async fn hent_command_outcome(&self, command_id: Uuid) -> Result<CommandOutcome> {
-        let (antall, ok, feilet): (i64, i64, i64) = sqlx::query_as(
+        let (antall, ok, feilet, krever_avklaring): (i64, i64, i64, i64) = sqlx::query_as(
             r#"SELECT count(*),
                       count(*) FILTER (WHERE status = 'ok'),
-                      count(*) FILTER (WHERE status = 'feilet')
+                      count(*) FILTER (WHERE status = 'feilet'),
+                      count(*) FILTER (WHERE status = 'krever_avklaring')
                FROM operasjon WHERE command_id = $1"#,
         )
         .bind(command_id)
         .fetch_one(&self.pool)
         .await?;
 
+        // Samme prioritet som admin read folder med (SKU-0018):
+        // `feilet` > `krever_avklaring` > `fullfort` > `uavklart`. De to
+        // foldene ser på samme rader og må ikke kunne si ulike ting.
+        //
+        // `feilet` vinner fordi den er irreversibel. `krever_avklaring` er en
+        // ikke-terminal mellomstasjon som kan bli `fullfort` etter at et
+        // menneske har ryddet.
         Ok(if feilet > 0 {
             CommandOutcome::Feilet
+        } else if krever_avklaring > 0 {
+            CommandOutcome::KreverAvklaring
         } else if antall > 0 && ok == antall {
             CommandOutcome::Fullfort
         } else {

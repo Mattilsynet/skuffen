@@ -17,9 +17,10 @@ use tracing::{Instrument, error, info, warn};
 use uuid::Uuid;
 
 use crate::admin::mapping;
+use crate::http::helse::Helse;
 use crate::nats::client::NatsClient;
 use crate::nats::nats_response::NatsResponse;
-use crate::nats::supervisor::TaskSupervisor;
+use crate::nats::supervisor::{RESTARTBUDSJETT, TaskSupervisor, tasknavn};
 
 pub const ADMIN_READ_COMMAND_HENT_SUBJECT: &str = "arkiv.admin.read.command.hent";
 pub const ADMIN_READ_SAK_HENT_SUBJECT: &str = "arkiv.admin.read.sak.hent";
@@ -154,6 +155,7 @@ impl AdminTransport for NatsAdminTransport {
 pub struct AdminListener {
     transport: Arc<dyn AdminTransport>,
     service: Arc<AdminReadService>,
+    helse: Helse,
     shutdown: CancellationToken,
 }
 
@@ -161,19 +163,22 @@ impl AdminListener {
     pub fn new(
         transport: Arc<dyn AdminTransport>,
         service: Arc<AdminReadService>,
+        helse: Helse,
         shutdown: CancellationToken,
     ) -> Self {
         Self {
             transport,
             service,
+            helse,
             shutdown,
         }
     }
 
     #[tracing::instrument(skip_all, name = "nats.admin_listener")]
     pub async fn run(&self) -> anyhow::Result<()> {
-        TaskSupervisor::background("admin_listener")
+        TaskSupervisor::critical(tasknavn::ADMIN_LISTENER, RESTARTBUDSJETT)
             .with_shutdown(self.shutdown.clone())
+            .with_helse(&self.helse)
             .run(|| self.run_once())
             .await
     }

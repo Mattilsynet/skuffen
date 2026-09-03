@@ -193,8 +193,8 @@ async fn skriv_sak(
     .bind(ordningsverdi)
     .bind(saksbehandler_id)
     .bind(saksbehandler_enhet)
-    .bind(tilgang.tilgangskode.clone())
-    .bind(tilgang.tilgangshjemmel.clone())
+    .bind(tilgang.tilgangskode())
+    .bind(tilgang.tilgangshjemmel())
     .bind(sak.oensket_saksansvarlig.as_ref().map(|(id, _)| id.clone()))
     .bind(
         sak.oensket_saksansvarlig
@@ -245,8 +245,8 @@ async fn skriv_journalpost(
     .bind(&a.dokument_dato)
     .bind(&a.saksbehandler_id)
     .bind(&a.saksbehandler_enhet)
-    .bind(a.tilgang.tilgangskode.clone())
-    .bind(a.tilgang.tilgangshjemmel.clone())
+    .bind(a.tilgang.tilgangskode())
+    .bind(a.tilgang.tilgangshjemmel())
     .bind(korrespondanseparter_json(&a.korrespondanseparter))
     .bind(a.kildesystem.clone())
     .bind(command_id)

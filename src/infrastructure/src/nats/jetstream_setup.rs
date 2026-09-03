@@ -68,6 +68,20 @@ pub fn media_object_store_config(num_replicas: usize) -> jetstream::object_store
     }
 }
 
+/// Strømmene publisherne skriver til. Opprettes én gang ved oppstart, ikke per
+/// melding: `create_or_update_stream` sender hele konfigurasjonen, så en
+/// publiseringssti som kaller den nullstiller alt som er justert manuelt i
+/// Synadia Control Plane.
+pub async fn ensure_publiseringsstroemmer(
+    context: &jetstream::Context,
+    num_replicas: usize,
+) -> anyhow::Result<()> {
+    ensure_stream(context, command_inbox_stream_config(num_replicas)).await?;
+    ensure_stream(context, command_ready_stream_config(num_replicas)).await?;
+    ensure_stream(context, status_stream_config(num_replicas)).await?;
+    Ok(())
+}
+
 pub async fn ensure_stream(
     context: &jetstream::Context,
     config: stream::Config,
