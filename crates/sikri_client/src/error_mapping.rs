@@ -50,10 +50,11 @@ impl SikriFeil {
 
     /// Klassifiserer et HTTP-feilsvar der bodyen er lest.
     pub fn fra_http(status: StatusCode, body: Option<&str>) -> Self {
+        let kode = safe_detail_for_http_error(status, body);
         Self::new(
             classify_http_error(status, body),
-            safe_detail_for_http_error(status, body),
-            user_message_for_http_error(status, body),
+            kode,
+            user_message_for_sikri_kode(kode),
         )
     }
 
@@ -62,7 +63,7 @@ impl SikriFeil {
     pub fn utilgjengelig() -> Self {
         Self::recoverable(
             "sikri_upstream_unavailable",
-            "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere.",
+            user_message_for_sikri_kode("sikri_upstream_unavailable"),
         )
     }
 
@@ -70,7 +71,7 @@ impl SikriFeil {
     pub fn secret_utilgjengelig() -> Self {
         Self::recoverable(
             "sikri_secret_unavailable",
-            "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere.",
+            user_message_for_sikri_kode("sikri_secret_unavailable"),
         )
     }
 
@@ -79,7 +80,7 @@ impl SikriFeil {
     pub fn uparsbart_svar() -> Self {
         Self::recoverable(
             "sikri_response_unparsable",
-            "Uventet svar fra Sikri/Elements. Prøv igjen senere.",
+            user_message_for_sikri_kode("sikri_response_unparsable"),
         )
     }
 
@@ -96,30 +97,38 @@ impl std::fmt::Display for SikriFeil {
 
 impl std::error::Error for SikriFeil {}
 
+pub fn user_message_for_sikri_kode(kode: &str) -> &'static str {
+    match kode {
+        "sikri_unknown_user" => {
+            "Ugyldig saksbehandler/systembruker: brukeren finnes ikke i ePhorte."
+        }
+        "sikri_access_control_rejected" => {
+            "Sikri/Elements avviste forespørselen på grunn av manglende tilgang eller ugyldig tilgangskode/hjemmel."
+        }
+        "sikri_validation_failed" => {
+            "Sikri/Elements avviste forespørselen på grunn av valideringsfeil."
+        }
+        "sikri_missing_document_content" => {
+            "Sikri/Elements avviste forespørselen fordi dokumentet mangler innhold."
+        }
+        "sikri_resource_not_found" => "Ressursen ble ikke funnet i Sikri/Elements.",
+        "sikri_rate_limited" => {
+            "Sikri/Elements avviser midlertidig for mange forespørsler. Prøv igjen senere."
+        }
+        "sikri_upstream_unavailable" | "sikri_upstream_error" | "sikri_secret_unavailable" => {
+            "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere."
+        }
+        "sikri_response_unparsable" => "Uventet svar fra Sikri/Elements. Prøv igjen senere.",
+        "sikri_request_validation_failed" | "sikri_invalid_request" => {
+            "Sikri/Elements avviste forespørselen."
+        }
+        _ => "Sikri/Elements avviste forespørselen.",
+    }
+}
+
 pub fn user_message_for_http_error(status: StatusCode, body: Option<&str>) -> String {
-    if let Some(body_text) = body
-        && contains_upstream_bad_gateway_pattern(body_text)
-    {
-        return "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere.".to_string();
-    }
-
-    if let Some(body_text) = body
-        && classify_http_error(status, Some(body_text)) == Recoverability::Irrecoverable
-        && contains_missing_user_pattern(body_text)
-    {
-        return "Ugyldig saksbehandler/systembruker: brukeren finnes ikke i ePhorte.".to_string();
-    }
-
-    if status == StatusCode::TOO_MANY_REQUESTS {
-        return "Sikri/Elements avviser midlertidig for mange forespørsler. Prøv igjen senere."
-            .to_string();
-    }
-
-    if status.is_server_error() {
-        return "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere.".to_string();
-    }
-
-    "Sikri/Elements avviste forespørselen.".to_string()
+    let detail = safe_detail_for_http_error(status, body);
+    user_message_for_sikri_kode(detail).to_string()
 }
 
 pub fn safe_detail_for_http_error(status: StatusCode, body: Option<&str>) -> &'static str {
@@ -137,9 +146,8 @@ pub fn safe_detail_for_http_error(status: StatusCode, body: Option<&str>) -> &'s
     }
 
     if let Some(body_text) = body
-        && body_text
-            .to_lowercase()
-            .contains("ny journalpost har dokument-filer som mangler innhold")
+        && missing_document_content_failure_is_irrecoverable(status)
+        && contains_missing_document_content_pattern(body_text)
     {
         return "sikri_missing_document_content";
     }
@@ -354,6 +362,15 @@ fn contains_upstream_bad_gateway_pattern(body: &str) -> bool {
         && normalized.contains("bad gateway")
 }
 
+fn contains_missing_document_content_pattern(body: &str) -> bool {
+    body.to_lowercase()
+        .contains("ny journalpost har dokument-filer som mangler innhold")
+}
+
+fn missing_document_content_failure_is_irrecoverable(status: StatusCode) -> bool {
+    status == StatusCode::BAD_REQUEST || status == StatusCode::INTERNAL_SERVER_ERROR
+}
+
 fn contains_access_control_pattern(body: &str) -> bool {
     let normalized = body.to_lowercase();
     normalized.contains("tilgangskode")
@@ -517,6 +534,75 @@ mod tests {
     }
 
     #[test]
+    fn maps_access_control_rejected_to_informative_message() {
+        for (status, body) in [
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Tilgangskode UO er ugyldig for denne saken og bruker Z12345",
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                "Mangler tilgangshjemmel for skjermet operasjon",
+            ),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Mangler tilgang til skjermet sak for bruker Z12345",
+            ),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Brukeren ikke har rettighet til tilgangskode XX",
+            ),
+        ] {
+            let message = user_message_for_http_error(status, Some(body));
+            assert_eq!(
+                message,
+                "Sikri/Elements avviste forespørselen på grunn av manglende tilgang eller ugyldig tilgangskode/hjemmel."
+            );
+            assert!(!message.contains("midlertidig"));
+            assert!(!message.contains("Z12345"));
+            assert!(!message.contains("UO"));
+        }
+    }
+
+    #[test]
+    fn maps_validation_failed_to_informative_message() {
+        for status in [StatusCode::INTERNAL_SERVER_ERROR, StatusCode::BAD_REQUEST] {
+            let body = "Validering feilet for felt med verdi som ikke skal logges";
+            let message = user_message_for_http_error(status, Some(body));
+            assert_eq!(
+                message,
+                "Sikri/Elements avviste forespørselen på grunn av valideringsfeil."
+            );
+            assert!(!message.contains("midlertidig"));
+        }
+    }
+
+    #[test]
+    fn maps_missing_document_content_to_informative_message() {
+        let body = "Ny journalpost har dokument-filer som mangler innhold";
+        let message = user_message_for_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+        assert_eq!(
+            message,
+            "Sikri/Elements avviste forespørselen fordi dokumentet mangler innhold."
+        );
+        assert!(!message.contains("midlertidig"));
+    }
+
+    #[test]
+    fn maps_resource_not_found_to_informative_message() {
+        let message = user_message_for_http_error(StatusCode::NOT_FOUND, None);
+        assert_eq!(message, "Ressursen ble ikke funnet i Sikri/Elements.");
+    }
+
+    #[test]
+    fn user_message_for_sikri_kode_covers_all_known_codes() {
+        for kode in ALLE_SIKRI_KODER {
+            let message = user_message_for_sikri_kode(kode);
+            assert!(!message.is_empty(), "kode {kode} må ha en ikke-tom melding");
+        }
+    }
+
+    #[test]
     fn safe_detail_returns_stable_code_without_user_id() {
         let body = "Feil ved identifisering av bruker Z12345. Person.Brukernavn Z12345 ble ikke funnet i ePhorte Person-tabell!";
         let detail = safe_detail_for_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
@@ -588,6 +674,16 @@ mod tests {
     #[test]
     fn keeps_validation_text_on_service_unavailable_recoverable() {
         let body = "Validering feilet fordi ekstern valideringstjeneste er utilgjengelig";
+        let result = classify_http_error(StatusCode::SERVICE_UNAVAILABLE, Some(body));
+        let detail = safe_detail_for_http_error(StatusCode::SERVICE_UNAVAILABLE, Some(body));
+
+        assert_eq!(result, Recoverability::Recoverable);
+        assert_eq!(detail, "sikri_upstream_error");
+    }
+
+    #[test]
+    fn keeps_missing_document_content_on_service_unavailable_recoverable() {
+        let body = "Ny journalpost har dokument-filer som mangler innhold";
         let result = classify_http_error(StatusCode::SERVICE_UNAVAILABLE, Some(body));
         let detail = safe_detail_for_http_error(StatusCode::SERVICE_UNAVAILABLE, Some(body));
 

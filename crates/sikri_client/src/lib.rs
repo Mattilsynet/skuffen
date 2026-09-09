@@ -12,7 +12,7 @@ use crate::dto::elements_journalpost::{ElementsJournalpost, ElementsJournalpostR
 use crate::dto::elements_sak::ElementsSak;
 pub use error_mapping::{
     ALLE_SIKRI_KODER, Recoverability, SikriFeil, classify_http_error, safe_detail_for_http_error,
-    user_message_for_http_error,
+    user_message_for_http_error, user_message_for_sikri_kode,
 };
 
 #[derive(Debug, Clone, Copy)]
