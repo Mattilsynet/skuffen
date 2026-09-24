@@ -1,27 +1,50 @@
+//! Statuskontrakten innad (SKU-0016 R8/R9, D31–D33).
+//!
+//! Én strøm, to hendelsestyper. Erstatter matrisen `phase` × `status`, som
+//! hadde kombinasjoner som aldri kunne oppstå.
+
 use chrono::Utc;
 use uuid::Uuid;
 
+use crate::eksekvering::operasjon::{OperasjonId, Operasjonstype};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandStatus {
-    Pending,
-    Ok,
-    Blocked,
-    Retrying,
-    Error,
+pub enum CommandTypeCode {
+    OpprettSak,
+    OpprettInngaaendeJournalpost,
+    OpprettUtgaaendeJournalpost,
+    OpprettInterntNotatJournalpost,
+    AvsluttSak,
+    SettSaksansvarlig,
 }
 
-impl CommandStatus {
+impl CommandTypeCode {
     pub fn as_code(self) -> &'static str {
         match self {
-            Self::Pending => "pending",
-            Self::Ok => "ok",
-            Self::Blocked => "blocked",
-            Self::Retrying => "retrying",
-            Self::Error => "error",
+            Self::OpprettSak => "opprett_sak",
+            Self::OpprettInngaaendeJournalpost => "opprett_inngaaende_journalpost",
+            Self::OpprettUtgaaendeJournalpost => "opprett_utgaaende_journalpost",
+            Self::OpprettInterntNotatJournalpost => "opprett_internt_notat_journalpost",
+            Self::AvsluttSak => "avslutt_sak",
+            Self::SettSaksansvarlig => "sett_saksansvarlig",
         }
+    }
+
+    pub fn from_code(code: &str) -> Option<Self> {
+        let value = match code {
+            "opprett_sak" => Self::OpprettSak,
+            "opprett_inngaaende_journalpost" => Self::OpprettInngaaendeJournalpost,
+            "opprett_utgaaende_journalpost" => Self::OpprettUtgaaendeJournalpost,
+            "opprett_internt_notat_journalpost" => Self::OpprettInterntNotatJournalpost,
+            "avslutt_sak" => Self::AvsluttSak,
+            "sett_saksansvarlig" => Self::SettSaksansvarlig,
+            _ => return None,
+        };
+        Some(value)
     }
 }
 
+/// Klientvennlige, bevisst grovkornede feilkoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusErrorCode {
     InvalidRequest,
@@ -45,241 +68,278 @@ impl StatusErrorCode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandTypeCode {
-    OpprettSak,
-    OpprettInngaaendeJournalpost,
-    OpprettUtgaaendeJournalpost,
-    OpprettInterntNotatJournalpost,
-    AvsluttSak,
-    SettSaksansvarlig,
-}
-
-impl CommandTypeCode {
-    pub fn as_code(self) -> &'static str {
-        match self {
-            Self::OpprettSak => "opprett_sak",
-            Self::OpprettInngaaendeJournalpost => "opprett_inngaaende_journalpost",
-            Self::OpprettUtgaaendeJournalpost => "opprett_utgaaende_journalpost",
-            Self::OpprettInterntNotatJournalpost => "opprett_internt_notat_journalpost",
-            Self::AvsluttSak => "avslutt_sak",
-            Self::SettSaksansvarlig => "sett_saksansvarlig",
-        }
-    }
-}
+// ---------------------------------------------------------------------------
+// Kommandohendelser
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CommandLifecycleMetadata {
-    pub command_id: Uuid,
-    pub command_type: CommandTypeCode,
-}
-
-impl CommandLifecycleMetadata {
-    pub fn new(command_id: Uuid, command_type: CommandTypeCode) -> Self {
-        Self {
-            command_id,
-            command_type,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandStage {
+pub enum CommandEvent {
     Mottatt,
     Validert,
+    Avvist,
     Utfores,
+    Fullfort,
+    Feilet,
+    /// Minst én operasjon har ukjent utfall og må avklares manuelt.
+    ///
+    /// Bevisst ikke terminal: utfallet *er* ikke avgjort, og operasjonen kan
+    /// bli `ok` etter admin write. Monotonien i foldet må bevares.
+    KreverAvklaring,
 }
 
-impl CommandStage {
+impl CommandEvent {
     pub fn as_code(self) -> &'static str {
         match self {
             Self::Mottatt => "mottatt",
             Self::Validert => "validert",
+            Self::Avvist => "avvist",
             Self::Utfores => "utfores",
+            Self::Fullfort => "fullfort",
+            Self::Feilet => "feilet",
+            Self::KreverAvklaring => "krever_avklaring",
         }
     }
+
+    /// Utfallet er avgjort (SKU-0016 R9). Operasjonseventer kan fortsette
+    /// etterpå, fordi søsken kjører videre best effort.
+    pub fn er_terminal(self) -> bool {
+        matches!(self, Self::Avvist | Self::Fullfort | Self::Feilet)
+    }
 }
+
+// ---------------------------------------------------------------------------
+// Operasjonshendelser
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandStageStatus {
-    Venter,
+pub enum Operasjonshendelse {
+    /// Nytt forsøk kommer.
+    ForsokFeilet,
     Ok,
-    Blocked,
-    Retrying,
-    Error,
+    Feilet,
+    /// Ukjent utfall etter crash i `sendt`. Krever menneske (SKU-0016 R5).
+    KreverAvklaring,
+    /// Advisory 24-timersvarsel (D11).
+    Varsel,
 }
 
-impl CommandStageStatus {
+impl Operasjonshendelse {
     pub fn as_code(self) -> &'static str {
         match self {
-            Self::Venter => "venter",
+            Self::ForsokFeilet => "forsok_feilet",
             Self::Ok => "ok",
-            Self::Blocked => "blocked",
-            Self::Retrying => "retrying",
-            Self::Error => "error",
+            Self::Feilet => "feilet",
+            Self::KreverAvklaring => "krever_avklaring",
+            Self::Varsel => "varsel",
         }
+    }
+
+    pub fn er_terminal(self) -> bool {
+        matches!(self, Self::Ok | Self::Feilet)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Kontekst og hendelser
+// ---------------------------------------------------------------------------
+
+/// Identifikatorer klienten kan koble mot sine egne.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CommandLifecycleContext {
+pub struct Statuskontekst {
     pub sak_client_reference: Option<String>,
     pub saksnummer: Option<String>,
     pub journalpost_client_reference: Option<String>,
-    pub journalpost_id: Option<String>,
+    pub journalpost_arkiv_id: Option<String>,
     pub dokument_client_references: Vec<String>,
-    pub dokument_ids: Vec<String>,
 }
 
-impl CommandLifecycleContext {
+impl Statuskontekst {
     pub fn is_empty(&self) -> bool {
         self.sak_client_reference.is_none()
             && self.saksnummer.is_none()
             && self.journalpost_client_reference.is_none()
-            && self.journalpost_id.is_none()
+            && self.journalpost_arkiv_id.is_none()
             && self.dokument_client_references.is_empty()
-            && self.dokument_ids.is_empty()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommandLifecycleEvent {
+pub struct CommandStatus {
     pub command_id: Uuid,
     pub correlation_id: Option<Uuid>,
     pub command_type: CommandTypeCode,
-    pub status: CommandStatus,
-    pub stage: CommandStage,
-    pub stage_status: CommandStageStatus,
+    pub hendelse: CommandEvent,
     pub terminal: bool,
-    pub message: String,
-    pub outward_message: Option<String>,
+    /// Klientvennlig. Aldri intern detalj eller stacktrace.
+    pub melding: String,
     pub error_code: Option<StatusErrorCode>,
-    pub detail: Option<String>,
-    pub context: CommandLifecycleContext,
-    pub attempt: Option<u32>,
-    pub timestamp: Option<String>,
+    pub kontekst: Statuskontekst,
+    pub timestamp: String,
 }
 
-impl CommandLifecycleEvent {
-    #[allow(clippy::too_many_arguments)]
+impl CommandStatus {
     pub fn new(
-        metadata: CommandLifecycleMetadata,
+        command_id: Uuid,
         correlation_id: Option<Uuid>,
-        status: CommandStatus,
-        stage: CommandStage,
-        stage_status: CommandStageStatus,
+        command_type: CommandTypeCode,
+        hendelse: CommandEvent,
+        melding: impl Into<String>,
         error_code: Option<StatusErrorCode>,
-        detail: Option<String>,
-        context: CommandLifecycleContext,
-        attempt: Option<u32>,
+        kontekst: Statuskontekst,
     ) -> Self {
         Self {
-            command_id: metadata.command_id,
+            command_id,
             correlation_id,
-            command_type: metadata.command_type,
-            status,
-            stage,
-            stage_status,
-            terminal: is_terminal(stage, stage_status),
-            message: status_message(stage, stage_status),
-            outward_message: None,
+            command_type,
+            hendelse,
+            terminal: hendelse.er_terminal(),
+            melding: melding.into(),
             error_code,
-            detail,
-            context,
-            attempt,
-            timestamp: Some(Utc::now().to_rfc3339()),
+            kontekst,
+            timestamp: Utc::now().to_rfc3339(),
         }
-    }
-
-    pub fn message_id(&self) -> String {
-        match self.attempt {
-            Some(attempt) => format!(
-                "status:{}:{}:{}:{}",
-                self.command_id,
-                self.stage.as_code(),
-                self.stage_status.as_code(),
-                attempt
-            ),
-            None => format!(
-                "status:{}:{}:{}",
-                self.command_id,
-                self.stage.as_code(),
-                self.stage_status.as_code()
-            ),
-        }
-    }
-
-    pub fn with_outward_message(mut self, outward_message: impl Into<String>) -> Self {
-        self.outward_message = Some(outward_message.into());
-        self
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Operasjonstatus {
+    pub command_id: Uuid,
+    pub correlation_id: Option<Uuid>,
+    pub operasjon_id: OperasjonId,
+    pub operasjonstype: Operasjonstype,
+    pub hendelse: Operasjonshendelse,
+    pub attempt_no: i32,
+    pub terminal: bool,
+    pub melding: String,
+    pub error_code: Option<StatusErrorCode>,
+    pub timestamp: String,
+}
+
+impl Operasjonstatus {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        command_id: Uuid,
+        correlation_id: Option<Uuid>,
+        operasjon_id: OperasjonId,
+        operasjonstype: Operasjonstype,
+        hendelse: Operasjonshendelse,
+        attempt_no: i32,
+        melding: impl Into<String>,
+        error_code: Option<StatusErrorCode>,
+    ) -> Self {
+        Self {
+            command_id,
+            correlation_id,
+            operasjon_id,
+            operasjonstype,
+            hendelse,
+            attempt_no,
+            terminal: hendelse.er_terminal(),
+            melding: melding.into(),
+            error_code,
+            timestamp: Utc::now().to_rfc3339(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Eksekveringsfeil
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EksekveringFeiltype {
+pub enum Feiltype {
+    /// Retryes for alltid med backoff (SKU-0016 R6).
     Recoverable,
     Irrecoverable,
-    Blocked,
 }
 
-#[derive(Debug, Clone)]
+/// En feil under eksekvering, med alt de tre konsumentene trenger.
+///
+/// Feltene har hver sin mottaker, og de blandes aldri:
+///
+/// - `kode` er stabil og greppbar, og går til `operasjon.siste_detalj`.
+/// - `melding` og `error_code` går til klienten i statusstrømmen.
+/// - `intern_detalj` går **kun** til `siste_detalj`. Her hører underliggende
+///   feiltekst hjemme — sqlx-feil og lignende som ingen andre logger, men som
+///   klienten ikke skal se.
+///
+/// Adapteren som konstruerer feilen bestemmer alle fire; executoren
+/// videreformidler dem uten å tolke.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EksekveringFeil {
-    pub feiltype: EksekveringFeiltype,
+    pub feiltype: Feiltype,
+    pub kode: &'static str,
     pub melding: String,
+    pub error_code: StatusErrorCode,
+    pub intern_detalj: Option<String>,
 }
+
+/// Klienten skal ikke se innsiden av Skuffen.
+const INTERN_MELDING: &str = "Intern feil i behandlingen.";
+const INTERN_MIDLERTIDIG_MELDING: &str = "Midlertidig intern feil. Nytt forsøk kommer.";
 
 impl EksekveringFeil {
-    pub fn recoverable(melding: impl Into<String>) -> Self {
+    pub fn recoverable(
+        kode: &'static str,
+        melding: impl Into<String>,
+        error_code: StatusErrorCode,
+    ) -> Self {
         Self {
-            feiltype: EksekveringFeiltype::Recoverable,
+            feiltype: Feiltype::Recoverable,
+            kode,
             melding: melding.into(),
+            error_code,
+            intern_detalj: None,
         }
     }
 
-    pub fn irrecoverable(melding: impl Into<String>) -> Self {
+    pub fn irrecoverable(
+        kode: &'static str,
+        melding: impl Into<String>,
+        error_code: StatusErrorCode,
+    ) -> Self {
         Self {
-            feiltype: EksekveringFeiltype::Irrecoverable,
+            feiltype: Feiltype::Irrecoverable,
+            kode,
             melding: melding.into(),
+            error_code,
+            intern_detalj: None,
         }
     }
 
-    pub fn blocked(melding: impl Into<String>) -> Self {
-        Self {
-            feiltype: EksekveringFeiltype::Blocked,
-            melding: melding.into(),
+    /// Feil i Skuffen selv, ikke i arkivet. Koden bærer detaljen for logg og
+    /// `siste_detalj`; klienten får en generisk tekst fordi det ikke er noe
+    /// den kan rette.
+    pub fn intern(kode: &'static str) -> Self {
+        Self::irrecoverable(kode, INTERN_MELDING, StatusErrorCode::ProcessingFailed)
+    }
+
+    /// Intern feil som går over av seg selv — typisk en databasehikke.
+    pub fn intern_midlertidig(kode: &'static str) -> Self {
+        Self::recoverable(
+            kode,
+            INTERN_MIDLERTIDIG_MELDING,
+            StatusErrorCode::TemporaryUnavailable,
+        )
+    }
+
+    /// Underliggende feiltekst for `siste_detalj`. Går aldri til klienten.
+    pub fn med_intern_detalj(mut self, detalj: impl Into<String>) -> Self {
+        self.intern_detalj = Some(detalj.into());
+        self
+    }
+
+    /// Det som skrives til `operasjon.siste_detalj`. Koden først, så den er
+    /// greppbar med prefiks selv når en detalj henger på.
+    pub fn siste_detalj(&self) -> String {
+        match &self.intern_detalj {
+            Some(detalj) => format!("{} {detalj}", self.kode),
+            None => self.kode.to_string(),
         }
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EksekveringResultat {
-    Ok,
-    Blocked,
-    Retrying,
-    Error,
-}
-
-pub fn status_message(stage: CommandStage, stage_status: CommandStageStatus) -> String {
-    if matches!(
-        (stage, stage_status),
-        (CommandStage::Mottatt, CommandStageStatus::Ok)
-    ) {
-        stage.as_code().to_string()
-    } else {
-        format!("{}::{}", stage.as_code(), stage_status.as_code())
-    }
-}
-
-pub fn is_terminal(stage: CommandStage, stage_status: CommandStageStatus) -> bool {
-    match (stage, stage_status) {
-        (CommandStage::Mottatt, _) => false,
-        (CommandStage::Validert, CommandStageStatus::Ok) => false,
-        (CommandStage::Validert, _) => true,
-        (CommandStage::Utfores, CommandStageStatus::Venter) => false,
-        (CommandStage::Utfores, CommandStageStatus::Retrying) => false,
-        (CommandStage::Utfores, CommandStageStatus::Blocked) => false,
-        (CommandStage::Utfores, CommandStageStatus::Ok) => true,
-        (CommandStage::Utfores, CommandStageStatus::Error) => true,
+    pub fn er_recoverable(&self) -> bool {
+        self.feiltype == Feiltype::Recoverable
     }
 }
 
@@ -288,112 +348,80 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mottatt_uses_stage_name_as_message() {
-        let event = CommandLifecycleEvent::new(
-            CommandLifecycleMetadata::new(Uuid::new_v4(), CommandTypeCode::OpprettSak),
-            None,
-            CommandStatus::Pending,
-            CommandStage::Mottatt,
-            CommandStageStatus::Ok,
-            None,
-            None,
-            CommandLifecycleContext::default(),
-            None,
-        );
-
-        assert_eq!(event.message, "mottatt");
+    fn command_type_koder_er_rundturssikre() {
+        for code in [
+            CommandTypeCode::OpprettSak,
+            CommandTypeCode::OpprettInngaaendeJournalpost,
+            CommandTypeCode::OpprettUtgaaendeJournalpost,
+            CommandTypeCode::OpprettInterntNotatJournalpost,
+            CommandTypeCode::AvsluttSak,
+            CommandTypeCode::SettSaksansvarlig,
+        ] {
+            assert_eq!(CommandTypeCode::from_code(code.as_code()), Some(code));
+        }
     }
 
     #[test]
-    fn retrying_message_id_includes_attempt() {
-        let command_id = Uuid::new_v4();
-        let event = CommandLifecycleEvent::new(
-            CommandLifecycleMetadata::new(command_id, CommandTypeCode::OpprettSak),
-            None,
-            CommandStatus::Retrying,
-            CommandStage::Utfores,
-            CommandStageStatus::Retrying,
-            None,
-            Some("Sikri timeout".to_string()),
-            CommandLifecycleContext::default(),
-            Some(2),
-        );
+    fn kun_avgjorte_utfall_er_terminale() {
+        assert!(CommandEvent::Fullfort.er_terminal());
+        assert!(CommandEvent::Feilet.er_terminal());
+        assert!(CommandEvent::Avvist.er_terminal());
+        assert!(!CommandEvent::Mottatt.er_terminal());
+        assert!(!CommandEvent::Validert.er_terminal());
+        assert!(!CommandEvent::Utfores.er_terminal());
+    }
 
-        assert_eq!(event.message, "utfores::retrying");
+    #[test]
+    fn varsel_er_ikke_terminalt() {
+        assert!(!Operasjonshendelse::Varsel.er_terminal());
+        assert!(!Operasjonshendelse::ForsokFeilet.er_terminal());
+        assert!(!Operasjonshendelse::KreverAvklaring.er_terminal());
+    }
+
+    #[test]
+    fn interne_feil_lekker_ikke_detaljen_til_klienten() {
+        let feil = EksekveringFeil::intern("intern_sak_attributter_mangler");
+
+        // Detaljen er greppbar i koden, som går til siste_detalj ...
+        assert_eq!(feil.kode, "intern_sak_attributter_mangler");
+        // ... men klienten får ingen innsikt i Skuffens innside.
+        assert_eq!(feil.melding, "Intern feil i behandlingen.");
+        assert_eq!(feil.error_code, StatusErrorCode::ProcessingFailed);
+        assert!(!feil.er_recoverable());
+    }
+
+    #[test]
+    fn intern_midlertidig_er_recoverable() {
+        let feil = EksekveringFeil::intern_midlertidig("intern_fakta_utilgjengelig");
+
+        assert!(feil.er_recoverable());
+        assert_eq!(feil.error_code, StatusErrorCode::TemporaryUnavailable);
+    }
+
+    #[test]
+    fn intern_detalj_gaar_til_siste_detalj_men_aldri_til_klienten() {
+        let feil = EksekveringFeil::intern_midlertidig("intern_fakta_utilgjengelig")
+            .med_intern_detalj("pool timed out while connecting");
+
         assert_eq!(
-            event.message_id(),
-            format!("status:{command_id}:utfores:retrying:2")
+            feil.siste_detalj(),
+            "intern_fakta_utilgjengelig pool timed out while connecting"
         );
+        // Klientmeldingen er urørt av detaljen.
+        assert_eq!(feil.melding, "Midlertidig intern feil. Nytt forsøk kommer.");
     }
 
     #[test]
-    fn command_status_literals_are_pinned() {
-        let values = [
-            (CommandStatus::Pending, "pending"),
-            (CommandStatus::Ok, "ok"),
-            (CommandStatus::Blocked, "blocked"),
-            (CommandStatus::Retrying, "retrying"),
-            (CommandStatus::Error, "error"),
-        ];
+    fn siste_detalj_er_bare_koden_uten_detalj() {
+        // Arkivfeil trenger ingen detalj: sikri_client har allerede logget
+        // status, endepunkt og body. Da skal siste_detalj være ren og
+        // greppbar.
+        let feil = EksekveringFeil::irrecoverable(
+            "sikri_unknown_user",
+            "Ugyldig saksbehandler.",
+            StatusErrorCode::InvalidRequest,
+        );
 
-        for (status, code) in values {
-            assert_eq!(status.as_code(), code);
-        }
-    }
-
-    #[test]
-    fn status_error_code_literals_are_pinned() {
-        let values = [
-            (StatusErrorCode::InvalidRequest, "invalid_request"),
-            (StatusErrorCode::NotFound, "not_found"),
-            (StatusErrorCode::Conflict, "conflict"),
-            (StatusErrorCode::PrerequisitePending, "prerequisite_pending"),
-            (
-                StatusErrorCode::TemporaryUnavailable,
-                "temporary_unavailable",
-            ),
-            (StatusErrorCode::ProcessingFailed, "processing_failed"),
-        ];
-
-        for (error_code, code) in values {
-            assert_eq!(error_code.as_code(), code);
-        }
-    }
-
-    #[test]
-    fn command_type_code_literals_are_pinned_for_persistence_and_routing() {
-        let values = [
-            (CommandTypeCode::OpprettSak, "opprett_sak"),
-            (
-                CommandTypeCode::OpprettInngaaendeJournalpost,
-                "opprett_inngaaende_journalpost",
-            ),
-            (
-                CommandTypeCode::OpprettUtgaaendeJournalpost,
-                "opprett_utgaaende_journalpost",
-            ),
-            (
-                CommandTypeCode::OpprettInterntNotatJournalpost,
-                "opprett_internt_notat_journalpost",
-            ),
-            (CommandTypeCode::AvsluttSak, "avslutt_sak"),
-            (CommandTypeCode::SettSaksansvarlig, "sett_saksansvarlig"),
-        ];
-
-        for (command_type, code) in values {
-            assert_eq!(command_type.as_code(), code);
-        }
-    }
-
-    #[test]
-    fn lifecycle_context_is_empty_only_without_identifiers() {
-        let empty = CommandLifecycleContext::default();
-        assert!(empty.is_empty());
-
-        let with_sak = CommandLifecycleContext {
-            sak_client_reference: Some(Uuid::new_v4().to_string()),
-            ..CommandLifecycleContext::default()
-        };
-        assert!(!with_sak.is_empty());
+        assert_eq!(feil.siste_detalj(), "sikri_unknown_user");
     }
 }

@@ -15,6 +15,15 @@ Denne guiden samler arkitekturressurser, command/query-referanser og diagrammer 
 - Query mapping CSV: `.agent/guides/architecture/command/query.csv`
 - Command mapping SVG: `.agent/guides/architecture/command/Skuffen - Kommando mapping til Operasjon.svg`
 
+## Media upload
+
+Media bruker `lib-nats` sin session-baserte request/reply-protokoll med base subject
+`arkiv.arkiver.media`: `begin` tildeler en receiver, chunks sendes til receiver-sessionen,
+og `commit` lagrer objektet. Receiver-ID i subjectet hindrer at chunks fordeles mellom
+overlappende Skuffen-revisjoner. Lagring er idempotent for samme UUID, stoerrelse og SHA-256;
+samme UUID med annet innhold er en konflikt. NATS-serveren maa tillate minst 2 000 000 bytes
+per melding, som er default chunk size i protokollen.
+
 ## Diagrams
 
 - Application architecture SVG: `.agent/guides/architecture/Skuffen - Application Architecture.svg`

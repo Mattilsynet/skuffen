@@ -7,9 +7,7 @@ use anyhow::Result;
 use async_nats::{Client, ConnectOptions, jetstream};
 use bytes::Bytes;
 use futures::StreamExt;
-use lib_nats::chunked_upload::protocol::{
-    ChunkedUploadConfig, UploadMetadata, build_chunk_headers, split_payload,
-};
+use lib_nats::chunked_upload::{ChunkedUploadClient, ChunkedUploadClientConfig, UploadRequest};
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::journalpost::{
     JournalpostCommon, OpprettInterntNotatJournalpost,
@@ -17,7 +15,7 @@ use lib_schemas::skuffen::command::journalpost::{
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak, SettSaksansvarlig};
 use lib_schemas::skuffen::dokument::{Dokument as DtoDokument, Dokumentform, Felt};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
-use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1};
+use lib_schemas::skuffen::status::{SkuffenCommandEvent, SkuffenCommandStatusV1};
 use lib_schemas::skuffen::tilgang::{Tilgangshjemmel, Tilgangskode, Tilgjengelighet};
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -324,10 +322,11 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
             correlation_id,
             payload: Command::OpprettSak(OpprettSak {
                 client_reference: sak_client_reference,
-                sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+                sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                     "Skuffen manual test {}",
                     Uuid::new_v4()
-                )),
+                ))
+                .unwrap(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
                 saksbehandler_id: saksbehandler_id.clone(),
                 saksbehandler_enhet: saksbehandler_enhet.clone(),
@@ -340,10 +339,11 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
             correlation_id,
             payload: Command::OpprettSak(OpprettSak {
                 client_reference: shielded_sak_client_reference,
-                sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+                sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                     "[|Ola Norrmann|] - Skuffen manual test {}",
                     Uuid::new_v4()
-                )),
+                ))
+                .unwrap(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
                 saksbehandler_id: saksbehandler_id.clone(),
                 saksbehandler_enhet: saksbehandler_enhet.clone(),
@@ -611,7 +611,7 @@ async fn watch_status(config: &ConnectionConfig, raw_args: &[String]) -> Result<
     let stream = js
         .get_or_create_stream(jetstream::stream::Config {
             name: "arkiv_status".to_string(),
-            subjects: vec!["arkiv.status.*".to_string()],
+            subjects: vec!["arkiv.status.>".to_string()],
             max_age: Duration::from_secs(60 * 60 * 24 * 180),
             ..Default::default()
         })
@@ -652,7 +652,7 @@ async fn watch_status(config: &ConnectionConfig, raw_args: &[String]) -> Result<
         println!();
         println!("── {command_id} ──────────────────────────────────────");
 
-        let subject = format!("arkiv.status.{command_id}");
+        let subject = format!("arkiv.status.{command_id}.command");
         let consumer = stream
             .create_consumer(jetstream::consumer::pull::Config {
                 durable_name: None,
@@ -704,7 +704,7 @@ async fn watch_status(config: &ConnectionConfig, raw_args: &[String]) -> Result<
                     break;
                 }
             };
-            let event: SkuffenStatusEventV1 = match serde_json::from_slice(&msg.payload) {
+            let event: SkuffenCommandStatusV1 = match serde_json::from_slice(&msg.payload) {
                 Ok(event) => event,
                 Err(err) => {
                     summary.final_status = Some("InvalidStatusPayload".to_string());
@@ -724,22 +724,18 @@ async fn watch_status(config: &ConnectionConfig, raw_args: &[String]) -> Result<
             if let Some(ref jp) = event.journalpost_id {
                 summary.journalpost_id = Some(jp.0.clone());
             }
-            if let Some(ref docs) = event.dokument_id {
-                summary.dokument_ids = docs.iter().map(|d| d.0.clone()).collect();
+            if let Some(ref docs) = event.dokument_client_references {
+                summary.dokument_ids = docs.iter().map(|d| d.to_string()).collect();
             }
             if event.terminal {
-                summary.reached_terminal_ok = event.status == SkuffenStatus::Ok;
-                summary.final_status = Some(format!("{:?}", event.status));
+                summary.reached_terminal_ok = event.hendelse == SkuffenCommandEvent::Fullfort;
+                summary.final_status = Some(format!("{:?}", event.hendelse));
                 summary.final_message = Some(event.message.clone());
                 summary.error_code = event.error_code.as_ref().map(|e| format!("{e:?}"));
             }
 
             // Print this event line.
             let ts = event.timestamp.as_deref().unwrap_or("-");
-            let attempt = event
-                .attempt
-                .map(|v| format!("attempt={v}"))
-                .unwrap_or_default();
             let error = event
                 .error_code
                 .as_ref()
@@ -747,16 +743,15 @@ async fn watch_status(config: &ConnectionConfig, raw_args: &[String]) -> Result<
                 .unwrap_or_default();
             let terminal_marker = if event.terminal { " ✓" } else { "" };
             println!(
-                "  [{ts}] {phase:?} › {status:?}{terminal_marker}  {attempt}  {msg_text}{error}",
-                phase = event.phase,
-                status = event.status,
+                "  [{ts}] {hendelse:?}{terminal_marker}  {msg_text}{error}",
+                hendelse = event.hendelse,
                 msg_text = event.message,
             );
 
             // Print archive IDs inline as soon as they arrive.
             if event.saksnummer.is_some()
                 || event.journalpost_id.is_some()
-                || event.dokument_id.is_some()
+                || event.dokument_client_references.is_some()
             {
                 if let Some(ref s) = event.saksnummer {
                     println!("    saksnummer     = {}", s.as_str());
@@ -764,9 +759,9 @@ async fn watch_status(config: &ConnectionConfig, raw_args: &[String]) -> Result<
                 if let Some(ref jp) = event.journalpost_id {
                     println!("    journalpost_id = {}", jp.0);
                 }
-                if let Some(ref docs) = event.dokument_id {
+                if let Some(ref docs) = event.dokument_client_references {
                     for doc in docs {
-                        println!("    dokument_id    = {}", doc.0);
+                        println!("    dokument_ref   = {doc}");
                     }
                 }
             }
@@ -835,38 +830,22 @@ async fn publish_media(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| anyhow::anyhow!("Invalid filename for {}", path.display()))?;
-    let metadata = UploadMetadata {
-        filename: Some(filename.to_string()),
-        content_type: Some(content_type.to_string()),
-    };
-    let config = ChunkedUploadConfig::default();
-    let chunks = split_payload(&payload, config.chunk_size)?;
     let upload_id = upload_reference.to_string();
-    let chunk_count = chunks.len() as u32;
-    let total_size = payload.len();
-
-    let inbox = client.new_inbox();
-    let mut sub = client.subscribe(inbox.clone()).await?;
-
-    for (index, chunk) in chunks.into_iter().enumerate() {
-        let headers =
-            build_chunk_headers(&upload_id, index as u32, chunk_count, total_size, &metadata);
-        client
-            .publish_with_reply_and_headers(
-                "arkiv.arkiver.media",
-                inbox.clone(),
-                headers,
-                Bytes::from(chunk),
-            )
-            .await?;
-    }
-
-    let message = tokio::time::timeout(Duration::from_secs(5), sub.next()).await?;
-    let message = message.ok_or_else(|| anyhow::anyhow!("Missing media upload response"))?;
-    let response_json: serde_json::Value = serde_json::from_slice(&message.payload)?;
-    if response_json.get("status").and_then(|s| s.as_str()) != Some("Ok") {
-        anyhow::bail!("Media upload failed: {response_json}");
-    }
+    let uploader = ChunkedUploadClient::new(
+        client,
+        ChunkedUploadClientConfig {
+            base_subject: "arkiv.arkiver.media".to_string(),
+            ..ChunkedUploadClientConfig::default()
+        },
+    );
+    uploader
+        .upload(UploadRequest {
+            upload_id,
+            bytes: Bytes::from(payload),
+            filename: Some(filename.to_string()),
+            content_type: Some(content_type.to_string()),
+        })
+        .await?;
 
     Ok(())
 }

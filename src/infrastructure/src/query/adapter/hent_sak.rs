@@ -1,14 +1,18 @@
 use application::query::services::hent_sak::SakRepository;
 use async_trait::async_trait;
 
-use crate::query::mapping::{self, lookup::key_mapping_queries::lookup_arkiv_id_fra_skuffen_id};
+use crate::query::mapping::{self, lookup::entitet_queries::lookup_arkiv_id_fra_skuffen_id};
 
 #[derive(Debug)]
 pub struct SikriRepository;
 
 #[async_trait]
 impl SakRepository for SikriRepository {
-    #[tracing::instrument()]
+    #[tracing::instrument(
+        skip_all,
+        name = "sak.hent",
+        fields(skuffen_id = %key.skuffen_id, inkluder_journalposter)
+    )]
     async fn hent_sak(
         &self,
         key: domain::model::sak::SakKey,

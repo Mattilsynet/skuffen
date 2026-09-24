@@ -5,7 +5,6 @@ use uuid::Uuid;
 pub enum CommandStreamStage {
     Inbox,
     Ready,
-    Done,
 }
 
 impl CommandStreamStage {
@@ -13,7 +12,6 @@ impl CommandStreamStage {
         match self {
             Self::Inbox => "inbox",
             Self::Ready => "ready",
-            Self::Done => "done",
         }
     }
 }
@@ -84,7 +82,7 @@ mod tests {
                 fixed_uuid(100),
                 Command::OpprettSak(OpprettSak {
                     client_reference: fixed_uuid(1),
-                    sakstittel: Sakstittel("Test sak".to_string()),
+                    sakstittel: Sakstittel::try_from("Test sak".to_string()).unwrap(),
                     arkivdel: Arkivdel::Tilsynsdivisjonene,
                     saksbehandler_id: "Z12345".to_string(),
                     saksbehandler_enhet: "42".to_string(),
@@ -171,7 +169,6 @@ mod tests {
         for (command_id, command, expected_token) in command_cases() {
             let expected_inbox = format!("arkiv.command.inbox.{expected_token}.{command_id}");
             let expected_ready = format!("arkiv.command.ready.{expected_token}.{command_id}");
-            let expected_done = format!("arkiv.command.done.{expected_token}.{command_id}");
 
             assert_eq!(
                 command_subject(CommandStreamStage::Inbox, &command, command_id),
@@ -180,10 +177,6 @@ mod tests {
             assert_eq!(
                 command_subject(CommandStreamStage::Ready, &command, command_id),
                 expected_ready
-            );
-            assert_eq!(
-                command_subject(CommandStreamStage::Done, &command, command_id),
-                expected_done
             );
         }
     }

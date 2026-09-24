@@ -32,6 +32,10 @@ Denne guiden beskriver trygge, vanlige bygg-, test- og kvalitetssjekker for `sku
 ## Runtime configuration
 
 - `SKUFFEN_FAKE_SIKRI=1` uses fake Sikri adapters for local development.
+- `SKUFFEN_FAKE_SIKRI_FEIL=irrecoverable|recoverable` makes the fake archive fail
+  every call with that classification. Only read when `SKUFFEN_FAKE_SIKRI=1`, which
+  is itself restricted to `APP_ENV` local/dev/test. Used by the integration test
+  that pins terminal `feilet` versus `retry_venter` (SKU-0017).
 - `SKUFFEN_HTML2PDF_RENDERER_ENDPOINT=<url>` enables HTML-template rendering through
   the external `html-to-pdf` service. When unset, Skuffen keeps a recoverable
   "renderer not configured" failure so local services can still start. Set this
@@ -50,8 +54,18 @@ Denne guiden beskriver trygge, vanlige bygg-, test- og kvalitetssjekker for `sku
   (`safe_detail_for_http_error`, with `sikri_unknown_error` as fallback) so operators
   can still classify upstream validation and code-set failures without exposing raw
   bodies at default log levels.
-- Raw Sikri error-body must never reach NATS replies, public status events,
-  `command_execution.last_detail`, or `tilstand_historikk.feil_detalj`.
+- Transport and parse failures follow the same split. `reqwest::Error` renders the
+  full URL including query parameters — which carry saksnummer — so the raw error
+  goes to `debug!` only. The `error!` line carries `sikri_transport_arsak`
+  (`timeout`, `connect`, `decode`, …), which is the part you actually need to tell a
+  dead Sikri from a slow one.
+- Raw Sikri error-body must never reach NATS replies, public status events or
+  `operasjon.siste_detalj`. `SikriFeil` enforces this by construction: `kode` is a
+  static safe code and `melding` is a pre-mapped user-facing text.
+- `operasjon.siste_detalj` holds the stable code, optionally followed by an internal
+  detail for errors that originate inside Skuffen (sqlx and similar) where nothing
+  else logs them. Archive errors carry no such detail — `sikri_client` has already
+  logged status, endpoint and body.
 - Skuffen still does not log request payloads, authorization headers, or secrets.
 - Note: the previous risk acceptance permitting full 4xx/5xx error-body logging at
   `error!`/`info!` is withdrawn in favor of the `debug!`-only + safe-code policy above.
@@ -92,6 +106,25 @@ Denne guiden beskriver trygge, vanlige bygg-, test- og kvalitetssjekker for `sku
   `cargo test -p skuffen-integration-tests --test command_sequence_e2e query_hent_sak_via_nats_uses_id_mapping -- --nocapture`
 - By substring when exact name is unknown:
   `cargo test -p application ingest_command -- --nocapture`
+
+## Admin read over NATS
+
+Admin read er to eksakte core request-reply-subjects. `utfort_av` er obligatorisk
+selvdeklarert attribusjon, ikke autentisering.
+
+```bash
+nats request arkiv.admin.read.command.hent \
+  '{"utfort_av":"test-operator","command_id":"00000000-0000-0000-0000-000000000001"}'
+```
+
+```bash
+nats request arkiv.admin.read.sak.hent \
+  '{"utfort_av":"test-operator","key":{"type":"clientReference","value":"00000000-0000-0000-0000-000000000002"}}'
+```
+
+`key` støtter `skuffenId`, `clientReference` og `arkivId`. Svarene bruker
+`NatsResponse<T>`; stabile feilmeldinger er `Invalid request format`,
+`Command not found`, `Sak not found`, `Response too large` og `Internal error`.
 
 ## Useful targeted commands
 

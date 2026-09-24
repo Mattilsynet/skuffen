@@ -6,7 +6,7 @@ use lib_schemas::skuffen::query::{
     queries::{HentJournalpostQuery, HentSakQuery},
     responses::{JournalpostResponse, SakResponse},
 };
-use tracing::{debug, error, info};
+use tracing::{Instrument, debug, error, info};
 
 use crate::nats::{client::NatsClient, nats_response::NatsResponse};
 use crate::query::mapping::fra_domene_til_dto::{
@@ -134,21 +134,37 @@ where
     Req: serde::de::DeserializeOwned + Send + Debug,
     Res: serde::Serialize + Send + Debug,
 {
+    /// En avsluttet subscription returnerer `Err`, slik at `try_join!` ikke
+    /// venter for alltid og supervisoren får kontroll (SKU-0021 R7).
     #[tracing::instrument(skip_all)]
     pub async fn run(&self) -> anyhow::Result<()> {
         info!("Lytter etter meldinger på subject '{}'", self.subject);
-        let mut sub = self.client.inner().subscribe(self.subject.clone()).await?;
+        // Uten queue group svarer alle instanser på samme forespørsel. Det
+        // skjer ved utrullingsoverlapp, når to revisjoner lever samtidig.
+        let queue_group = format!("skuffen-query-{}", self.subject);
+        let mut sub = self
+            .client
+            .inner()
+            .queue_subscribe(self.subject.clone(), queue_group)
+            .await?;
 
         while let Some(msg) = sub.next().await {
             self.process_message(msg).await;
         }
 
-        Ok(())
+        Err(anyhow::anyhow!(
+            "subscription on {} ended unexpectedly",
+            self.subject
+        ))
     }
 
-    #[tracing::instrument(skip_all, name = "query.handle", fields(subject = %self.subject))]
     async fn process_message(&self, msg: async_nats::Message) {
-        crate::telemetry::set_parent_from_nats_headers(msg.headers.as_ref());
+        let span = tracing::info_span!("query.handle", subject = %self.subject);
+        crate::telemetry::set_parent_on_span_from_nats_headers(&span, msg.headers.as_ref());
+        self.handle_message(msg).instrument(span).await
+    }
+
+    async fn handle_message(&self, msg: async_nats::Message) {
         debug!("Mottok et query på subject {}", self.subject);
 
         let reply_subject = match msg.reply {

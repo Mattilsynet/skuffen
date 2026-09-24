@@ -3,6 +3,24 @@ use base64::Engine;
 use gcp_auth::Token;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::Deserialize;
+use std::sync::OnceLock;
+use std::time::Duration;
+
+const SECRET_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Secret Manager svarer på millisekunder. Arkivets fem minutter ville skjult
+/// en død forbindelse hit i fem minutter.
+const SECRET_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn secret_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(SECRET_CONNECT_TIMEOUT)
+            .timeout(SECRET_TIMEOUT)
+            .build()
+            .expect("secret-klienten har statisk konfigurasjon")
+    })
+}
 
 async fn get_token() -> Result<Token> {
     let provider = gcp_auth::provider().await?;
@@ -27,7 +45,7 @@ pub async fn get_secret(
     let token = get_token().await?;
     let bearer = format!("Bearer {}", token.as_str());
 
-    let resp = reqwest::Client::new()
+    let resp = secret_client()
         .get(&url)
         .header(AUTHORIZATION, bearer)
         .header(CONTENT_TYPE, "application/json")

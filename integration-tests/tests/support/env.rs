@@ -9,7 +9,7 @@ use testcontainers::{
 use testcontainers_modules::postgres::Postgres;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
-use crate::support::nats::{wait_for_nats_ready, wait_for_ready};
+use crate::support::nats::{wait_for_admin_responders, wait_for_nats_ready, wait_for_ready};
 
 const NATS_IMAGE: &str = "nats";
 const NATS_TAG: &str = "2.10.7";
@@ -26,6 +26,7 @@ struct DbConnectOptions {
 
 pub struct TestEnv {
     pub nats_url: String,
+    pub nats_monitor_url: String,
     _postgres: ContainerAsync<Postgres>,
     _nats: ContainerAsync<GenericImage>,
     _skuffen: tokio::task::JoinHandle<anyhow::Result<()>>,
@@ -46,6 +47,8 @@ fn runtime_lock() -> &'static std::sync::Arc<Mutex<()>> {
 fn default_nats_args() -> Vec<String> {
     vec![
         "-js".to_string(),
+        "-c".to_string(),
+        "/etc/nats-test.conf".to_string(),
         "-p".to_string(),
         NATS_PORT.to_string(),
         "-m".to_string(),
@@ -53,11 +56,22 @@ fn default_nats_args() -> Vec<String> {
     ]
 }
 
-fn nats_image() -> ContainerRequest<GenericImage> {
+/// NATS 2.10.7 setter `max_payload` via config-fil, ikke CLI-flag.
+///
+/// Standardverdien må være større enn media-protokollens chunk size
+/// (2 000 000 bytes). Oversize-testen setter den bevisst lavere og bruker da
+/// kommandoer uten mediareferanser.
+const DEFAULT_MAX_PAYLOAD: usize = 8_000_000;
+
+fn nats_image(max_payload: usize) -> ContainerRequest<GenericImage> {
     GenericImage::new(NATS_IMAGE, NATS_TAG)
         .with_exposed_port(ContainerPort::Tcp(NATS_PORT))
         .with_exposed_port(ContainerPort::Tcp(NATS_MONITOR_PORT))
         .with_cmd(default_nats_args())
+        .with_copy_to(
+            "/etc/nats-test.conf",
+            format!("max_payload: {max_payload}\n").into_bytes(),
+        )
 }
 
 async fn setup_postgres() -> Result<(ContainerAsync<Postgres>, DbConnectOptions)> {
@@ -73,16 +87,19 @@ async fn setup_postgres() -> Result<(ContainerAsync<Postgres>, DbConnectOptions)
     Ok((container, options))
 }
 
-async fn setup_nats() -> Result<(ContainerAsync<GenericImage>, String)> {
-    let container = nats_image().start().await?;
+async fn setup_nats(max_payload: usize) -> Result<(ContainerAsync<GenericImage>, String, String)> {
+    let container = nats_image(max_payload).start().await?;
     let port = container.get_host_port_ipv4(NATS_PORT).await?;
+    let monitor_port = container.get_host_port_ipv4(NATS_MONITOR_PORT).await?;
     let nats_url = format!("nats://127.0.0.1:{port}");
-    Ok((container, nats_url))
+    let monitor_url = format!("http://127.0.0.1:{monitor_port}");
+    Ok((container, nats_url, monitor_url))
 }
 
 fn start_skuffen_process(
     nats_url: &str,
     db_options: &DbConnectOptions,
+    arkivfeil: Option<&'static str>,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
     let base_url_sikri = "http://127.0.0.1:1";
     let project_id = "local-test";
@@ -100,6 +117,12 @@ fn start_skuffen_process(
             std::env::set_var("APP_ENV", "local");
             std::env::set_var("APP_APPLICATION__ENVIRONMENT", "local");
             std::env::set_var("SKUFFEN_FAKE_SIKRI", "1");
+            // Lar en test be fake-arkivet feile på hvert kall, så
+            // klassifiseringen kan observeres gjennom hele kjeden.
+            match arkivfeil {
+                Some(modus) => std::env::set_var("SKUFFEN_FAKE_SIKRI_FEIL", modus),
+                None => std::env::remove_var("SKUFFEN_FAKE_SIKRI_FEIL"),
+            }
             std::env::set_var("DATABASE_HOST", db_host);
             std::env::set_var("DATABASE_PORT", db_port);
             std::env::set_var("DATABASE_USER", db_user);
@@ -125,6 +148,24 @@ fn start_skuffen_process(
 }
 
 pub async fn start_runtime() -> Result<TestEnv> {
+    start_runtime_med(None, DEFAULT_MAX_PAYLOAD).await
+}
+
+/// Runtime med redusert NATS `max_payload`, for å utløse size-guarden uten å
+/// bygge en kunstig stor sak.
+pub async fn start_runtime_med_max_payload(max_payload: usize) -> Result<TestEnv> {
+    start_runtime_med(None, max_payload).await
+}
+
+/// Runtime der hvert arkivkall feiler med den gitte klassifiseringen.
+///
+/// `modus` er `"irrecoverable"` eller `"recoverable"`, jf.
+/// `infrastructure::command::adapter::fake_arkiv_gateway::FAKE_SIKRI_FEIL_ENV`.
+pub async fn start_runtime_med_arkivfeil(modus: &'static str) -> Result<TestEnv> {
+    start_runtime_med(Some(modus), DEFAULT_MAX_PAYLOAD).await
+}
+
+async fn start_runtime_med(arkivfeil: Option<&'static str>, max_payload: usize) -> Result<TestEnv> {
     let guard = runtime_lock().clone().lock_owned().await;
 
     eprintln!("start_runtime: starting postgres container");
@@ -134,19 +175,20 @@ pub async fn start_runtime() -> Result<TestEnv> {
         db_options.host, db_options.port
     );
     eprintln!("start_runtime: starting nats container");
-    let (_nats, nats_url) = setup_nats().await?;
+    let (_nats, nats_url, nats_monitor_url) = setup_nats(max_payload).await?;
     eprintln!("start_runtime: waiting for nats ready");
     wait_for_nats_ready(&nats_url, Duration::from_secs(15)).await?;
     eprintln!("start_runtime: nats ready at {}", nats_url);
 
     eprintln!("start_runtime: spawning skuffen process");
-    let skuffen = start_skuffen_process(&nats_url, &db_options);
+    let skuffen = start_skuffen_process(&nats_url, &db_options, arkivfeil);
     eprintln!("start_runtime: waiting for skuffen ready");
     wait_for_skuffen_ready(&nats_url).await?;
     eprintln!("start_runtime: skuffen ready");
 
     Ok(TestEnv {
         nats_url,
+        nats_monitor_url,
         _guard: guard,
         _postgres,
         _nats,
@@ -154,10 +196,17 @@ pub async fn start_runtime() -> Result<TestEnv> {
     })
 }
 
+/// `skuffen.ready` alene beviser ikke at admin-listeneren har subscribet.
+/// Readiness prober derfor begge admin-subjectene; forventet
+/// `Command not found`/`Sak not found` teller som responder.
 async fn wait_for_skuffen_ready(nats_url: &str) -> Result<()> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        match wait_for_ready(nats_url).await {
+        let klar = match wait_for_ready(nats_url).await {
+            Ok(()) => wait_for_admin_responders(nats_url).await,
+            Err(err) => Err(err),
+        };
+        match klar {
             Ok(()) => return Ok(()),
             Err(err) => {
                 if tokio::time::Instant::now() >= deadline {

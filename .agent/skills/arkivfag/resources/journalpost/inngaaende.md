@@ -9,11 +9,16 @@ Inngående journalposter brukes for dokumentasjon som kommer **utenfra Mattilsyn
 ## 🧩 Nøkkelpunkter
 
 - **Journalposttype =** `"I"`
-- Opprettes **direkte i** `"J"` (journalført)
-- Bruk `avskrivDirekte = true`
-- Bruk alltid `avskrivningsmaate = "TE"`
+- `journalstatus` settes **ikke** ved opprettelse — Elements åpner journalposten
+  i en status der endringer er mulige
+- `avskrivDirekte` og `avskrivningsmaate` settes **ikke** ved opprettelse
+- Journalføring (`J`) og avskriving (`TE`) er **egne steg etterpå**
 - Minst **én avsender** (`erMottaker=false`)
 - Minst **ett hoveddokument** (`hoveddokument=true`)
+
+> ⚠️ En journalført journalpost er **låst**. Opprettes den direkte i `J`, kan
+> vedlegg ikke legges til i ettertid. Skuffen oppretter derfor journalposten
+> åpen, legger på vedlegg, og journalfører til slutt.
 
 ## 🛠️ Obligatoriske felter
 
@@ -22,9 +27,9 @@ Inngående journalposter brukes for dokumentasjon som kommer **utenfra Mattilsyn
 | `tittel`              | string   | ✅         | Inngående journalposttittel                                                                            |
 | `dokumentDato`        | datetime | ✅         | Dato dokumentet er mottatt/registrert                                                                  |
 | `journalposttype`     | string   | ✅         | Alltid `"I"`                                                                                           |
-| `journalstatus`       | string   | ✅         | Settes til `"J"`                                                                                       |
-| `avskrivDirekte`      | boolean  | ✅         | Alltid `true` i vår praksis                                                                            |
-| `avskrivningsmaate`   | string   | ✅         | Alltid `"TE"`                                                                                          |
+| `journalstatus`       | string   | ⛔         | Settes **ikke** ved opprettelse. Journalføres i eget steg når alle dokumenter er på plass              |
+| `avskrivDirekte`      | boolean  | ⛔         | Settes **ikke** ved opprettelse. Avskriving er et eget steg                                            |
+| `avskrivningsmaate`   | string   | ⛔         | Settes **ikke** ved opprettelse. Alltid `"TE"` når avskriving utføres                                  |
 | `saksbehandler`       | string   | ✅         | ID for ansvarlig, bruk ansattnummer                                                                    |
 | `saksbehandlerEnhet`  | string   | ✅         | Enhet/organisatorisk tilhørighet. Eksempelvis M34600                                                   |
 | `avsendereMottakere`  | array    | ✅         | Minst én **avsender** (`erMottaker=false`)                                                             |
@@ -46,10 +51,17 @@ Inngående journalposter brukes for dokumentasjon som kommer **utenfra Mattilsyn
 - TO: Til orientering
 - TLF: Besvart pr. telefon
 
-### 🧪 Videreutvikling eller behov for tilpasning
+### 📮 Statusløp
 
-Denne siden beskriver standardoppsettet for registrering av inngående journalposter som skal arkiveres direkte i status **J (journalført)**.
-Dersom det er behov for mer komplekse flyter – for eksempel å opprette journalposter som skal redigeres etter registrering, fordeles, eller få vedlegg lagt til i ettertid – kan dette løses via tilpassede integrasjonsflyter.
+| Trinn | Hva som skjer                                                       | Utføres av           |
+| :---- | :------------------------------------------------------------------ | :------------------- |
+| **1** | Journalposten opprettes med hoveddokument. `journalstatus` settes ikke | Integrasjon / system |
+| **2** | Vedlegg legges til, ett om gangen                                    | Integrasjon / system |
+| **3** | **J – Journalført.** Journalposten låses og publiseres til eInnsyn   | Integrasjon / system |
+| **4** | **TE – Avskrevet.** Dokumentet er tatt til etterretning              | Integrasjon / system |
+
+Rekkefølgen er ikke valgfri: vedlegg må være på plass før journalføring, og
+avskriving forutsetter at journalposten er journalført.
 
 ## 🚨 Vanlige feilmeldinger
 

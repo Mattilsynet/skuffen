@@ -1,1 +1,1 @@
-pub mod key_mapping_queries;
+pub mod entitet_queries;

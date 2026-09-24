@@ -23,6 +23,8 @@ pub struct CommandScenario {
     pub journalpost_utgaaende_utsending_client_reference: Uuid,
     pub dokument_client_reference: Uuid,
     pub dokument_referanse: Uuid,
+    pub vedlegg_client_reference: Uuid,
+    pub mal_referanse: Uuid,
 }
 
 impl CommandScenario {
@@ -36,6 +38,8 @@ impl CommandScenario {
             journalpost_utgaaende_utsending_client_reference: Uuid::new_v4(),
             dokument_client_reference: Uuid::new_v4(),
             dokument_referanse: Uuid::new_v4(),
+            vedlegg_client_reference: Uuid::new_v4(),
+            mal_referanse: Uuid::new_v4(),
         }
     }
 
@@ -59,7 +63,8 @@ impl CommandScenario {
                 correlation_id: Some(Uuid::new_v4()),
                 payload: Command::OpprettSak(OpprettSak {
                     client_reference: self.sak_client_reference,
-                    sakstittel: lib_schemas::skuffen::sak::Sakstittel(sakstittel),
+                    sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(sakstittel)
+                        .unwrap(),
                     arkivdel: Arkivdel::Tilsynsdivisjonene,
                     saksbehandler_id: saksbehandler_id.to_string(),
                     saksbehandler_enhet: saksbehandler_enhet.to_string(),
@@ -111,7 +116,7 @@ impl CommandScenario {
             correlation_id: Some(Uuid::new_v4()),
             payload: Command::OpprettSak(OpprettSak {
                 client_reference: self.sak_client_reference,
-                sakstittel: lib_schemas::skuffen::sak::Sakstittel(sakstittel),
+                sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(sakstittel).unwrap(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
                 saksbehandler_id: saksbehandler_id.to_string(),
                 saksbehandler_enhet: saksbehandler_enhet.to_string(),
@@ -145,6 +150,49 @@ impl CommandScenario {
                         tittel: "Vedlegg".to_string(),
                         form: self.bytes_form(),
                     }],
+                    sak_key,
+                    kildesystem: None,
+                },
+                avsender: Korrespondansepart {
+                    navn: "Avsender".to_string(),
+                    parttype: Parttype::Virksomhet,
+                },
+            }),
+        }
+    }
+
+    /// Inngående journalpost med både hoveddokument og et ekte vedlegg, slik
+    /// at sekvensen får en `LeggTilVedlegg`-operasjon.
+    pub fn opprett_inngaende_med_vedlegg(
+        &self,
+        saksbehandler_id: &str,
+        saksbehandler_enhet: &str,
+        sak_key: DtoSakKey,
+        title: &str,
+    ) -> CommandEnvelope<Command> {
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id: Some(Uuid::new_v4()),
+            payload: Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+                felles: JournalpostCommon {
+                    client_reference: self.journalpost_inngaende_client_reference,
+                    tittel: title.to_string(),
+                    dokument_dato: "2025-01-02".to_string(),
+                    saksbehandler: saksbehandler_id.to_string(),
+                    saksbehandler_enhet: saksbehandler_enhet.to_string(),
+                    tilgjengelighet: Tilgjengelighet::Offentlig,
+                    dokumenter: vec![
+                        DtoDokument {
+                            client_reference: self.dokument_client_reference,
+                            tittel: "Hoveddokument".to_string(),
+                            form: self.bytes_form(),
+                        },
+                        DtoDokument {
+                            client_reference: self.vedlegg_client_reference,
+                            tittel: "Vedlegg".to_string(),
+                            form: self.bytes_form(),
+                        },
+                    ],
                     sak_key,
                     kildesystem: None,
                 },
@@ -243,6 +291,49 @@ impl CommandScenario {
                         tittel: "Vedlegg".to_string(),
                         form: self.bytes_form(),
                     }],
+                    sak_key,
+                    kildesystem: None,
+                },
+            }),
+        }
+    }
+
+    /// Internt notat der vedlegget er en HTML-mal. Domenet avviser det
+    /// (`HtmlTemplateVedleggIkkeStottet`) ved første vurdering, uten å ha
+    /// vært innom arkivet.
+    pub fn opprett_internt_notat_med_html_vedlegg(
+        &self,
+        saksbehandler_id: &str,
+        saksbehandler_enhet: &str,
+        sak_key: DtoSakKey,
+        title: &str,
+    ) -> CommandEnvelope<Command> {
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id: Some(Uuid::new_v4()),
+            payload: Command::OpprettInterntNotatJournalpost(OpprettInterntNotatJournalpost {
+                felles: JournalpostCommon {
+                    client_reference: self.journalpost_internt_client_reference,
+                    tittel: title.to_string(),
+                    dokument_dato: "2025-01-05".to_string(),
+                    saksbehandler: saksbehandler_id.to_string(),
+                    saksbehandler_enhet: saksbehandler_enhet.to_string(),
+                    tilgjengelighet: Tilgjengelighet::Offentlig,
+                    dokumenter: vec![
+                        DtoDokument {
+                            client_reference: self.dokument_client_reference,
+                            tittel: "Hoveddokument".to_string(),
+                            form: self.bytes_form(),
+                        },
+                        DtoDokument {
+                            client_reference: self.vedlegg_client_reference,
+                            tittel: "Vedlegg som mal".to_string(),
+                            form: Dokumentform::HtmlTemplate {
+                                mal_referanse: self.mal_referanse,
+                                felter: Vec::new(),
+                            },
+                        },
+                    ],
                     sak_key,
                     kildesystem: None,
                 },

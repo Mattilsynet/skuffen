@@ -24,6 +24,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features
+      - name: instrument uten skip_all (SKU-0019 R2)
+        run: bash scripts/sjekk-instrument-skip-all.sh
       - name: ADR diagnostics (advisory)
         run: cargo run -p adr-fmt -- --lint
         continue-on-error: true

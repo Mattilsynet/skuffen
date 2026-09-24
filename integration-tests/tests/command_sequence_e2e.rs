@@ -1,4 +1,9 @@
 use anyhow::Result;
+use async_nats::jetstream;
+use bytes::Bytes;
+use lib_nats::chunked_upload::{
+    ChunkedUploadClient, ChunkedUploadClientConfig, UploadError, UploadErrorCode, UploadRequest,
+};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -6,16 +11,63 @@ use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
-use lib_schemas::skuffen::status::{SkuffenStatus, SkuffenStatusEventV1, SkuffenStatusPhase};
+use lib_schemas::skuffen::status::{
+    SkuffenCommandEvent, SkuffenCommandStatusV1, SkuffenOperasjonHendelse,
+    SkuffenOperasjonStatusV1, SkuffenOperasjonstype, SkuffenStatusErrorCode,
+};
 use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 
 use support::{
     CommandScenario, extract_saksnummer, hent_bruker_mt_enheter_via_nats,
     hent_journalpost_via_nats, hent_sak_via_nats_by_arkiv_id, publish_media, send_command_batch,
-    wait_for_status_events,
+    send_raw_command_payload, terminalt_feilet, wait_for_operasjon_events, wait_for_status_events,
 };
 
 mod support;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn media_upload_is_chunked_idempotent_and_immutable() -> Result<()> {
+    let env = support::start_runtime().await?;
+    let dokument_referanse = Uuid::new_v4();
+
+    publish_media(&env.nats_url, dokument_referanse).await?;
+    publish_media(&env.nats_url, dokument_referanse).await?;
+
+    let client = async_nats::connect(&env.nats_url).await?;
+    let uploader = ChunkedUploadClient::new(
+        client,
+        ChunkedUploadClientConfig {
+            base_subject: "arkiv.arkiver.media".to_string(),
+            ..ChunkedUploadClientConfig::default()
+        },
+    );
+    let error = uploader
+        .upload(UploadRequest {
+            upload_id: dokument_referanse.to_string(),
+            bytes: Bytes::from_static(b"different content"),
+            filename: Some("vedlegg.txt".to_string()),
+            content_type: Some("text/plain".to_string()),
+        })
+        .await
+        .expect_err("same upload ID with different content must conflict");
+
+    assert!(matches!(
+        error,
+        UploadError::Rejected {
+            code: UploadErrorCode::UploadConflict,
+            ..
+        }
+    ));
+    let store = jetstream::new(async_nats::connect(&env.nats_url).await?)
+        .get_object_store("arkiv_media")
+        .await?;
+    let mut object = store.get(dokument_referanse.to_string()).await?;
+    let mut stored = Vec::new();
+    tokio::io::AsyncReadExt::read_to_end(&mut object, &mut stored).await?;
+    let expected: Vec<u8> = (0..2_000_001).map(|index| (index % 251) as u8).collect();
+    assert_eq!(stored, expected);
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn command_sequence_opprett_internt_notat_avslutt_sak() -> Result<()> {
@@ -62,10 +114,11 @@ async fn command_sequence_inngaende_journalpost_flow() -> Result<()> {
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
             client_reference: scenario.sak_client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Inngaende test {}",
                 Uuid::new_v4()
-            )),
+            ))
+            .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
@@ -115,10 +168,11 @@ async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
             client_reference: scenario.sak_client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Utgaaende test {}",
                 Uuid::new_v4()
-            )),
+            ))
+            .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z99999".to_string(),
             saksbehandler_enhet: "42".to_string(),
@@ -156,7 +210,7 @@ async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn query_hent_sak_via_nats_uses_id_mapping() -> Result<()> {
+async fn query_hent_sak_via_nats_slaar_opp_entitet() -> Result<()> {
     let env = support::start_runtime().await?;
 
     let scenario = CommandScenario::new();
@@ -167,10 +221,11 @@ async fn query_hent_sak_via_nats_uses_id_mapping() -> Result<()> {
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
             client_reference: scenario.sak_client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Query test {}",
                 Uuid::new_v4()
-            )),
+            ))
+            .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
@@ -188,7 +243,7 @@ async fn query_hent_sak_via_nats_uses_id_mapping() -> Result<()> {
     let saksnummer = extract_saksnummer(&events, opprett_sak.command_id)
         .expect("OpprettSak should return saksnummer");
 
-    // Query by arkiv_id (uses id_mapping lookup internally)
+    // Query by arkiv_id (slår opp entitet internt)
     let response = hent_sak_via_nats_by_arkiv_id(&env.nats_url, &saksnummer).await?;
     assert_eq!(response.get("status").and_then(|s| s.as_str()), Some("Ok"));
     Ok(())
@@ -237,10 +292,11 @@ async fn avslutt_sak_uten_journalposter_er_tillatt() -> Result<()> {
             correlation_id: Some(Uuid::new_v4()),
             payload: Command::OpprettSak(OpprettSak {
                 client_reference: sak_client_reference,
-                sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+                sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                     "Skuffen E2E avslutt uten journalposter {}",
                     Uuid::new_v4()
-                )),
+                ))
+                .unwrap(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
                 saksbehandler_id: "Z12345".to_string(),
                 saksbehandler_enhet: "42".to_string(),
@@ -280,10 +336,11 @@ async fn avslutt_sak_med_arkiv_id_fullfoerer_gjennom_hele_flyten() -> Result<()>
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
             client_reference: sak_client_reference,
-            sakstittel: lib_schemas::skuffen::sak::Sakstittel(format!(
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Avslutt med arkiv_id {}",
                 Uuid::new_v4()
-            )),
+            ))
+            .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
             saksbehandler_id: "Z12345".to_string(),
             saksbehandler_enhet: "42".to_string(),
@@ -326,41 +383,37 @@ async fn avslutt_sak_med_arkiv_id_fullfoerer_gjennom_hele_flyten() -> Result<()>
 }
 
 fn assert_happy_path_stages(
-    events: &[SkuffenStatusEventV1],
+    events: &[SkuffenCommandStatusV1],
     command_ids: impl IntoIterator<Item = Uuid>,
 ) {
     for command_id in command_ids {
-        let command_events: Vec<&SkuffenStatusEventV1> = events
+        let command_events: Vec<&SkuffenCommandStatusV1> = events
             .iter()
             .filter(|event| event.command_id == command_id)
             .collect();
         assert!(
             command_events
                 .iter()
-                .any(|event| event.phase == SkuffenStatusPhase::Ingest),
+                .any(|event| event.hendelse == SkuffenCommandEvent::Mottatt),
             "Missing Ingest event for command {command_id}"
         );
         assert!(
             command_events
                 .iter()
-                .any(|event| event.phase == SkuffenStatusPhase::Validate
-                    && event.status == SkuffenStatus::Ok),
+                .any(|event| event.hendelse == SkuffenCommandEvent::Validert),
             "Missing Validate+Ok event for command {command_id}"
         );
         assert!(
             command_events
                 .iter()
-                .any(|event| event.phase == SkuffenStatusPhase::Execution
-                    && event.status == SkuffenStatus::Pending),
+                .any(|event| event.hendelse == SkuffenCommandEvent::Utfores),
             "Missing Execution+Pending event for command {command_id}"
         );
         assert!(
             command_events
                 .iter()
-                .any(|event| event.phase == SkuffenStatusPhase::Execution
-                    && event.status == SkuffenStatus::Ok
-                    && event.terminal),
-            "Missing terminal Execution+Ok event for command {command_id}"
+                .any(|event| event.hendelse == SkuffenCommandEvent::Fullfort && event.terminal),
+            "Missing terminal fullfort event for command {command_id}"
         );
     }
 }
@@ -521,8 +574,8 @@ async fn utgaaende_med_flere_mottakere_flow() -> Result<()> {
     Ok(())
 }
 
-fn assert_validate_error(events: &[SkuffenStatusEventV1], command_id: Uuid) {
-    let command_events: Vec<&SkuffenStatusEventV1> = events
+fn assert_validate_error(events: &[SkuffenCommandStatusV1], command_id: Uuid) {
+    let command_events: Vec<&SkuffenCommandStatusV1> = events
         .iter()
         .filter(|event| event.command_id == command_id)
         .collect();
@@ -530,15 +583,424 @@ fn assert_validate_error(events: &[SkuffenStatusEventV1], command_id: Uuid) {
     assert!(
         command_events
             .iter()
-            .any(|event| event.phase == SkuffenStatusPhase::Validate
-                && event.status == SkuffenStatus::Error),
-        "Expected Validate+Error event for command {command_id}, got {command_events:?}"
+            .any(|event| event.hendelse == SkuffenCommandEvent::Avvist),
+        "Expected avvist event for command {command_id}, got {command_events:?}"
     );
     assert!(
         !command_events
             .iter()
-            .any(|event| event.phase == SkuffenStatusPhase::Execution
-                && event.status == SkuffenStatus::Ok),
-        "Rejected command {command_id} must not reach Execution+Ok"
+            .any(|event| event.hendelse == SkuffenCommandEvent::Fullfort),
+        "Rejected command {command_id} must never reach fullfort"
     );
+}
+
+/// Ugyldige payloads skal avvises på wire-grensen (deserialisering) med en
+/// `Error`-kvittering, og aldri komme inn i pipelinen. Dekker regresjoner der
+/// en `#[serde(try_from)]`-validering eller `deny_unknown_fields` fjernes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ugyldig_payload_avvises_paa_wire_grensen() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let common = |sakstittel: &str, ekstra: &str| {
+        format!(
+            r#"[{{"command_id":"{cid}","correlation_id":null,"payload":{{"OpprettSak":{{"client_reference":"{cref}","sakstittel":"{sakstittel}","arkivdel":"Tilsynsdivisjonene","saksbehandler_id":"Z12345","saksbehandler_enhet":"42","ordningsverdi":"123","tilgjengelighet":"Offentlig"{ekstra}}}}}}}]"#,
+            cid = Uuid::new_v4(),
+            cref = Uuid::new_v4(),
+        )
+    };
+
+    // Hver ugyldig payload skal gi en Error-kvittering.
+    let for_lang_tittel = common(&"A".repeat(300), "");
+    let tom_tittel = common("", "");
+    let ukjent_felt = common("Gyldig", r#","evil_injected_field":"x""#);
+
+    let ugyldig_fnr = format!(
+        r#"[{{"command_id":"{cid}","correlation_id":null,"payload":{{"OpprettUtgåendeJournalpostMedUtsending":{{"client_reference":"{cref}","tittel":"Test","dokument_dato":"2025-01-01","saksbehandler":"Z12345","saksbehandler_enhet":"42","tilgjengelighet":"Offentlig","dokumenter":[],"sak_key":{{"type":"clientReference","value":"{sref}"}},"kildesystem":null,"mottakere":[{{"navn":"Ola","id":{{"Person":{{"fødselsnummer":"12345678901"}}}},"adresse":{{"adresse":"Gata 1","postnummer":"0350","poststed":"Oslo"}}}}]}}}}}}]"#,
+        cid = Uuid::new_v4(),
+        cref = Uuid::new_v4(),
+        sref = Uuid::new_v4(),
+    );
+
+    let skjermet_tom_kode = format!(
+        r#"[{{"command_id":"{cid}","correlation_id":null,"payload":{{"OpprettSak":{{"client_reference":"{cref}","sakstittel":"Test","arkivdel":"Tilsynsdivisjonene","saksbehandler_id":"Z12345","saksbehandler_enhet":"42","ordningsverdi":"123","tilgjengelighet":{{"Skjermet":{{"tilgangskode":"","tilgangshjemmel":"Offl. § 13"}}}}}}}}}}]"#,
+        cid = Uuid::new_v4(),
+        cref = Uuid::new_v4(),
+    );
+
+    for (beskrivelse, payload) in [
+        ("for lang sakstittel", &for_lang_tittel),
+        ("tom sakstittel", &tom_tittel),
+        ("ukjent felt", &ukjent_felt),
+        ("ugyldig fødselsnummer", &ugyldig_fnr),
+        ("skjermet med tom tilgangskode", &skjermet_tom_kode),
+    ] {
+        let kvittering = send_raw_command_payload(&env.nats_url, payload).await?;
+        assert!(
+            kvittering.get("Error").is_some(),
+            "'{beskrivelse}' skulle gitt Error-kvittering, fikk: {kvittering}"
+        );
+    }
+
+    // Positiv kontroll: en gyldig payload skal gi Ok-kvittering.
+    let gyldig = common("Gyldig kontrolltittel", "");
+    let kvittering = send_raw_command_payload(&env.nats_url, &gyldig).await?;
+    assert!(
+        kvittering.get("Ok").is_some(),
+        "Gyldig payload skulle gitt Ok-kvittering, fikk: {kvittering}"
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Ett beslutningssted (SKU-0020 R1)
+// ---------------------------------------------------------------------------
+//
+// Regresjonstestene for hovedbugen. Før SKU-0020 traff evalueringspasset
+// operasjonen først, skrev den terminal og publiserte ingenting. For
+// kommandoer som dekomponerer til én operasjon ble hele kommandoen stille for
+// alltid — klienten fikk `Utfores` og deretter ingenting.
+
+fn opprett_sak_for(client_reference: Uuid, tittel: &str) -> CommandEnvelope<Command> {
+    CommandEnvelope {
+        command_id: Uuid::new_v4(),
+        correlation_id: Some(Uuid::new_v4()),
+        payload: Command::OpprettSak(OpprettSak {
+            client_reference,
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
+                "{tittel} {}",
+                Uuid::new_v4()
+            ))
+            .unwrap(),
+            arkivdel: Arkivdel::Tilsynsdivisjonene,
+            saksbehandler_id: "Z12345".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())
+                .unwrap(),
+            tilgjengelighet: Tilgjengelighet::Offentlig,
+        }),
+    }
+}
+
+fn avslutt_sak_for(client_reference: Uuid) -> CommandEnvelope<Command> {
+    CommandEnvelope {
+        command_id: Uuid::new_v4(),
+        correlation_id: Some(Uuid::new_v4()),
+        payload: Command::AvsluttSak(AvsluttSak {
+            sak_key: DtoSakKey::ClientReference(client_reference),
+        }),
+    }
+}
+
+fn assert_terminal_hendelse(
+    events: &[SkuffenCommandStatusV1],
+    command_id: Uuid,
+    forventet: SkuffenCommandEvent,
+) {
+    let mine: Vec<&SkuffenCommandStatusV1> = events
+        .iter()
+        .filter(|event| event.command_id == command_id)
+        .collect();
+
+    let terminal = mine
+        .iter()
+        .find(|event| event.terminal)
+        .unwrap_or_else(|| panic!("ingen terminal hendelse for {command_id}, fikk {mine:?}"));
+
+    assert_eq!(
+        terminal.hendelse, forventet,
+        "feil terminal hendelse for {command_id}, fikk {mine:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn avslutt_sak_to_ganger_gir_terminalt_utfall_begge_ganger() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let sak_client_reference = Uuid::new_v4();
+    let opprett_sak = opprett_sak_for(sak_client_reference, "Avslutt to ganger");
+    let forste = avslutt_sak_for(sak_client_reference);
+
+    send_command_batch(&env.nats_url, &[opprett_sak.clone(), forste.clone()]).await?;
+    let events = wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id, forste.command_id],
+        Duration::from_secs(30),
+    )
+    .await?;
+    assert_terminal_hendelse(&events, forste.command_id, SkuffenCommandEvent::Fullfort);
+
+    // Andre gang er saken allerede avsluttet. `AlleredeUtfort` er et
+    // ok-utfall, og skal nå klienten som et terminalt event.
+    let andre = avslutt_sak_for(sak_client_reference);
+    send_command_batch(&env.nats_url, std::slice::from_ref(&andre)).await?;
+    let events =
+        wait_for_status_events(&env.nats_url, [andre.command_id], Duration::from_secs(30)).await?;
+
+    assert_terminal_hendelse(&events, andre.command_id, SkuffenCommandEvent::Fullfort);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sett_saksansvarlig_uten_endring_gir_terminalt_utfall() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let sak_client_reference = Uuid::new_v4();
+    let opprett_sak = opprett_sak_for(sak_client_reference, "Saksansvarlig uten endring");
+    let sak_key = || DtoSakKey::ClientReference(sak_client_reference);
+
+    let scenario = CommandScenario::new();
+    let forste = scenario.sett_saksansvarlig(sak_key(), "Z99999", "42");
+
+    send_command_batch(&env.nats_url, &[opprett_sak.clone(), forste.clone()]).await?;
+    let events = wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id, forste.command_id],
+        Duration::from_secs(30),
+    )
+    .await?;
+    assert_terminal_hendelse(&events, forste.command_id, SkuffenCommandEvent::Fullfort);
+
+    // Samme verdi en gang til: ingenting å gjøre i arkivet, men klienten skal
+    // likevel få vite at forespørselen er ferdig.
+    let andre = scenario.sett_saksansvarlig(sak_key(), "Z99999", "42");
+    send_command_batch(&env.nats_url, std::slice::from_ref(&andre)).await?;
+    let events =
+        wait_for_status_events(&env.nats_url, [andre.command_id], Duration::from_secs(30)).await?;
+
+    assert_terminal_hendelse(&events, andre.command_id, SkuffenCommandEvent::Fullfort);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn html_mal_som_vedlegg_gir_terminal_feilet_ikke_stillhet() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let scenario = CommandScenario::new();
+    publish_media(&env.nats_url, scenario.dokument_referanse).await?;
+    publish_media(&env.nats_url, scenario.mal_referanse).await?;
+
+    let opprett_sak = scenario.opprett_sak_med_tilgjengelighet(
+        "Z12345",
+        "42",
+        format!("HTML-mal som vedlegg {}", Uuid::new_v4()),
+        Tilgjengelighet::Offentlig,
+    );
+    send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
+    wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id],
+        Duration::from_secs(30),
+    )
+    .await?;
+
+    // `LeggTilVedlegg` er `Ugyldig` ved første vurdering. Beslutningen tas i
+    // executoren, som også publiserer — den kan ikke skrives terminal noe
+    // annet sted.
+    let notat = scenario.opprett_internt_notat_med_html_vedlegg(
+        "Z12345",
+        "42",
+        DtoSakKey::ClientReference(scenario.sak_client_reference),
+        "Notat med mal som vedlegg",
+    );
+    send_command_batch(&env.nats_url, std::slice::from_ref(&notat)).await?;
+    let events =
+        wait_for_status_events(&env.nats_url, [notat.command_id], Duration::from_secs(30)).await?;
+
+    assert_terminal_hendelse(&events, notat.command_id, SkuffenCommandEvent::Feilet);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Presise Sikri-feil i statusstrømmen
+// ---------------------------------------------------------------------------
+
+const RESTANSEMELDING: &str =
+    "Saken har journalposter som ikke er avskrevet (restanser) og kan ikke avsluttes.";
+const MANGLENDE_INNHOLD_MELDING: &str =
+    "Sikri/Elements avviste forespørselen fordi dokumentet mangler innhold.";
+
+fn terminal_command_event(
+    events: &[SkuffenCommandStatusV1],
+    command_id: Uuid,
+) -> SkuffenCommandStatusV1 {
+    events
+        .iter()
+        .filter(|event| event.command_id == command_id)
+        .find(|event| event.terminal)
+        .unwrap_or_else(|| panic!("ingen terminal hendelse for {command_id}, fikk {events:?}"))
+        .clone()
+}
+
+fn terminal_operasjon_event(
+    events: &[SkuffenOperasjonStatusV1],
+    operasjonstype: SkuffenOperasjonstype,
+) -> SkuffenOperasjonStatusV1 {
+    events
+        .iter()
+        .find(|event| {
+            event.operasjonstype == operasjonstype
+                && event.hendelse == SkuffenOperasjonHendelse::Feilet
+        })
+        .unwrap_or_else(|| panic!("ingen terminal {operasjonstype:?}-hendelse, fikk {events:?}"))
+        .clone()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn uavskrevne_restanser_gir_terminal_avslutning_med_presis_aarsak() -> Result<()> {
+    let env = support::start_runtime_med_arkivfeil("uavskrevne_restanser@avslutt_sak").await?;
+
+    let sak_client_reference = Uuid::new_v4();
+    let opprett_sak = opprett_sak_for(sak_client_reference, "Restanser blokkerer avslutning");
+    send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
+    let sak_events = wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id],
+        Duration::from_secs(30),
+    )
+    .await?;
+    assert_terminal_hendelse(
+        &sak_events,
+        opprett_sak.command_id,
+        SkuffenCommandEvent::Fullfort,
+    );
+    let saksnummer = extract_saksnummer(&sak_events, opprett_sak.command_id)
+        .expect("OpprettSak skal gi saksnummer");
+
+    let avslutt_sak = avslutt_sak_for(sak_client_reference);
+    let command_id = avslutt_sak.command_id;
+    let correlation_id = avslutt_sak.correlation_id;
+    send_command_batch(&env.nats_url, std::slice::from_ref(&avslutt_sak)).await?;
+
+    let operasjon_events = wait_for_operasjon_events(
+        &env.nats_url,
+        command_id,
+        Duration::from_secs(30),
+        terminalt_feilet,
+    )
+    .await?;
+    let operasjon = terminal_operasjon_event(&operasjon_events, SkuffenOperasjonstype::AvsluttSak);
+    assert!(operasjon.terminal);
+    assert_eq!(operasjon.message, RESTANSEMELDING);
+    assert_eq!(
+        operasjon.error_code,
+        Some(SkuffenStatusErrorCode::PrerequisitePending)
+    );
+    assert_eq!(operasjon.command_id, command_id);
+    assert_eq!(operasjon.correlation_id, correlation_id);
+    assert!(operasjon.attempt.is_some(), "attempt skal være med");
+
+    let events =
+        wait_for_status_events(&env.nats_url, [command_id], Duration::from_secs(30)).await?;
+    let terminal = terminal_command_event(&events, command_id);
+    assert_eq!(terminal.hendelse, SkuffenCommandEvent::Feilet);
+    assert_eq!(terminal.message, RESTANSEMELDING);
+    assert_eq!(
+        terminal.error_code,
+        Some(SkuffenStatusErrorCode::PrerequisitePending)
+    );
+    assert_eq!(terminal.correlation_id, correlation_id);
+    assert_eq!(
+        terminal.sak_client_reference,
+        Some(sak_client_reference),
+        "klienten må kunne finne saken igjen"
+    );
+    assert_eq!(
+        terminal.saksnummer.as_ref().map(|s| s.as_str()),
+        Some(saksnummer.as_str())
+    );
+
+    // Terminalt feilet betyr ingen nye forsøk. Reparasjon skjer senere
+    // gjennom admin-grensesnittet, ikke ved at executoren prøver igjen.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let etterpaa = wait_for_operasjon_events(
+        &env.nats_url,
+        command_id,
+        Duration::from_secs(10),
+        terminalt_feilet,
+    )
+    .await?;
+    let forsok: Vec<_> = etterpaa
+        .iter()
+        .filter(|event| event.operasjon_id == operasjon.operasjon_id)
+        .collect();
+    assert_eq!(
+        forsok.len(),
+        1,
+        "terminalt feilet operasjon skal ikke kjøres igjen, fikk {forsok:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn vedlegg_uten_innhold_gir_terminal_feil_paa_vedleggsoperasjonen() -> Result<()> {
+    let env =
+        support::start_runtime_med_arkivfeil("manglende_dokumentinnhold@legg_til_vedlegg").await?;
+
+    let scenario = CommandScenario::new();
+    publish_media(&env.nats_url, scenario.dokument_referanse).await?;
+
+    let opprett_sak = opprett_sak_for(scenario.sak_client_reference, "Vedlegg uten innhold");
+    send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
+    let sak_events = wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id],
+        Duration::from_secs(30),
+    )
+    .await?;
+    assert_terminal_hendelse(
+        &sak_events,
+        opprett_sak.command_id,
+        SkuffenCommandEvent::Fullfort,
+    );
+    let saksnummer = extract_saksnummer(&sak_events, opprett_sak.command_id)
+        .expect("OpprettSak skal gi saksnummer");
+
+    let journalpost = scenario.opprett_inngaende_med_vedlegg(
+        "Z99999",
+        "42",
+        DtoSakKey::ArkivId(DtoSaksnummer::new(&saksnummer)?),
+        "Inngaaende med vedlegg",
+    );
+    let command_id = journalpost.command_id;
+    send_command_batch(&env.nats_url, std::slice::from_ref(&journalpost)).await?;
+
+    let operasjon_events = wait_for_operasjon_events(
+        &env.nats_url,
+        command_id,
+        Duration::from_secs(40),
+        terminalt_feilet,
+    )
+    .await?;
+    let operasjon =
+        terminal_operasjon_event(&operasjon_events, SkuffenOperasjonstype::LeggTilVedlegg);
+    assert_eq!(operasjon.message, MANGLENDE_INNHOLD_MELDING);
+    assert_eq!(
+        operasjon.error_code,
+        Some(SkuffenStatusErrorCode::InvalidRequest)
+    );
+    assert!(
+        operasjon_events.iter().any(|event| {
+            event.operasjonstype == SkuffenOperasjonstype::OpprettJournalpost
+                && event.hendelse == SkuffenOperasjonHendelse::Ok
+        }),
+        "bare vedleggskallet skal feile, fikk {operasjon_events:?}"
+    );
+
+    let events =
+        wait_for_status_events(&env.nats_url, [command_id], Duration::from_secs(30)).await?;
+    let terminal = terminal_command_event(&events, command_id);
+    assert_eq!(terminal.hendelse, SkuffenCommandEvent::Feilet);
+    assert_eq!(terminal.message, MANGLENDE_INNHOLD_MELDING);
+    assert_eq!(
+        terminal.error_code,
+        Some(SkuffenStatusErrorCode::InvalidRequest)
+    );
+    assert_eq!(
+        terminal.journalpost_client_reference,
+        Some(scenario.journalpost_inngaende_client_reference)
+    );
+
+    Ok(())
 }

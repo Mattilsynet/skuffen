@@ -20,7 +20,7 @@ Normative regler for hvordan kode, dokumentasjon og agentarbeid skal se ut i Sku
    - Domain: business rules og invariants; ingen I/O.
    - Application: use cases, ports og orchestration.
    - Infrastructure: NATS/DB/HTTP adapters og external clients.
-2. **Ingen lekkasje av concerns:** Transport, storage, tracing og DTO-mapping skal ikke lekke inn i Domain/Application.
+2. **Ingen lekkasje av concerns:** Transport, storage og DTO-mapping skal ikke lekke inn i Domain/Application. Tracing er unntaket, og gjelder kun Application (SKU-0019).
 3. **Functional core:** Hold domain logic deterministisk og side-effect free.
 4. **Imperative shell:** Side effects skal ligge i infrastructure listeners, adapters og repositories.
 
@@ -31,13 +31,15 @@ Normative regler for hvordan kode, dokumentasjon og agentarbeid skal se ut i Sku
 3. **Modular arkitektur:** Streng separation of concerns.
    - Egen modul for infra/transport.
    - `http`, `nats` og andre eksterne interfaces håndterer kun kommunikasjon.
-   - Domain/Application skal ikke ha I/O eller parsing. Ingen Serde eller tracing der.
+   - Domain/Application skal ikke ha I/O eller parsing. Ingen Serde der.
+   - Domain skal ikke ha tracing. Application kan, men `#[instrument]` skal alltid ha `skip_all` og eksplisitte felter (SKU-0019).
 4. **Security og supply chain:**
    - **Minimer attack surface:** Foretrekk stdlib eller enkel custom kode. Ta inn crates kun når det er nødvendig.
    - **Secrets:** Behandle tokens/keys som sensitive. Bruk `secrecy::Secret` for streng kontroll av debug og memory.
 5. **Observability og safe logging:**
     - **Traceability:** Logging på tvers av lag (HTTP -> Domain -> DB). Bruk strukturert logging (f.eks. `tracing`) med correlation IDs/spans.
     - **Sanitization:** Ingen PII eller secrets i logs. Logg flyt og outcome, ikke sensitive payloads.
+    - **Unntak, `utfort_av` i admin read:** Admin read-listeneren logger den selvdeklarerte operatøridentifikatoren `utfort_av` på `info!`, én linje per request. Dette er det eneste menneskeidentifiserende feltet som er tillatt på `info!`. Verdien trimmes, avvises ved blankhet, control characters eller mer enn 128 UTF-8 bytes, og lagres aldri. Unntaket gjelder ikke andre request- eller response-felt; rå `ArkivId` logges ikke. Se ADR `SKU-0018`.
 6. **Type safety:** Utnytt type system ("Parse, don't validate").
 7. **DRY:** Gjenbruk kode der det gir mening. Hold kodebasen minimal.
 8. **Comments:** Minimer kommentarer. Kun der det er nødvendig.

@@ -1,7 +1,7 @@
 # SKU-0015. Skjerming og merking trygg by construction
 
 Date: 2026-08-05
-Last-reviewed: 2026-08-05
+Last-reviewed: 2026-09-02
 Tier: A
 Status: Accepted
 Crates: skuffen, domain, application, infrastructure, sikri_client, skuffen-integration-tests
@@ -45,6 +45,10 @@ R8 [4]: SKU-0013 R1-R4 er absolutt: wire-typer skal ALDRI importeres i `domain`/
 
 R9 [4]: Rå HTTP-response-tekst fra Sikri (og lignende eksterne response-bodies med uforutsigbart innhold) logges KUN på `debug!`-nivå, aldri på `info!`/`error!`; på høyere nivåer brukes saniterte error-koder. Debug er av i prod som default. PII i strukturerte kommando-/wire-typer kan vises via `Debug` fordi det bare treffer `debug!`-nivå; det som ikke skal blø ut på `info!`/`error!` er rå ekstern response-tekst.
 
+R10 [5]: Den interne materialiseringstypen for tilgang er paret på samme måte som wire-typen: `Offentlig | Skjermet { tilgangskode, tilgangshjemmel }`. Halv skjerming skal være urepresenterbar også på veien gjennom Postgres, ikke bare på wire-grensen. Databasens CHECK er backstop, ikke primærvakt.
+
+R11 [5]: Arkividentifikatorer skal alltid logges som strukturerte felter: `saksnummer`, `journalpost_id`, `client_reference`, `command_id`, `operasjon_id`, `correlation_id`. En logg uten dem kan ikke korreleres til en sak, og da er den uten operasjonell verdi.
+
 ## Consequences
 
 - Skjerming uten hjemmel og merking uten mottaker-id blir umulig å uttrykke;
@@ -59,3 +63,10 @@ R9 [4]: Rå HTTP-response-tekst fra Sikri (og lignende eksterne response-bodies 
 - Redesignen er breaking mot eksisterende wire-shape; koordineres via SKU-0008
   uten live klienter. Full kodesett-validering gjenstår som senere leveranse.
 - «Kun digital»/ikke-SvarUt-utsending er bevisst utenfor v1.
+- R10 flytter skjermingsinvarianten fra en databaseconstraint til typen. Så lenge
+  den bare var en CHECK, kunne `opprett_sak` skrive `_ => None` og gjøre halv
+  skjerming til en stilltiende offentlig sak — i strid med R4.
+- R11 avklarer en spenning i R9: forbudet gjelder rå ekstern response-tekst og
+  personopplysninger, ikke arkividentifikatorer. Saksnummer skal stå i loggen.
+  Alle seks feltene er enten Skuffen-interne UUID-er eller arkivets egne
+  referanser; ingen av dem bærer fritekst fra klienten.

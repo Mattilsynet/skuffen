@@ -7,13 +7,12 @@ edition = "2024"
 domain = { workspace = true }
 
 async-trait = { workspace = true }
+tracing = { workspace = true }
 
 # Feilhåndtering
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["v7", "v5", "v4"] }
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tokio-util = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
-
-[dev-dependencies]
-lib-schemas = { workspace = true, features = ["skuffen"] }

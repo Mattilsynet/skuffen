@@ -1,4 +1,5 @@
 use anyhow::{Context, ensure};
+use application::admin::services::admin_read_service::AdminReadService;
 use application::command::ports::command_state_port::ArkivSakTilstandRepository;
 use application::command::ports::dokument_renderer_port::{
     DokumentRenderer, IkkeKonfigurertDokumentRenderer,
@@ -11,35 +12,36 @@ use lib_nats::jetstream;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
+use crate::admin::adapter::postgres_admin_read_repository::PostgresAdminReadRepository;
+use crate::admin::nats::listener::{AdminListener, NatsAdminTransport};
 use crate::command::adapter::fake_arkiv_gateway::FakeArkivGateway;
 use crate::command::adapter::fake_command_state_repo::FakeArkivSakTilstandRepository;
 use crate::command::adapter::html2pdf_renderer_adapter::{
     GcpIdTokenProvider, Html2PdfRendererAdapter,
 };
-use crate::command::adapter::id_mapping_postgres::PostgresIdMappingRepository;
-use crate::command::adapter::nats_done_publisher::NatsDonePublisher;
-use crate::command::adapter::nats_eksekvering_status_publisher::NatsEksekveringStatusPublisher;
 use crate::command::adapter::nats_ingested_publisher::NatsCommandDispatcher;
-use crate::command::adapter::nats_status_publisher::NatsCommandStatusPublisher;
+use crate::command::adapter::nats_status_publisher::NatsStatusPublisher;
 use crate::command::adapter::nats_validated_publisher::NatsValidatedCommandDispatcher;
-use crate::command::adapter::outward_status_projector::IdMappingOutwardStatusProjector;
-use crate::command::adapter::postgres_entity_tilstand_store::PostgresEntityTilstandStore;
-use crate::command::adapter::postgres_execution_store::PostgresExecutionStore;
+use crate::command::adapter::postgres_command_repository::PostgresCommandRepository;
+use crate::command::adapter::postgres_entitet_repository::PostgresEntitetRepository;
+use crate::command::adapter::postgres_fakta_repository::PostgresFaktaRepository;
+use crate::command::adapter::postgres_operasjon_repository::PostgresOperasjonRepository;
 use crate::command::adapter::sikri_arkiv_gateway::SikriArkivGateway;
 use crate::command::adapter::sikri_command_state_repo::SikriCommandStateRepository;
 use crate::command::media::ObjectStoreMediaStore;
 use crate::command::nats::command_listener::CommandListener;
-use crate::command::nats::eksekvering_listener::KommandoEksekveringListener;
+use crate::command::nats::dekomponering_listener::DekomponeringListener;
 use crate::command::nats::validation_listener::CommandValidationListener;
 use crate::http::health_check::health_check;
+use crate::http::helse::Helse;
 use crate::nats::client::NatsClient;
-use crate::nats::jetstream_setup::ensure_media_object_store;
+use crate::nats::jetstream_setup::{ensure_media_object_store, ensure_publiseringsstroemmer};
 use crate::nats::setup::setup_nats;
 use crate::query::adapter::fake_journalpost_repository::FakeJournalpostRepository;
 use crate::query::adapter::fake_sak_repository::FakeSakRepository;
 use crate::query::adapter::hent_sak::SikriRepository;
 use crate::query::adapter::not_implemented_journalpost_repository::NotImplementedJournalpostRepository;
-use crate::query::mapping::lookup::key_mapping_queries;
+use crate::query::mapping::lookup::entitet_queries;
 use crate::query::nats::listener::{
     BRUKER_MT_ENHETER_SUBJECT, BrukerMtEnheterNotImplementedUseCase, HENT_JOURNALPOST_SUBJECT,
     HENT_SAK_SUBJECT, NatsReplier, UseCase,
@@ -49,36 +51,44 @@ use crate::query::nats::query_listener::QueryListener;
 pub struct RuntimeDeps {
     pub nats: NatsClient,
     pub health_check_handle: JoinHandle<()>,
-    pub id_mapping_repo: PostgresIdMappingRepository,
-    pub execution_store: PostgresExecutionStore,
-    pub entity_tilstand_store: PostgresEntityTilstandStore,
+    pub db_pool: lib_sql::database_config::DbPool,
     pub media_store: std::sync::Arc<ObjectStoreMediaStore>,
     pub use_fake_sikri: bool,
+    pub helse: Helse,
 }
 
 pub async fn prepare_runtime() -> anyhow::Result<RuntimeDeps> {
-    let nats = setup_nats().await?;
-    let health_check_handle = health_check().await?;
+    let helse = Helse::new();
+    // Porten først av alt: er NATS nede, ville startup-proben ellers feilet på
+    // at ingenting lytter, uansett hva readiness sier (SKU-0021 R6).
+    let health_check_handle = health_check(helse.clone()).await?;
+
+    let nats = setup_nats(helse.clone()).await?;
     let use_fake_sikri = use_fake_sikri()?;
+
+    ensure_publiseringsstroemmer(
+        &jetstream::new(nats.inner().clone()),
+        nats.jetstream_replicas(),
+    )
+    .await?;
 
     let db_pool = crate::database::setup::setup_database().await?;
     crate::database::setup::run_migrations(&db_pool).await?;
+    helse.sett_migrert(true);
 
-    let id_mapping_repo = PostgresIdMappingRepository::new(db_pool.clone());
-    key_mapping_queries::init_id_mapping_repo(std::sync::Arc::new(id_mapping_repo.clone()));
+    entitet_queries::init_entitet_repo(std::sync::Arc::new(PostgresEntitetRepository::new(
+        db_pool.clone(),
+    )));
 
-    let entity_tilstand_store = PostgresEntityTilstandStore::new(db_pool.clone());
-    let execution_store = PostgresExecutionStore::new(db_pool);
     let media_store = setup_media_store(nats.clone()).await?;
 
     Ok(RuntimeDeps {
         nats,
         health_check_handle,
-        id_mapping_repo,
-        execution_store,
-        entity_tilstand_store,
+        db_pool,
         media_store,
         use_fake_sikri,
+        helse,
     })
 }
 
@@ -114,103 +124,154 @@ pub fn build_query_listener(nats: NatsClient, use_fake_sikri: bool) -> QueryList
     )
 }
 
+/// Cloud Run sender SIGTERM og dreper containeren 10 sekunder senere.
+pub async fn vent_paa_nedstengingssignal(
+    shutdown: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut interrupt = signal(SignalKind::interrupt())?;
+
+    let signalnavn = tokio::select! {
+        _ = terminate.recv() => "SIGTERM",
+        _ = interrupt.recv() => "SIGINT",
+    };
+
+    info!(signal = signalnavn, "nedstenging signalisert");
+    shutdown.cancel();
+    // Cloud Run river containeren kort tid etter signalet. Uten en eksplisitt
+    // tømming går siste batch med spans tapt — som regel nettopp den som
+    // forklarer hvorfor tjenesten stoppet.
+    crate::telemetry::shutdown_telemetry();
+    Ok(())
+}
+
 pub fn build_ready_replier(nats: NatsClient) -> NatsReplier<String, String> {
     NatsReplier::<String, String>::new(nats, "skuffen.ready", Box::new(ReadyUseCase))
 }
 
 pub fn build_command_listener(
     nats: NatsClient,
-    id_mapping_repo: PostgresIdMappingRepository,
+    db_pool: lib_sql::database_config::DbPool,
     media_store: std::sync::Arc<ObjectStoreMediaStore>,
+    helse: Helse,
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> CommandListener {
     let command_service = application::command::services::ingest_command::IngestCommandService::new(
-        Box::new(id_mapping_repo),
+        Box::new(PostgresCommandRepository::new(db_pool.clone())),
+        Box::new(PostgresEntitetRepository::new(db_pool)),
         Box::new(NatsCommandDispatcher::new(nats.clone())),
-        Box::new(NatsCommandStatusPublisher::new(nats.clone())),
+        Box::new(NatsStatusPublisher::new(nats.clone())),
     );
 
-    CommandListener::new(nats, command_service, media_store)
+    CommandListener::new(nats, command_service, media_store, helse, shutdown)
+}
+
+/// Admin read deler ett repository mellom de to use casene.
+pub fn build_admin_listener(
+    nats: NatsClient,
+    db_pool: lib_sql::database_config::DbPool,
+    helse: Helse,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> AdminListener {
+    let repository = std::sync::Arc::new(PostgresAdminReadRepository::new(db_pool));
+    let service = std::sync::Arc::new(AdminReadService::new(repository));
+
+    AdminListener::new(
+        std::sync::Arc::new(NatsAdminTransport::new(nats)),
+        service,
+        helse,
+        shutdown,
+    )
 }
 
 pub fn build_validator_listener(
     nats: NatsClient,
-    id_mapping_repo: PostgresIdMappingRepository,
+    db_pool: lib_sql::database_config::DbPool,
     use_fake_sikri: bool,
+    helse: Helse,
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> CommandValidationListener {
-    let outward_status_projector = Box::new(IdMappingOutwardStatusProjector::new(Box::new(
-        id_mapping_repo.clone(),
-    )));
     let validator_service =
         application::command::services::validate_command::ValidateCommandService::new(
             command_state_repository(use_fake_sikri),
-            Box::new(id_mapping_repo),
+            Box::new(PostgresEntitetRepository::new(db_pool)),
             Box::new(NatsValidatedCommandDispatcher::new(nats.clone())),
-            Box::new(NatsCommandStatusPublisher::new(nats.clone())),
-            outward_status_projector,
+            Box::new(NatsStatusPublisher::new(nats.clone())),
         );
 
-    CommandValidationListener::new(nats, validator_service)
+    CommandValidationListener::new(nats, validator_service, helse, shutdown)
 }
 
 pub fn build_eksekvering_components(
     nats: NatsClient,
-    id_mapping_repo: PostgresIdMappingRepository,
-    execution_store: PostgresExecutionStore,
-    entity_tilstand_store: PostgresEntityTilstandStore,
+    db_pool: lib_sql::database_config::DbPool,
     media_store: std::sync::Arc<ObjectStoreMediaStore>,
     use_fake_sikri: bool,
+    helse: Helse,
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<(
-    KommandoEksekveringListener,
-    application::command::services::eksekvering_worker::EksekveringWorker,
+    DekomponeringListener,
+    application::command::services::operasjon_worker::OperasjonWorker,
 )> {
-    let registrer_i_eksekveringssystem_service =
-        application::command::services::registrer_i_eksekveringssystem::RegistrerIEksekveringssystemService::new(
-            Box::new(execution_store.clone()),
-            Box::new(entity_tilstand_store.clone()),
-            Box::new(id_mapping_repo.clone()),
-            Box::new(NatsEksekveringStatusPublisher::new(nats.clone())),
-            Box::new(IdMappingOutwardStatusProjector::new(Box::new(
-                id_mapping_repo.clone(),
-            ))),
-        );
+    use application::command::services::{
+        dekomponer_command::DekomponerCommandService,
+        eksekver_operasjon::EksekverOperasjonService,
+        operasjon_worker::{OperasjonWorker, WorkerInnstillinger},
+    };
 
-    let eksekvering_service =
-        application::command::services::eksekver_kommando::EksekverKommandoService::new(
-            Box::new(entity_tilstand_store.clone()),
-            arkiv_gateway(use_fake_sikri, media_store.clone()),
-            dokument_renderer()?,
-            Box::new((*media_store).clone()),
-            Box::new(NatsEksekveringStatusPublisher::new(nats.clone())),
-            Box::new(NatsDonePublisher::new(nats.clone())),
-            Box::new(id_mapping_repo.clone()),
-            Box::new(IdMappingOutwardStatusProjector::new(Box::new(
-                id_mapping_repo.clone(),
-            ))),
-            Box::new(
-                application::command::services::reevaluer_ventende_kommandoer::ReevaluerVentendeKommandoerService::new(
-                    Box::new(execution_store.clone()),
-                    Box::new(entity_tilstand_store.clone()),
-                    Box::new(id_mapping_repo.clone()),
-                    Box::new(NatsEksekveringStatusPublisher::new(nats.clone())),
-                    Box::new(NatsDonePublisher::new(nats.clone())),
-                    Box::new(IdMappingOutwardStatusProjector::new(Box::new(
-                        id_mapping_repo.clone(),
-                    ))),
-                ),
+    let operasjon_repo = std::sync::Arc::new(PostgresOperasjonRepository::new(db_pool.clone()));
+    let publisher = std::sync::Arc::new(NatsStatusPublisher::new(nats.clone()));
+
+    let dekomponer_service = DekomponerCommandService::new(
+        Box::new(PostgresEntitetRepository::new(db_pool.clone())),
+        Box::new(PostgresOperasjonRepository::new(db_pool.clone())),
+        Box::new(NatsStatusPublisher::new(nats.clone())),
+    );
+
+    let executor = EksekverOperasjonService::new(
+        Box::new(PostgresOperasjonRepository::new(db_pool.clone())),
+        Box::new(PostgresFaktaRepository::new(db_pool)),
+        arkiv_gateway(use_fake_sikri, media_store.clone()),
+        Box::new(
+            crate::command::adapter::media_render_operasjon::MediaRenderOperasjon::new(
+                media_store,
+                dokument_renderer()?,
             ),
-        );
+        ),
+        Box::new(NatsStatusPublisher::new(nats.clone())),
+        EXECUTOR_ID,
+        avvent_journalfort_poll_intervall(use_fake_sikri),
+    );
 
-    let eksekvering_listener =
-        KommandoEksekveringListener::new(nats, Box::new(registrer_i_eksekveringssystem_service));
-    let eksekvering_worker =
-        application::command::services::eksekvering_worker::EksekveringWorker::new(
-            Box::new(execution_store),
-            eksekvering_service,
-            "worker-1".to_string(),
-            std::time::Duration::from_secs(5),
-        );
+    let shutdown_listener = shutdown.clone();
+    let worker = OperasjonWorker::new(
+        executor,
+        operasjon_repo,
+        publisher,
+        EXECUTOR_ID,
+        WorkerInnstillinger::default(),
+        shutdown,
+    );
 
-    Ok((eksekvering_listener, eksekvering_worker))
+    Ok((
+        DekomponeringListener::new(nats, dekomponer_service, helse, shutdown_listener),
+        worker,
+    ))
+}
+
+const EXECUTOR_ID: &str = "worker-1";
+/// RPA journalfører i begge utgående løp, med observert latens på en halv til
+/// én time. Intervallet skal tunes mot faktisk RPA-latens.
+///
+/// Mot fake-arkivet finnes ingen robot å vente på, så der poller vi raskt.
+fn avvent_journalfort_poll_intervall(use_fake_sikri: bool) -> std::time::Duration {
+    if use_fake_sikri {
+        std::time::Duration::from_millis(200)
+    } else {
+        std::time::Duration::from_secs(60 * 60)
+    }
 }
 
 fn use_fake_sikri() -> anyhow::Result<bool> {

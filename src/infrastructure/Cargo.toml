@@ -27,6 +27,7 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 dotenvy = { workspace = true }
 async-nats = { workspace = true }
+aws-lc-rs = { workspace = true }
 bytes = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -46,15 +47,21 @@ tracing-subscriber = { workspace = true, features = [
   "registry",
 ] }
 tracing-opentelemetry = { workspace = true }
-opentelemetry = { workspace = true, features = ["trace", "metrics"] }
-opentelemetry_sdk = { workspace = true, features = ["trace", "metrics"] }
+opentelemetry = { workspace = true, features = ["trace"] }
+opentelemetry_sdk = { workspace = true, features = ["trace"] }
 opentelemetry-otlp = { workspace = true, features = [
   "grpc-tonic",
   "trace",
-  "metrics",
+  "tls-webpki-roots",
 ] }
-opentelemetry-http = { workspace = true }
-tracing-stackdriver = { workspace = true }
 tracing-log = { workspace = true }
 
 uuid = { workspace = true, features = ["serde", "v7", "v5", "v4"] }
+chrono = { workspace = true, features = ["serde"] }
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["postgres"] }
+opentelemetry_sdk = { workspace = true, features = ["trace", "metrics", "testing"] }
+tower = { workspace = true, features = ["util"] }

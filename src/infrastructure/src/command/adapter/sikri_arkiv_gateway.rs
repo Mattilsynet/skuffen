@@ -1,20 +1,81 @@
 use crate::command::media::MediaStore;
+use application::command::materialisering::{
+    DokumentAttributter, Dokumentkilde, JournalpostAttributter, Korrespondanseparter,
+    SakAttributter, Tilgang,
+};
 use application::command::ports::eksekvering_port::{
-    ArkivGateway, OpprettJournalpostResultat, Utsendingsvalg,
+    ArkivGateway, Journalstatus, ObservertJournalstatus, OpprettJournalpostResultat,
+    OpprettSakResultat,
 };
 use application::command::{
-    Arkivdel, Command, CommandEnvelope, Dokument, Dokumentform, Korrespondansepart, MottakerId,
-    OpprettJournalpostCommand, Parttype, Tilgjengelighet, Utsendingsmottaker,
+    Arkivdel, Korrespondansepart, MottakerId, Parttype, Utsendingsmottaker,
 };
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use domain::eksekvering::tilstand::{
-    DokumentKildeTilstand, DokumentMedTilstand, JournalpostMedDokumenter,
-};
+use domain::eksekvering::tilstand::JournalpostType;
+use domain::eksekvering::typer::{EksekveringFeil, StatusErrorCode};
 use sikri_client::domain::ny_sak::NySak;
 use sikri_client::dto::elements_avsender_mottaker::ElementsAvsenderMottaker;
 use sikri_client::dto::elements_dokument::ElementsDokument;
 use sikri_client::dto::elements_journalpost::ElementsJournalpost;
+use sikri_client::{Recoverability, SikriFeil};
+
+const TATT_TIL_ETTERRETNING: &str = "TE";
+
+/// Leverandørvokabularet stopper her.
+///
+/// `SikriFeil` bærer allerede klassifisering, stabil kode og en trygg,
+/// ferdigmappet brukertekst. Denne funksjonen legger kun til hvilken
+/// klientvendt feilkode koden svarer til — det er den ene oversettelsen
+/// `sikri_client` ikke kan gjøre selv, siden `StatusErrorCode` bor i `domain`.
+pub(crate) fn fra_sikri(feil: SikriFeil) -> EksekveringFeil {
+    let error_code = error_code_for(feil.kode).unwrap_or(StatusErrorCode::ProcessingFailed);
+    match feil.recoverability {
+        Recoverability::Recoverable => {
+            EksekveringFeil::recoverable(feil.kode, feil.melding, error_code)
+        }
+        Recoverability::Irrecoverable => {
+            EksekveringFeil::irrecoverable(feil.kode, feil.melding, error_code)
+        }
+    }
+}
+
+/// `None` betyr at koden ikke er tatt stilling til. Kalleren faller til
+/// `ProcessingFailed`, og dekningstesten nederst fanger hullet.
+fn error_code_for(kode: &str) -> Option<StatusErrorCode> {
+    let error_code = match kode {
+        "sikri_unknown_user"
+        | "sikri_access_control_rejected"
+        | "sikri_validation_failed"
+        | "sikri_missing_document_content"
+        | "sikri_invalid_request"
+        | "sikri_request_validation_failed" => StatusErrorCode::InvalidRequest,
+        "sikri_resource_not_found" => StatusErrorCode::NotFound,
+        "sikri_unresolved_journalposter" => StatusErrorCode::PrerequisitePending,
+        "sikri_rate_limited"
+        | "sikri_upstream_unavailable"
+        | "sikri_upstream_error"
+        | "sikri_secret_unavailable" => StatusErrorCode::TemporaryUnavailable,
+        "sikri_response_unparsable" | "sikri_unknown_error" => StatusErrorCode::ProcessingFailed,
+        _ => return None,
+    };
+    Some(error_code)
+}
+
+/// Våre egne mappingfeil. Ekte irrecoverable — samme payload gir samme feil
+/// hver gang — og `client_reference` peker på nøyaktig hvilket dokument eller
+/// hvilken korrespondansepart klienten må rette.
+fn arkivmapping_feil(
+    kode: &'static str,
+    melding: &str,
+    client_reference: uuid::Uuid,
+) -> EksekveringFeil {
+    EksekveringFeil::irrecoverable(
+        kode,
+        format!("{melding} (client_reference={client_reference})"),
+        StatusErrorCode::InvalidRequest,
+    )
+}
 
 #[derive(Clone)]
 pub struct SikriArkivGateway {
@@ -31,290 +92,263 @@ impl SikriArkivGateway {
 impl ArkivGateway for SikriArkivGateway {
     async fn opprett_sak(
         &self,
-        command: &CommandEnvelope<Command>,
-    ) -> Result<String, anyhow::Error> {
-        let Command::OpprettSak(data) = &command.payload else {
-            return Err(anyhow::anyhow!("Ugyldig kommando for opprett_sak"));
-        };
-
+        attributter: &SakAttributter,
+    ) -> Result<OpprettSakResultat, EksekveringFeil> {
         let ny_sak = NySak {
-            sakstittel: data.sakstittel.clone(),
-            arkivdel: match data.arkivdel {
+            sakstittel: attributter.sakstittel.clone(),
+            arkivdel: match attributter.arkivdel {
                 Arkivdel::Tilsynsdivisjonene => {
                     sikri_client::domain::ny_sak::Arkivdel::Tilsynsdivisjonene
                 }
                 Arkivdel::Hovedkontoret => sikri_client::domain::ny_sak::Arkivdel::Hovedkontoret,
             },
-            saksbehandler_id: data.saksbehandler_id.clone(),
-            saksbehandler_enhet: data.saksbehandler_enhet.clone(),
-            ordningsverdi: data.ordningsverdi.get().to_string(),
-            tilgang: match &data.tilgjengelighet {
-                Tilgjengelighet::Skjermet {
+            saksbehandler_id: attributter.saksbehandler_id.clone(),
+            saksbehandler_enhet: attributter.saksbehandler_enhet.clone(),
+            ordningsverdi: attributter.ordningsverdi.clone(),
+            // Ingen `_ => None`: halv skjerming er ikke representerbar, så
+            // en skjermet sak kan ikke bli offentlig ved et uhell (SKU-0015 R10).
+            tilgang: match &attributter.tilgang {
+                Tilgang::Offentlig => None,
+                Tilgang::Skjermet {
                     tilgangskode,
                     tilgangshjemmel,
                 } => Some(sikri_client::domain::ny_sak::Tilgang {
                     tilgangskode: tilgangskode.as_str().to_string(),
                     tilgangshjemmel: tilgangshjemmel.as_str().to_string(),
                 }),
-                Tilgjengelighet::Offentlig => None,
             },
             virksomhetsmappe_id: None,
         };
 
-        let resp = sikri_client::opprett_sak(ny_sak).await?;
-        let saksnummer = resp
-            .saksnr
-            .ok_or_else(|| anyhow::anyhow!("Saksnummer mangler i respons"))?;
-        Ok(saksnummer)
+        let resp = sikri_client::opprett_sak(ny_sak).await.map_err(fra_sikri)?;
+        let saksnummer = resp.saksnr.ok_or_else(|| {
+            EksekveringFeil::recoverable(
+                "sikri_response_unparsable",
+                "Uventet svar fra Sikri/Elements. Prøv igjen senere.",
+                StatusErrorCode::TemporaryUnavailable,
+            )
+        })?;
+        Ok(OpprettSakResultat { saksnummer })
     }
 
     async fn opprett_journalpost(
         &self,
-        command: &CommandEnvelope<Command>,
-        journalpost: &JournalpostMedDokumenter,
         saksnummer: &str,
-        utsending: Option<Utsendingsvalg>,
-    ) -> Result<OpprettJournalpostResultat, anyhow::Error> {
-        let journalpost = match &command.payload {
-            Command::OpprettInngaaendeJournalpost(data) => {
-                self.opprett_inngaende(data, journalpost).await?
-            }
-            Command::OpprettUtgaaendeJournalpost(data) => {
-                self.opprett_utgaaende(data, journalpost, utsending).await?
-            }
-            Command::OpprettInterntNotatJournalpost(data) => {
-                self.opprett_internt_notat(data, journalpost).await?
-            }
-            _ => return Err(anyhow::anyhow!("Ugyldig kommando for opprett_journalpost")),
-        };
-
-        let resp = sikri_client::opprett_journalpost(journalpost, saksnummer).await?;
-        let journalpost_id = resp
-            .journalpost_id
-            .ok_or_else(|| anyhow::anyhow!("JournalpostId mangler i respons"))?;
+        journalpost: &JournalpostAttributter,
+        hoveddokument: &DokumentAttributter,
+    ) -> Result<OpprettJournalpostResultat, EksekveringFeil> {
+        let elements_journalpost = self.map_journalpost(journalpost, hoveddokument).await?;
+        let resp = sikri_client::opprett_journalpost(
+            elements_journalpost,
+            saksnummer,
+            journalpost.kildesystem.as_deref(),
+        )
+        .await
+        .map_err(fra_sikri)?;
+        let journalpost_id = resp.journalpost_id.ok_or_else(|| {
+            EksekveringFeil::recoverable(
+                "sikri_response_unparsable",
+                "Uventet svar fra Sikri/Elements. Prøv igjen senere.",
+                StatusErrorCode::TemporaryUnavailable,
+            )
+        })?;
         Ok(OpprettJournalpostResultat { journalpost_id })
     }
 
+    /// Ett vedlegg om gangen (D5). Sikris batch-API returnerer
+    /// `Vec<Option<i32>>`, og partial success er ikke håndterbart i batch.
     async fn legg_til_vedlegg(
         &self,
-        command: &CommandEnvelope<Command>,
         journalpost_id: i32,
-        dokument_ids: Vec<uuid::Uuid>,
-    ) -> Result<Vec<Option<i32>>, anyhow::Error> {
-        let mut vedlegg: Vec<ElementsDokument> = Vec::with_capacity(dokument_ids.len());
-        for dokument_id in dokument_ids {
-            vedlegg.push(self.map_vedlegg_dokument(command, dokument_id).await?);
-        }
-
-        let resp = sikri_client::legg_til_vedlegg(journalpost_id, vedlegg).await?;
-        Ok(resp.into_iter().map(|d| d.dokument_id).collect())
+        vedlegg: &DokumentAttributter,
+    ) -> Result<Option<i32>, EksekveringFeil> {
+        let dokument = self.map_dokument(vedlegg, false).await?;
+        let resp = sikri_client::legg_til_vedlegg(journalpost_id, vec![dokument])
+            .await
+            .map_err(fra_sikri)?;
+        Ok(resp.into_iter().next().and_then(|d| d.dokument_id))
     }
 
     async fn sett_journalpost_status(
         &self,
         journalpost_id: i32,
-        status: &str,
-    ) -> Result<(), anyhow::Error> {
-        sikri_client::sett_journalpost_status(journalpost_id, status).await
+        status: Journalstatus,
+    ) -> Result<(), EksekveringFeil> {
+        sikri_client::sett_journalpost_status(journalpost_id, status.as_arkivkode())
+            .await
+            .map_err(fra_sikri)
     }
 
+    /// Kun inngående avskrives (D21). `TE` — tatt til etterretning.
     async fn avskriv_journalpost(
         &self,
         journalpost_id: i32,
-        avskrivingsmaate: &str,
-    ) -> Result<(), anyhow::Error> {
-        sikri_client::avskriv_journalpost(journalpost_id, avskrivingsmaate).await
+        kildesystem: Option<&str>,
+        merknad: Option<&str>,
+    ) -> Result<(), EksekveringFeil> {
+        sikri_client::avskriv_journalpost(sikri_client::AvskrivJournalpost {
+            journalpost_id,
+            avskrivingsmaate: TATT_TIL_ETTERRETNING,
+            kildesystem,
+            merknad,
+        })
+        .await
+        .map_err(fra_sikri)
     }
 
-    async fn avslutt_sak(&self, saksnummer: &str) -> Result<(), anyhow::Error> {
-        sikri_client::avslutt_sak(saksnummer).await
+    async fn hent_journalstatus(
+        &self,
+        journalpost_id: i32,
+    ) -> Result<ObservertJournalstatus, EksekveringFeil> {
+        let journalpost = sikri_client::hent_journalpost(journalpost_id)
+            .await
+            .map_err(fra_sikri)?;
+        Ok(match journalpost.journalstatus.as_deref() {
+            Some("R") => ObservertJournalstatus::Reservert,
+            Some("F") => ObservertJournalstatus::KlarForEkspedering,
+            Some("E") => ObservertJournalstatus::Ekspedert,
+            Some("J") => ObservertJournalstatus::Journalfoert,
+            _ => ObservertJournalstatus::Annet,
+        })
+    }
+
+    async fn avslutt_sak(&self, saksnummer: &str) -> Result<(), EksekveringFeil> {
+        sikri_client::avslutt_sak(saksnummer)
+            .await
+            .map_err(fra_sikri)
     }
 
     async fn sett_saksansvarlig(
         &self,
         saksnummer: &str,
-        saksbehandler: &str,
+        saksbehandler_id: &str,
         saksbehandler_enhet: &str,
-    ) -> Result<(), anyhow::Error> {
-        sikri_client::sett_saksansvarlig(saksnummer, saksbehandler, saksbehandler_enhet).await
+    ) -> Result<(), EksekveringFeil> {
+        sikri_client::sett_saksansvarlig(saksnummer, saksbehandler_id, saksbehandler_enhet)
+            .await
+            .map_err(fra_sikri)
     }
 }
 
 impl SikriArkivGateway {
-    async fn opprett_inngaende(
+    /// Bygger journalposten.
+    ///
+    /// Journalposter opprettes **aldri** direkte i `J` (SKU-0016 R10). For `I`
+    /// og `X` settes `journalstatus` ikke i det hele tatt — Sikri åpner dem i
+    /// en status der endringer er mulige, slik at vedlegg kan legges til
+    /// etterpå. `avskrivDirekte` og `avskrivningsmaate` settes heller ikke ved
+    /// opprettelse; avskriving er en egen operasjon.
+    async fn map_journalpost(
         &self,
-        data: &OpprettJournalpostCommand,
-        journalpost: &JournalpostMedDokumenter,
-    ) -> Result<ElementsJournalpost, anyhow::Error> {
-        let dokumenter = self
-            .map_dokumenter(&data.felles().dokumenter, journalpost)
-            .await?;
-        let OpprettJournalpostCommand::Inngaende { avsender, .. } = data else {
-            return Err(anyhow::anyhow!(
-                "arkivmapping_feil_variant client_reference={} sikri_recoverability=irrecoverable",
-                data.felles().client_reference
-            ));
+        journalpost: &JournalpostAttributter,
+        hoveddokument: &DokumentAttributter,
+    ) -> Result<ElementsJournalpost, EksekveringFeil> {
+        let client_reference = journalpost.client_reference;
+        let skjerming = &journalpost.tilgang;
+        let dokumenter = vec![self.map_dokument(hoveddokument, true).await?];
+
+        let journalstatus = match journalpost.journalposttype {
+            // Utgående starter i R og flyttes videre av egne operasjoner.
+            JournalpostType::Utgaaende => Some("R".to_string()),
+            JournalpostType::Inngaende | JournalpostType::InterntNotat => None,
         };
-        let skjerming = skjerming_fra_tilgjengelighet(
-            &data.felles().tilgjengelighet,
-            data.felles().client_reference,
-        )?;
+
+        let avsendere_mottakere =
+            self.map_korrespondanseparter(journalpost, skjerming, client_reference)?;
 
         let elements = ElementsJournalpost {
-            tittel: Some(data.felles().tittel.clone()),
-            journalposttype: Some("I".to_string()),
-            journalstatus: Some("J".to_string()),
-            avskriv_direkte: Some(true),
-            avskrivningsmaate: Some("TE".to_string()),
-            tilgangskode: skjerming.tilgangskode(),
-            tilgangshjemmel: skjerming.tilgangshjemmel(),
-            saksbehandler: Some(data.felles().saksbehandler.clone()),
-            saksbehandler_enhet: Some(data.felles().saksbehandler_enhet.clone()),
-            avsendere_mottakere: Some(vec![korrespondansepart_avsender_mottaker(
-                avsender, false, &skjerming,
-            )?]),
+            tittel: Some(journalpost.tittel.clone()),
+            journalposttype: Some(journalpost.journalposttype.as_arkivkode().to_string()),
+            journalstatus,
+            avskriv_direkte: None,
+            avskrivningsmaate: None,
+            tilgangskode: skjerming.tilgangskode().map(str::to_string),
+            tilgangshjemmel: skjerming.tilgangshjemmel().map(str::to_string),
+            saksbehandler: Some(journalpost.saksbehandler_id.clone()),
+            saksbehandler_enhet: Some(journalpost.saksbehandler_enhet.clone()),
+            avsendere_mottakere,
             dokumenter: Some(dokumenter),
-            dokument_dato: Some(data.felles().dokument_dato.clone()),
+            dokument_dato: Some(journalpost.dokument_dato.clone()),
         };
 
-        verifiser_skjerming(&elements, &skjerming, data.felles().client_reference)?;
+        verifiser_skjerming(&elements, skjerming, client_reference)?;
         Ok(elements)
     }
 
-    async fn opprett_utgaaende(
+    fn map_korrespondanseparter(
         &self,
-        data: &OpprettJournalpostCommand,
-        journalpost: &JournalpostMedDokumenter,
-        utsending: Option<Utsendingsvalg>,
-    ) -> Result<ElementsJournalpost, anyhow::Error> {
-        let dokumenter = self
-            .map_dokumenter(&data.felles().dokumenter, journalpost)
-            .await?;
-        let forsendelsesmetode = match utsending {
-            Some(Utsendingsvalg::MedUtsending) => Some("GENERELL".to_string()),
-            Some(Utsendingsvalg::UtenUtsending) => Some("DIG".to_string()),
-            None => None,
+        journalpost: &JournalpostAttributter,
+        skjerming: &Tilgang,
+        client_reference: uuid::Uuid,
+    ) -> Result<Option<Vec<ElementsAvsenderMottaker>>, EksekveringFeil> {
+        // GENERELL trigger SvarUt; DIG brukes når utsending ikke benyttes.
+        let forsendelsesmetode = if journalpost.med_utsending {
+            "GENERELL"
+        } else {
+            "DIG"
         };
-        let skjerming = skjerming_fra_tilgjengelighet(
-            &data.felles().tilgjengelighet,
-            data.felles().client_reference,
-        )?;
 
-        let mut avsendere_mottakere: Vec<ElementsAvsenderMottaker> = Vec::new();
-        match data {
-            OpprettJournalpostCommand::Utgaaende { mottakere, .. } => {
-                for mottaker in mottakere {
-                    let mut am = korrespondansepart_avsender_mottaker(mottaker, true, &skjerming)?;
-                    am.forsendelsesmetode = forsendelsesmetode.clone();
-                    avsendere_mottakere.push(am);
-                }
+        let parter: Vec<ElementsAvsenderMottaker> = match &journalpost.korrespondanseparter {
+            Korrespondanseparter::Ingen => return Ok(None),
+            Korrespondanseparter::Avsender(avsender) => {
+                vec![korrespondansepart_avsender_mottaker(
+                    avsender, false, skjerming,
+                )?]
             }
-            OpprettJournalpostCommand::UtgaaendeMedUtsending { mottakere, .. } => {
-                for mottaker in mottakere {
-                    avsendere_mottakere.push(utsendingsmottaker_avsender_mottaker(
-                        mottaker,
-                        &skjerming,
-                        data.felles().client_reference,
-                    )?);
-                }
-            }
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "arkivmapping_feil_variant client_reference={} sikri_recoverability=irrecoverable",
-                    data.felles().client_reference
-                ));
-            }
-        }
+            Korrespondanseparter::Mottakere(mottakere) => mottakere
+                .iter()
+                .map(|mottaker| {
+                    let mut am = korrespondansepart_avsender_mottaker(mottaker, true, skjerming)?;
+                    am.forsendelsesmetode = Some(forsendelsesmetode.to_string());
+                    Ok(am)
+                })
+                .collect::<Result<Vec<_>, EksekveringFeil>>()?,
+            Korrespondanseparter::Utsendingsmottakere(mottakere) => mottakere
+                .iter()
+                .map(|mottaker| {
+                    utsendingsmottaker_avsender_mottaker(mottaker, skjerming, client_reference)
+                })
+                .collect::<Result<Vec<_>, EksekveringFeil>>()?,
+        };
 
-        if avsendere_mottakere.is_empty() {
-            return Err(anyhow::anyhow!(
-                "arkivmapping_mottaker_mangler client_reference={} sikri_recoverability=irrecoverable",
-                data.felles().client_reference
+        if parter.is_empty() {
+            return Err(arkivmapping_feil(
+                "arkivmapping_mottaker_mangler",
+                "Mottaker mangler.",
+                client_reference,
             ));
         }
 
-        let elements = ElementsJournalpost {
-            tittel: Some(data.felles().tittel.clone()),
-            journalposttype: Some("U".to_string()),
-            journalstatus: Some("R".to_string()),
-            avskriv_direkte: None,
-            avskrivningsmaate: None,
-            tilgangskode: skjerming.tilgangskode(),
-            tilgangshjemmel: skjerming.tilgangshjemmel(),
-            saksbehandler: Some(data.felles().saksbehandler.clone()),
-            saksbehandler_enhet: Some(data.felles().saksbehandler_enhet.clone()),
-            avsendere_mottakere: Some(avsendere_mottakere),
-            dokumenter: Some(dokumenter),
-            dokument_dato: Some(data.felles().dokument_dato.clone()),
-        };
-
-        verifiser_skjerming(&elements, &skjerming, data.felles().client_reference)?;
-        Ok(elements)
+        Ok(Some(parter))
     }
 
-    async fn opprett_internt_notat(
+    async fn map_dokument(
         &self,
-        data: &OpprettJournalpostCommand,
-        journalpost: &JournalpostMedDokumenter,
-    ) -> Result<ElementsJournalpost, anyhow::Error> {
-        let dokumenter = self
-            .map_dokumenter(&data.felles().dokumenter, journalpost)
-            .await?;
-        let skjerming = skjerming_fra_tilgjengelighet(
-            &data.felles().tilgjengelighet,
-            data.felles().client_reference,
-        )?;
-
-        let elements = ElementsJournalpost {
-            tittel: Some(data.felles().tittel.clone()),
-            journalposttype: Some("X".to_string()),
-            journalstatus: Some("J".to_string()),
-            avskriv_direkte: None,
-            avskrivningsmaate: None,
-            tilgangskode: skjerming.tilgangskode(),
-            tilgangshjemmel: skjerming.tilgangshjemmel(),
-            saksbehandler: Some(data.felles().saksbehandler.clone()),
-            saksbehandler_enhet: Some(data.felles().saksbehandler_enhet.clone()),
-            avsendere_mottakere: None,
-            dokumenter: Some(dokumenter),
-            dokument_dato: Some(data.felles().dokument_dato.clone()),
+        dokument: &DokumentAttributter,
+        hoveddokument: bool,
+    ) -> Result<ElementsDokument, EksekveringFeil> {
+        // For en mal er det den rendrede PDF-en som skal til arkivet; original
+        // mal_referanse sendes aldri (SKU-0005).
+        let (referanse, filtype) = match &dokument.kilde {
+            Dokumentkilde::Bytes {
+                dokument_referanse,
+                filtype,
+            } => (*dokument_referanse, filtype.clone()),
+            Dokumentkilde::HtmlTemplate {
+                rendered_dokument_referanse,
+                ..
+            } => {
+                let referanse = rendered_dokument_referanse
+                    .ok_or_else(|| EksekveringFeil::intern("arkivmapping_urendret_mal"))?;
+                (referanse, "PDF".to_string())
+            }
         };
 
-        verifiser_skjerming(&elements, &skjerming, data.felles().client_reference)?;
-        Ok(elements)
-    }
-
-    async fn map_dokumenter(
-        &self,
-        dokumenter: &[Dokument],
-        journalpost: &JournalpostMedDokumenter,
-    ) -> Result<Vec<ElementsDokument>, anyhow::Error> {
-        let Some(hoveddokument) = dokumenter.first() else {
-            return Ok(Vec::new());
-        };
-
-        let (dokument_referanse, filtype) = hoveddokument_referanse(hoveddokument, journalpost)?;
-        let innhold = self.hent_media_base64(dokument_referanse).await?;
-        Ok(vec![ElementsDokument {
-            tittel: Some(hoveddokument.tittel.clone()),
-            hoveddokument: true,
-            filtype: Some(filtype.to_string()),
-            innhold: Some(innhold),
-        }])
-    }
-
-    async fn map_vedlegg_dokument(
-        &self,
-        command: &CommandEnvelope<Command>,
-        dokument_id: uuid::Uuid,
-    ) -> Result<ElementsDokument, anyhow::Error> {
-        let dokument = Self::dokument_for_client_reference(command, dokument_id)?;
-        let (dokument_referanse, filtype) = bytes_form(dokument)?;
-        let innhold = self.hent_media_base64(dokument_referanse).await?;
+        let innhold = self.hent_media_base64(referanse).await?;
         Ok(ElementsDokument {
             tittel: Some(dokument.tittel.clone()),
-            hoveddokument: false,
-            filtype: Some(filtype.to_string()),
+            hoveddokument,
+            filtype: Some(filtype),
             innhold: Some(innhold),
         })
     }
@@ -322,88 +356,24 @@ impl SikriArkivGateway {
     async fn hent_media_base64(
         &self,
         dokument_referanse: uuid::Uuid,
-    ) -> Result<String, anyhow::Error> {
+    ) -> Result<String, EksekveringFeil> {
         let media = self
             .media_store
             .get(dokument_referanse)
-            .await?
+            .await
+            .map_err(|err| {
+                EksekveringFeil::intern_midlertidig("intern_media_utilgjengelig")
+                    .med_intern_detalj(err.to_string())
+            })?
             .ok_or_else(|| {
-                anyhow::anyhow!("Media mangler for dokument_referanse={dokument_referanse}")
+                EksekveringFeil::intern("intern_media_mangler")
+                    .med_intern_detalj(format!("dokument_referanse={dokument_referanse}"))
             })?;
         Ok(STANDARD.encode(media.data))
     }
-
-    fn dokument_for_client_reference(
-        command: &CommandEnvelope<Command>,
-        dokument_id: uuid::Uuid,
-    ) -> Result<&Dokument, anyhow::Error> {
-        let dokumenter = match &command.payload {
-            Command::OpprettInngaaendeJournalpost(data) => &data.felles().dokumenter,
-            Command::OpprettUtgaaendeJournalpost(data) => &data.felles().dokumenter,
-            Command::OpprettInterntNotatJournalpost(data) => &data.felles().dokumenter,
-            _ => return Err(anyhow::anyhow!("Ugyldig kommando for dokumentmapping")),
-        };
-
-        dokumenter
-            .iter()
-            .find(|d| d.client_reference == dokument_id)
-            .ok_or_else(|| {
-                anyhow::anyhow!("Dokument med client_reference={dokument_id} ble ikke funnet")
-            })
-    }
 }
 
-enum Skjerming {
-    Offentlig,
-    Skjermet {
-        tilgangskode: String,
-        tilgangshjemmel: String,
-    },
-}
-
-impl Skjerming {
-    fn er_skjermet(&self) -> bool {
-        matches!(self, Skjerming::Skjermet { .. })
-    }
-
-    fn tilgangskode(&self) -> Option<String> {
-        match self {
-            Skjerming::Skjermet { tilgangskode, .. } => Some(tilgangskode.clone()),
-            Skjerming::Offentlig => None,
-        }
-    }
-
-    fn tilgangshjemmel(&self) -> Option<String> {
-        match self {
-            Skjerming::Skjermet {
-                tilgangshjemmel, ..
-            } => Some(tilgangshjemmel.clone()),
-            Skjerming::Offentlig => None,
-        }
-    }
-}
-
-fn skjerming_fra_tilgjengelighet(
-    tilgjengelighet: &Tilgjengelighet,
-    _client_reference: uuid::Uuid,
-) -> Result<Skjerming, anyhow::Error> {
-    match tilgjengelighet {
-        Tilgjengelighet::Offentlig => Ok(Skjerming::Offentlig),
-        Tilgjengelighet::Skjermet {
-            tilgangskode,
-            tilgangshjemmel,
-        } => {
-            // tilgangskode/tilgangshjemmel er validerte newtypes (non-empty),
-            // så vi kan stole på verdiene her.
-            Ok(Skjerming::Skjermet {
-                tilgangskode: tilgangskode.as_str().to_string(),
-                tilgangshjemmel: tilgangshjemmel.as_str().to_string(),
-            })
-        }
-    }
-}
-
-fn unntatt_offentlighet(skjerming: &Skjerming) -> Option<bool> {
+fn unntatt_offentlighet(skjerming: &Tilgang) -> Option<bool> {
     Some(skjerming.er_skjermet())
 }
 
@@ -417,8 +387,8 @@ fn person_flagg(parttype: Parttype) -> bool {
 fn korrespondansepart_avsender_mottaker(
     part: &Korrespondansepart,
     er_mottaker: bool,
-    skjerming: &Skjerming,
-) -> Result<ElementsAvsenderMottaker, anyhow::Error> {
+    skjerming: &Tilgang,
+) -> Result<ElementsAvsenderMottaker, EksekveringFeil> {
     Ok(ElementsAvsenderMottaker {
         er_mottaker: Some(er_mottaker),
         navn: Some(part.navn.clone()),
@@ -441,14 +411,16 @@ fn korrespondansepart_avsender_mottaker(
 
 fn utsendingsmottaker_avsender_mottaker(
     mottaker: &Utsendingsmottaker,
-    skjerming: &Skjerming,
+    skjerming: &Tilgang,
     client_reference: uuid::Uuid,
-) -> Result<ElementsAvsenderMottaker, anyhow::Error> {
+) -> Result<ElementsAvsenderMottaker, EksekveringFeil> {
     // postnummer er en validert Postnummer-newtype (4 siffer), så kun de rå
     // String-feltene må sjekkes for tomhet her.
     if mottaker.adresse.adresse.trim().is_empty() || mottaker.adresse.poststed.trim().is_empty() {
-        return Err(anyhow::anyhow!(
-            "arkivmapping_postadresse_mangler client_reference={client_reference} sikri_recoverability=irrecoverable"
+        return Err(arkivmapping_feil(
+            "arkivmapping_postadresse_mangler",
+            "Postadresse mangler.",
+            client_reference,
         ));
     }
 
@@ -485,9 +457,9 @@ fn utsendingsmottaker_avsender_mottaker(
 
 fn verifiser_skjerming(
     journalpost: &ElementsJournalpost,
-    skjerming: &Skjerming,
+    skjerming: &Tilgang,
     client_reference: uuid::Uuid,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), EksekveringFeil> {
     if skjerming.er_skjermet() {
         let kode_satt = journalpost
             .tilgangskode
@@ -509,8 +481,9 @@ fn verifiser_skjerming(
             });
 
         if !(kode_satt && hjemmel_satt && alle_unntatt) {
-            return Err(anyhow::anyhow!(
-                "arkivmapping_skjerming_postcondition_brutt client_reference={client_reference} sikri_recoverability=irrecoverable"
+            // Postcondition i vår egen mapping, ikke noe klienten kan rette.
+            return Err(EksekveringFeil::intern(
+                "arkivmapping_skjerming_postcondition_brutt",
             ));
         }
     }
@@ -522,443 +495,97 @@ fn verifiser_skjerming(
     );
     Ok(())
 }
-fn hoveddokument_referanse(
-    dokument: &Dokument,
-    journalpost: &JournalpostMedDokumenter,
-) -> Result<(uuid::Uuid, String), anyhow::Error> {
-    match &dokument.form {
-        Dokumentform::Bytes {
-            dokument_referanse,
-            filtype,
-        } => Ok((*dokument_referanse, filtype.clone())),
-        Dokumentform::HtmlTemplate { .. } => {
-            // v1 maps only the command's first document as Sikri hoveddokument.
-            // The persisted document fact uses Skuffen's internal ID, not the
-            // command client_reference, so the hoveddokument fact is selected by
-            // the same positional invariant.
-            let tilstand = journalpost.dokumenter.first().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "arkivmapping_dokument_fact_mangler dokument_client_reference={} sikri_recoverability=irrecoverable",
-                    dokument.client_reference
-                )
-            })?;
-            rendered_template_referanse(tilstand)
-        }
-    }
-}
-
-fn rendered_template_referanse(
-    dokument: &DokumentMedTilstand,
-) -> Result<(uuid::Uuid, String), anyhow::Error> {
-    match &dokument.kilde {
-        DokumentKildeTilstand::HtmlTemplate {
-            rendered_dokument_referanse: Some(rendered),
-            ..
-        } => Ok((*rendered, "PDF".to_string())),
-        DokumentKildeTilstand::HtmlTemplate {
-            rendered_dokument_referanse: None,
-            ..
-        } => Err(anyhow::anyhow!(
-            "arkivmapping_rendered_dokument_mangler dokument_id={} sikri_recoverability=irrecoverable",
-            dokument.dokument_id.0
-        )),
-        DokumentKildeTilstand::Bytes => Err(anyhow::anyhow!(
-            "arkivmapping_dokumentform_mismatch dokument_id={} sikri_recoverability=irrecoverable",
-            dokument.dokument_id.0
-        )),
-    }
-}
-
-fn bytes_form(dokument: &Dokument) -> Result<(uuid::Uuid, &str), anyhow::Error> {
-    match &dokument.form {
-        Dokumentform::Bytes {
-            dokument_referanse,
-            filtype,
-        } => Ok((*dokument_referanse, filtype.as_str())),
-        Dokumentform::HtmlTemplate { .. } => Err(anyhow::anyhow!(
-            "arkivmapping_dokumentform_mismatch dokument_client_reference={} sikri_recoverability=irrecoverable",
-            dokument.client_reference
-        )),
-    }
-}
 
 #[cfg(test)]
 mod tests {
-    use super::{SikriArkivGateway, Skjerming, hoveddokument_referanse, verifiser_skjerming};
-    use crate::command::media::{MediaFile, MediaMetadata, MediaStore};
-    use application::command::{
-        Command, CommandEnvelope, Dokument, Dokumentform, JournalpostCommon,
-        OpprettJournalpostCommand, SakKey, Tilgjengelighet,
-    };
-    use async_trait::async_trait;
-    use domain::eksekvering::html_template::TemplateFelt;
-    use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId};
-    use domain::eksekvering::tilstand::{
-        DokumentKildeTilstand, DokumentMedTilstand, DokumentTilstand, JournalpostMedDokumenter,
-        JournalpostTilstand, JournalpostType,
-    };
-    use sikri_client::dto::elements_avsender_mottaker::ElementsAvsenderMottaker;
-    use sikri_client::dto::elements_journalpost::ElementsJournalpost;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use uuid::Uuid;
+    use super::*;
 
-    struct FakeMediaStore {
-        files: HashMap<Uuid, MediaFile>,
-    }
-
-    impl FakeMediaStore {
-        fn with_files(files: Vec<MediaFile>) -> Self {
-            Self {
-                files: files.into_iter().map(|file| (file.id, file)).collect(),
-            }
+    #[test]
+    fn alle_sikri_koder_har_en_klientvendt_feilkode() {
+        // En ny kode uten oppføring faller til ProcessingFailed i drift.
+        // Denne testen tvinger noen til å ta stilling til hva klienten skal
+        // se før koden rekker å nå dit.
+        for kode in sikri_client::ALLE_SIKRI_KODER {
+            assert!(
+                error_code_for(kode).is_some(),
+                "{kode} mangler oversettelse til en klientvendt feilkode"
+            );
         }
-    }
-
-    #[async_trait]
-    impl MediaStore for FakeMediaStore {
-        async fn save(&self, _file: MediaFile) -> Result<(), anyhow::Error> {
-            Ok(())
-        }
-
-        async fn exists(&self, id: Uuid) -> Result<bool, anyhow::Error> {
-            Ok(self.files.contains_key(&id))
-        }
-
-        async fn get(&self, id: Uuid) -> Result<Option<MediaFile>, anyhow::Error> {
-            Ok(self.files.get(&id).cloned())
-        }
-    }
-
-    #[tokio::test]
-    async fn create_mapping_only_includes_first_document_as_hoveddokument() {
-        let hoveddokument = sample_document("Rapport", "PDF");
-        let vedlegg = sample_document("Vedlegg", "PNG");
-        let gateway = sample_gateway(&[&hoveddokument, &vedlegg]);
-        let journalpost = sample_journalpost_for_documents(&[&hoveddokument, &vedlegg]);
-
-        let mapped = gateway
-            .map_dokumenter(&[hoveddokument.clone(), vedlegg], &journalpost)
-            .await
-            .expect("documents should map");
-
-        assert_eq!(mapped.len(), 1);
-        assert_eq!(mapped[0].tittel.as_deref(), Some("Rapport"));
-        assert_eq!(mapped[0].filtype.as_deref(), Some("PDF"));
-        assert!(mapped[0].hoveddokument);
-    }
-
-    #[tokio::test]
-    async fn html_template_hoveddokument_bruker_rendered_pdf() {
-        let rendered_id = Uuid::new_v4();
-        let dokument = sample_html_template_document();
-        let gateway = sample_gateway_with_files(vec![MediaFile {
-            id: rendered_id,
-            data: b"rendered pdf".to_vec(),
-            filename: Some("rendered.pdf".to_string()),
-            content_type: Some("application/pdf".to_string()),
-            metadata: MediaMetadata::default(),
-        }]);
-        let journalpost = sample_journalpost(vec![sample_html_template_fact(
-            dokument.client_reference,
-            Some(rendered_id),
-        )]);
-
-        let mapped = gateway
-            .map_dokumenter(std::slice::from_ref(&dokument), &journalpost)
-            .await
-            .expect("rendered template should map");
-
-        assert_eq!(mapped.len(), 1);
-        assert_eq!(mapped[0].tittel.as_deref(), Some("HTML-template"));
-        assert_eq!(mapped[0].filtype.as_deref(), Some("PDF"));
-        assert_eq!(mapped[0].innhold.as_deref(), Some("cmVuZGVyZWQgcGRm"));
-        assert!(mapped[0].hoveddokument);
-    }
-
-    #[tokio::test]
-    async fn html_template_hoveddokument_bruker_forste_dokumentfact_selv_om_id_er_intern() {
-        let rendered_id = Uuid::new_v4();
-        let dokument = sample_html_template_document();
-        let gateway = sample_gateway_with_files(vec![MediaFile {
-            id: rendered_id,
-            data: b"rendered pdf".to_vec(),
-            filename: Some("rendered.pdf".to_string()),
-            content_type: Some("application/pdf".to_string()),
-            metadata: MediaMetadata::default(),
-        }]);
-        let journalpost = sample_journalpost(vec![sample_html_template_fact(
-            Uuid::new_v4(),
-            Some(rendered_id),
-        )]);
-
-        let mapped = gateway
-            .map_dokumenter(std::slice::from_ref(&dokument), &journalpost)
-            .await
-            .expect("rendered template should map by hoveddokument position");
-
-        assert_eq!(mapped.len(), 1);
-        assert_eq!(mapped[0].filtype.as_deref(), Some("PDF"));
-        assert_eq!(mapped[0].innhold.as_deref(), Some("cmVuZGVyZWQgcGRm"));
-        assert!(mapped[0].hoveddokument);
     }
 
     #[test]
-    fn html_template_hoveddokument_krever_rendered_reference() {
-        let dokument = sample_html_template_document();
-        let journalpost = sample_journalpost(vec![sample_html_template_fact(
-            dokument.client_reference,
-            None,
-        )]);
-
-        let err =
-            hoveddokument_referanse(&dokument, &journalpost).expect_err("missing rendered ref");
-
-        assert!(
-            err.to_string()
-                .starts_with("arkivmapping_rendered_dokument_mangler")
+    fn arkivmapping_feil_peker_paa_client_reference() {
+        // Uten referansen vet ikke klienten hvilket dokument eller hvilken
+        // korrespondansepart som er feil.
+        let client_reference = uuid::Uuid::from_u128(7);
+        let feil = arkivmapping_feil(
+            "arkivmapping_mottaker_mangler",
+            "Mottaker mangler.",
+            client_reference,
         );
-    }
 
-    #[tokio::test]
-    async fn attachment_mapping_marks_document_as_not_hoveddokument() {
-        let hoveddokument = sample_document("Rapport", "PDF");
-        let vedlegg = sample_document("Vedlegg", "PNG");
-        let gateway = sample_gateway(&[&hoveddokument, &vedlegg]);
-        let command = sample_command(vec![hoveddokument, vedlegg.clone()]);
-
-        let mapped = gateway
-            .map_vedlegg_dokument(&command, vedlegg.client_reference)
-            .await
-            .expect("attachment should map");
-
-        assert_eq!(mapped.tittel.as_deref(), Some("Vedlegg"));
-        assert_eq!(mapped.filtype.as_deref(), Some("PNG"));
-        assert!(!mapped.hoveddokument);
-    }
-
-    #[tokio::test]
-    async fn html_template_attachment_mapping_returns_irrecoverable_mapping_error() {
-        let dokument = sample_html_template_document();
-        let command = sample_command(vec![dokument.clone()]);
-        let gateway = sample_gateway_with_files(Vec::new());
-
-        let err = gateway
-            .map_vedlegg_dokument(&command, dokument.client_reference)
-            .await
-            .expect_err("html template attachment should fail before media lookup");
-
-        let message = err.to_string();
-        assert!(message.starts_with("arkivmapping_dokumentform_mismatch"));
-        assert!(message.contains(&format!(
-            "dokument_client_reference={}",
-            dokument.client_reference
-        )));
-        assert!(message.contains("sikri_recoverability=irrecoverable"));
-    }
-
-    fn sample_gateway(dokumenter: &[&Dokument]) -> SikriArkivGateway {
-        let files = dokumenter
-            .iter()
-            .map(|dokument| MediaFile {
-                id: dokument_referanse(dokument),
-                data: dokument.tittel.as_bytes().to_vec(),
-                filename: Some(format!("{}.{}", dokument.tittel, filtype(dokument))),
-                content_type: None,
-                metadata: MediaMetadata::default(),
-            })
-            .collect();
-        SikriArkivGateway::new(Arc::new(FakeMediaStore::with_files(files)))
-    }
-
-    fn sample_gateway_with_files(files: Vec<MediaFile>) -> SikriArkivGateway {
-        SikriArkivGateway::new(Arc::new(FakeMediaStore::with_files(files)))
-    }
-
-    fn sample_journalpost_for_documents(dokumenter: &[&Dokument]) -> JournalpostMedDokumenter {
-        sample_journalpost(
-            dokumenter
-                .iter()
-                .map(|dokument| match &dokument.form {
-                    Dokumentform::Bytes { .. } => DokumentMedTilstand {
-                        dokument_id: SkuffenDokumentId::from(dokument.client_reference),
-                        tilstand: DokumentTilstand::IkkeRealisert,
-                        kilde: DokumentKildeTilstand::Bytes,
-                    },
-                    Dokumentform::HtmlTemplate {
-                        mal_referanse,
-                        felter,
-                    } => DokumentMedTilstand {
-                        dokument_id: SkuffenDokumentId::from(dokument.client_reference),
-                        tilstand: DokumentTilstand::Ok,
-                        kilde: DokumentKildeTilstand::HtmlTemplate {
-                            mal_referanse: *mal_referanse,
-                            felter: felter.clone(),
-                            rendered_dokument_referanse: Some(Uuid::new_v4()),
-                        },
-                    },
-                })
-                .collect(),
-        )
-    }
-
-    fn sample_journalpost(dokumenter: Vec<DokumentMedTilstand>) -> JournalpostMedDokumenter {
-        JournalpostMedDokumenter {
-            journalpost_id: SkuffenJournalpostId::from(Uuid::new_v4()),
-            journalposttype: JournalpostType::InterntNotat,
-            med_utsending: false,
-            tilstand: JournalpostTilstand::IkkeRealisert,
-            sikri_id: None,
-            journalpostnummer: None,
-            dokumenter,
-        }
-    }
-
-    fn sample_html_template_fact(
-        dokument_id: Uuid,
-        rendered_dokument_referanse: Option<Uuid>,
-    ) -> DokumentMedTilstand {
-        DokumentMedTilstand {
-            dokument_id: SkuffenDokumentId::from(dokument_id),
-            tilstand: if rendered_dokument_referanse.is_some() {
-                DokumentTilstand::Ok
-            } else {
-                DokumentTilstand::AvventerRendring
-            },
-            kilde: DokumentKildeTilstand::HtmlTemplate {
-                mal_referanse: Uuid::new_v4(),
-                felter: vec![TemplateFelt::Saksnummer],
-                rendered_dokument_referanse,
-            },
-        }
-    }
-
-    fn sample_command(dokumenter: Vec<Dokument>) -> CommandEnvelope<Command> {
-        CommandEnvelope {
-            command_id: Uuid::new_v4(),
-            correlation_id: Some(Uuid::new_v4()),
-            payload: Command::OpprettInterntNotatJournalpost(
-                OpprettJournalpostCommand::InterntNotat {
-                    felles: JournalpostCommon {
-                        client_reference: Uuid::new_v4(),
-                        tittel: "Internt notat".to_string(),
-                        dokument_dato: "2025-01-01".to_string(),
-                        saksbehandler: "Z12345".to_string(),
-                        saksbehandler_enhet: "1234".to_string(),
-                        tilgjengelighet: Tilgjengelighet::Offentlig,
-                        dokumenter,
-                        sak_key: SakKey::ClientReference(Uuid::new_v4()),
-                        kildesystem: None,
-                    },
-                },
-            ),
-        }
-    }
-
-    fn sample_document(tittel: &str, filtype: &str) -> Dokument {
-        Dokument {
-            client_reference: Uuid::new_v4(),
-            tittel: tittel.to_string(),
-            form: Dokumentform::Bytes {
-                filtype: filtype.to_string(),
-                dokument_referanse: Uuid::new_v4(),
-            },
-        }
-    }
-
-    fn sample_html_template_document() -> Dokument {
-        Dokument {
-            client_reference: Uuid::new_v4(),
-            tittel: "HTML-template".to_string(),
-            form: Dokumentform::HtmlTemplate {
-                mal_referanse: Uuid::new_v4(),
-                felter: vec![TemplateFelt::Saksnummer],
-            },
-        }
-    }
-
-    fn dokument_referanse(dokument: &Dokument) -> Uuid {
-        match &dokument.form {
-            Dokumentform::Bytes {
-                dokument_referanse,
-                filtype: _,
-            } => *dokument_referanse,
-            Dokumentform::HtmlTemplate { .. } => panic!("expected bytes document"),
-        }
-    }
-
-    fn filtype(dokument: &Dokument) -> &str {
-        match &dokument.form {
-            Dokumentform::Bytes {
-                dokument_referanse: _,
-                filtype,
-            } => filtype,
-            Dokumentform::HtmlTemplate { .. } => panic!("expected bytes document"),
-        }
-    }
-
-    fn skjermet_journalpost(
-        avsendere_mottakere: Option<Vec<ElementsAvsenderMottaker>>,
-    ) -> ElementsJournalpost {
-        ElementsJournalpost {
-            tittel: Some("Tittel".to_string()),
-            journalposttype: Some("X".to_string()),
-            journalstatus: Some("J".to_string()),
-            avskriv_direkte: None,
-            avskrivningsmaate: None,
-            tilgangskode: Some("UO".to_string()),
-            tilgangshjemmel: Some("Offl. § 13".to_string()),
-            saksbehandler: Some("Z00000".to_string()),
-            saksbehandler_enhet: Some("42".to_string()),
-            avsendere_mottakere,
-            dokumenter: None,
-            dokument_dato: Some("2026-01-01".to_string()),
-        }
+        assert!(!feil.er_recoverable());
+        assert_eq!(feil.kode, "arkivmapping_mottaker_mangler");
+        assert_eq!(feil.error_code, StatusErrorCode::InvalidRequest);
+        assert!(feil.melding.contains(&client_reference.to_string()));
     }
 
     #[test]
-    fn skjermet_internt_notat_uten_parter_passerer_postcondition() {
-        let journalpost = skjermet_journalpost(None);
-        let skjerming = Skjerming::Skjermet {
-            tilgangskode: "UO".to_string(),
-            tilgangshjemmel: "Offl. § 13".to_string(),
-        };
+    fn sikri_feil_beholder_klassifisering_kode_og_melding() {
+        let feil = fra_sikri(SikriFeil::irrecoverable(
+            "sikri_resource_not_found",
+            "Fant ikke ressursen.",
+        ));
 
-        verifiser_skjerming(&journalpost, &skjerming, uuid::Uuid::nil())
-            .expect("skjermet internt notat uten parter skal passere");
+        assert!(!feil.er_recoverable());
+        assert_eq!(feil.kode, "sikri_resource_not_found");
+        assert_eq!(feil.error_code, StatusErrorCode::NotFound);
+        assert_eq!(feil.melding, "Fant ikke ressursen.");
+    }
+
+    /// Går gjennom klassifiseringen, ikke en ferdiglaget feil: det er
+    /// kallveien fra Sikris svar til klientens status som skal holde.
+    fn klassifiser(status: reqwest::StatusCode, body: &str) -> EksekveringFeil {
+        fra_sikri(SikriFeil::fra_http(status, Some(body)))
     }
 
     #[test]
-    fn skjermet_med_uskjermet_part_feiler() {
-        let part = ElementsAvsenderMottaker {
-            forsendelsesmetode: None,
-            er_mottaker: Some(true),
-            kopi: None,
-            unntatt_offentlighet: Some(false),
-            person: Some(false),
-            til_saksbehandler: None,
-            til_saksbehandler_enhet: None,
-            id: None,
-            navn: Some("Acme AS".to_string()),
-            organisasjonsnummer: Some("995298775".to_string()),
-            epost: None,
-            telefon: None,
-            postadresse: None,
-            postnummer: None,
-            poststed: None,
-            utlandsadresse: None,
-        };
-        let journalpost = skjermet_journalpost(Some(vec![part]));
-        let skjerming = Skjerming::Skjermet {
-            tilgangskode: "UO".to_string(),
-            tilgangshjemmel: "Offl. § 13".to_string(),
-        };
-
-        let err = verifiser_skjerming(&journalpost, &skjerming, uuid::Uuid::nil())
-            .expect_err("uskjermet part på skjermet journalpost skal feile");
-        assert!(
-            err.to_string()
-                .contains("arkivmapping_skjerming_postcondition_brutt")
+    fn uavskrevne_restanser_blir_terminal_prerequisite_pending() {
+        let feil = klassifiser(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"errorMessage":"Det finnes 3 ikke avskrevne restanser","inputParameters":"saksnr=2026/000123"}"#,
         );
+
+        assert!(!feil.er_recoverable());
+        assert_eq!(feil.kode, "sikri_unresolved_journalposter");
+        assert_eq!(feil.error_code, StatusErrorCode::PrerequisitePending);
+        assert_eq!(
+            feil.melding,
+            "Saken har journalposter som ikke er avskrevet (restanser) og kan ikke avsluttes."
+        );
+        assert!(!feil.melding.contains("2026/000123"));
+    }
+
+    #[test]
+    fn vedlegg_uten_innhold_blir_terminal_invalid_request() {
+        let feil = klassifiser(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"errorMessage":"Vedleggslisten har dokument-filer som mangler innhold"}"#,
+        );
+
+        assert!(!feil.er_recoverable());
+        assert_eq!(feil.kode, "sikri_missing_document_content");
+        assert_eq!(feil.error_code, StatusErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn ukjent_serverfeil_ved_avslutning_retryes_fortsatt() {
+        let feil = klassifiser(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"errorMessage":"Ukjent feil"}"#,
+        );
+
+        assert!(feil.er_recoverable());
+        assert_eq!(feil.error_code, StatusErrorCode::TemporaryUnavailable);
     }
 }

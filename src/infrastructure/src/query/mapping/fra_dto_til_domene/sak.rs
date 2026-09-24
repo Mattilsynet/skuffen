@@ -4,7 +4,7 @@ use lib_schemas::skuffen::{
     sak::{Saksnummer, Saksstatus},
 };
 
-use crate::query::mapping::lookup::key_mapping_queries::lookup_skuffen_id_fra_arkiv_id;
+use crate::query::mapping::lookup::entitet_queries::lookup_skuffen_id_fra_arkiv_id;
 
 pub async fn from_dto_sak_key_to_domain(dto_sak_key: SakKey) -> Result<domain::model::sak::SakKey> {
     let key = match dto_sak_key {
