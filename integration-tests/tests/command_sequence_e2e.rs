@@ -11,13 +11,16 @@ use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
-use lib_schemas::skuffen::status::{SkuffenCommandEvent, SkuffenCommandStatusV1};
+use lib_schemas::skuffen::status::{
+    SkuffenCommandEvent, SkuffenCommandStatusV1, SkuffenOperasjonHendelse,
+    SkuffenOperasjonStatusV1, SkuffenOperasjonstype, SkuffenStatusErrorCode,
+};
 use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 
 use support::{
     CommandScenario, extract_saksnummer, hent_bruker_mt_enheter_via_nats,
     hent_journalpost_via_nats, hent_sak_via_nats_by_arkiv_id, publish_media, send_command_batch,
-    send_raw_command_payload, wait_for_status_events,
+    send_raw_command_payload, terminalt_feilet, wait_for_operasjon_events, wait_for_status_events,
 };
 
 mod support;
@@ -805,5 +808,199 @@ async fn html_mal_som_vedlegg_gir_terminal_feilet_ikke_stillhet() -> Result<()> 
         wait_for_status_events(&env.nats_url, [notat.command_id], Duration::from_secs(30)).await?;
 
     assert_terminal_hendelse(&events, notat.command_id, SkuffenCommandEvent::Feilet);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Presise Sikri-feil i statusstrømmen
+// ---------------------------------------------------------------------------
+
+const RESTANSEMELDING: &str =
+    "Saken har journalposter som ikke er avskrevet (restanser) og kan ikke avsluttes.";
+const MANGLENDE_INNHOLD_MELDING: &str =
+    "Sikri/Elements avviste forespørselen fordi dokumentet mangler innhold.";
+
+fn terminal_command_event(
+    events: &[SkuffenCommandStatusV1],
+    command_id: Uuid,
+) -> SkuffenCommandStatusV1 {
+    events
+        .iter()
+        .filter(|event| event.command_id == command_id)
+        .find(|event| event.terminal)
+        .unwrap_or_else(|| panic!("ingen terminal hendelse for {command_id}, fikk {events:?}"))
+        .clone()
+}
+
+fn terminal_operasjon_event(
+    events: &[SkuffenOperasjonStatusV1],
+    operasjonstype: SkuffenOperasjonstype,
+) -> SkuffenOperasjonStatusV1 {
+    events
+        .iter()
+        .find(|event| {
+            event.operasjonstype == operasjonstype
+                && event.hendelse == SkuffenOperasjonHendelse::Feilet
+        })
+        .unwrap_or_else(|| panic!("ingen terminal {operasjonstype:?}-hendelse, fikk {events:?}"))
+        .clone()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn uavskrevne_restanser_gir_terminal_avslutning_med_presis_aarsak() -> Result<()> {
+    let env = support::start_runtime_med_arkivfeil("uavskrevne_restanser@avslutt_sak").await?;
+
+    let sak_client_reference = Uuid::new_v4();
+    let opprett_sak = opprett_sak_for(sak_client_reference, "Restanser blokkerer avslutning");
+    send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
+    let sak_events = wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id],
+        Duration::from_secs(30),
+    )
+    .await?;
+    assert_terminal_hendelse(
+        &sak_events,
+        opprett_sak.command_id,
+        SkuffenCommandEvent::Fullfort,
+    );
+    let saksnummer = extract_saksnummer(&sak_events, opprett_sak.command_id)
+        .expect("OpprettSak skal gi saksnummer");
+
+    let avslutt_sak = avslutt_sak_for(sak_client_reference);
+    let command_id = avslutt_sak.command_id;
+    let correlation_id = avslutt_sak.correlation_id;
+    send_command_batch(&env.nats_url, std::slice::from_ref(&avslutt_sak)).await?;
+
+    let operasjon_events = wait_for_operasjon_events(
+        &env.nats_url,
+        command_id,
+        Duration::from_secs(30),
+        terminalt_feilet,
+    )
+    .await?;
+    let operasjon = terminal_operasjon_event(&operasjon_events, SkuffenOperasjonstype::AvsluttSak);
+    assert!(operasjon.terminal);
+    assert_eq!(operasjon.message, RESTANSEMELDING);
+    assert_eq!(
+        operasjon.error_code,
+        Some(SkuffenStatusErrorCode::PrerequisitePending)
+    );
+    assert_eq!(operasjon.command_id, command_id);
+    assert_eq!(operasjon.correlation_id, correlation_id);
+    assert!(operasjon.attempt.is_some(), "attempt skal være med");
+
+    let events =
+        wait_for_status_events(&env.nats_url, [command_id], Duration::from_secs(30)).await?;
+    let terminal = terminal_command_event(&events, command_id);
+    assert_eq!(terminal.hendelse, SkuffenCommandEvent::Feilet);
+    assert_eq!(terminal.message, RESTANSEMELDING);
+    assert_eq!(
+        terminal.error_code,
+        Some(SkuffenStatusErrorCode::PrerequisitePending)
+    );
+    assert_eq!(terminal.correlation_id, correlation_id);
+    assert_eq!(
+        terminal.sak_client_reference,
+        Some(sak_client_reference),
+        "klienten må kunne finne saken igjen"
+    );
+    assert_eq!(
+        terminal.saksnummer.as_ref().map(|s| s.as_str()),
+        Some(saksnummer.as_str())
+    );
+
+    // Terminalt feilet betyr ingen nye forsøk. Reparasjon skjer senere
+    // gjennom admin-grensesnittet, ikke ved at executoren prøver igjen.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let etterpaa = wait_for_operasjon_events(
+        &env.nats_url,
+        command_id,
+        Duration::from_secs(10),
+        terminalt_feilet,
+    )
+    .await?;
+    let forsok: Vec<_> = etterpaa
+        .iter()
+        .filter(|event| event.operasjon_id == operasjon.operasjon_id)
+        .collect();
+    assert_eq!(
+        forsok.len(),
+        1,
+        "terminalt feilet operasjon skal ikke kjøres igjen, fikk {forsok:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn vedlegg_uten_innhold_gir_terminal_feil_paa_vedleggsoperasjonen() -> Result<()> {
+    let env =
+        support::start_runtime_med_arkivfeil("manglende_dokumentinnhold@legg_til_vedlegg").await?;
+
+    let scenario = CommandScenario::new();
+    publish_media(&env.nats_url, scenario.dokument_referanse).await?;
+
+    let opprett_sak = opprett_sak_for(scenario.sak_client_reference, "Vedlegg uten innhold");
+    send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
+    let sak_events = wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id],
+        Duration::from_secs(30),
+    )
+    .await?;
+    assert_terminal_hendelse(
+        &sak_events,
+        opprett_sak.command_id,
+        SkuffenCommandEvent::Fullfort,
+    );
+    let saksnummer = extract_saksnummer(&sak_events, opprett_sak.command_id)
+        .expect("OpprettSak skal gi saksnummer");
+
+    let journalpost = scenario.opprett_inngaende_med_vedlegg(
+        "Z99999",
+        "42",
+        DtoSakKey::ArkivId(DtoSaksnummer::new(&saksnummer)?),
+        "Inngaaende med vedlegg",
+    );
+    let command_id = journalpost.command_id;
+    send_command_batch(&env.nats_url, std::slice::from_ref(&journalpost)).await?;
+
+    let operasjon_events = wait_for_operasjon_events(
+        &env.nats_url,
+        command_id,
+        Duration::from_secs(40),
+        terminalt_feilet,
+    )
+    .await?;
+    let operasjon =
+        terminal_operasjon_event(&operasjon_events, SkuffenOperasjonstype::LeggTilVedlegg);
+    assert_eq!(operasjon.message, MANGLENDE_INNHOLD_MELDING);
+    assert_eq!(
+        operasjon.error_code,
+        Some(SkuffenStatusErrorCode::InvalidRequest)
+    );
+    assert!(
+        operasjon_events.iter().any(|event| {
+            event.operasjonstype == SkuffenOperasjonstype::OpprettJournalpost
+                && event.hendelse == SkuffenOperasjonHendelse::Ok
+        }),
+        "bare vedleggskallet skal feile, fikk {operasjon_events:?}"
+    );
+
+    let events =
+        wait_for_status_events(&env.nats_url, [command_id], Duration::from_secs(30)).await?;
+    let terminal = terminal_command_event(&events, command_id);
+    assert_eq!(terminal.hendelse, SkuffenCommandEvent::Feilet);
+    assert_eq!(terminal.message, MANGLENDE_INNHOLD_MELDING);
+    assert_eq!(
+        terminal.error_code,
+        Some(SkuffenStatusErrorCode::InvalidRequest)
+    );
+    assert_eq!(
+        terminal.journalpost_client_reference,
+        Some(scenario.journalpost_inngaende_client_reference)
+    );
+
     Ok(())
 }

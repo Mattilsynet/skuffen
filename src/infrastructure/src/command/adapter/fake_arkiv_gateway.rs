@@ -15,10 +15,43 @@ use std::sync::Mutex;
 
 /// Miljøvariabel som lar en integrasjonstest be fake-arkivet feile.
 ///
-/// Verdien er `irrecoverable` eller `recoverable`. Uten den oppfører faken seg
-/// som før. Den leses kun når `SKUFFEN_FAKE_SIKRI=1`, som allerede er sperret
-/// til local/dev/test i [`crate::bootstrap`].
+/// Verdien er `<modus>` eller `<modus>@<operasjonstype>`, der modusen er
+/// `irrecoverable`, `recoverable`, `uavskrevne_restanser` eller
+/// `manglende_dokumentinnhold`. Uten `@` feiler hvert kall. Den leses kun når
+/// `SKUFFEN_FAKE_SIKRI=1`, som allerede er sperret til local/dev/test i
+/// [`crate::bootstrap`].
 pub const FAKE_SIKRI_FEIL_ENV: &str = "SKUFFEN_FAKE_SIKRI_FEIL";
+
+/// Hvilket arkivkall som utføres. Lar feilinjeksjonen treffe én operasjon i
+/// en ellers vellykket sekvens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arkivkall {
+    OpprettSak,
+    OpprettJournalpost,
+    LeggTilVedlegg,
+    SettJournalpostStatus,
+    Avskriv,
+    HentJournalstatus,
+    AvsluttSak,
+    SettSaksansvarlig,
+}
+
+impl Arkivkall {
+    fn fra_kode(kode: &str) -> Option<Self> {
+        let kall = match kode {
+            "opprett_sak" => Self::OpprettSak,
+            "opprett_journalpost" => Self::OpprettJournalpost,
+            "legg_til_vedlegg" => Self::LeggTilVedlegg,
+            "sett_journalpost_status" => Self::SettJournalpostStatus,
+            "avskriv" => Self::Avskriv,
+            "hent_journalstatus" => Self::HentJournalstatus,
+            "avslutt_sak" => Self::AvsluttSak,
+            "sett_saksansvarlig" => Self::SettSaksansvarlig,
+            _ => return None,
+        };
+        Some(kall)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Feilmodus {
@@ -26,13 +59,23 @@ pub enum Feilmodus {
     Ingen,
     Recoverable,
     Irrecoverable,
+    UavskrevneRestanser,
+    ManglendeDokumentinnhold,
 }
 
+/// Syntetiske Sikri-svar. De går gjennom den ekte klassifiseringen, slik at
+/// runtime-testene måler reglene og ikke en håndlaget feil.
+const RESTANSESVAR: &str = r#"{"errorMessage":"Det finnes 2 ikke avskrevne restanser"}"#;
+const VEDLEGGSSVAR: &str =
+    r#"{"errorMessage":"Vedleggslisten har dokument-filer som mangler innhold"}"#;
+
 impl Feilmodus {
-    fn fra_env() -> Self {
-        match std::env::var(FAKE_SIKRI_FEIL_ENV).ok().as_deref() {
-            Some("irrecoverable") => Feilmodus::Irrecoverable,
-            Some("recoverable") => Feilmodus::Recoverable,
+    fn fra_kode(kode: &str) -> Self {
+        match kode {
+            "irrecoverable" => Feilmodus::Irrecoverable,
+            "recoverable" => Feilmodus::Recoverable,
+            "uavskrevne_restanser" => Feilmodus::UavskrevneRestanser,
+            "manglende_dokumentinnhold" => Feilmodus::ManglendeDokumentinnhold,
             _ => Feilmodus::Ingen,
         }
     }
@@ -52,7 +95,50 @@ impl Feilmodus {
                 "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere.",
                 StatusErrorCode::TemporaryUnavailable,
             )),
+            Feilmodus::UavskrevneRestanser => Some(sikri_svar(RESTANSESVAR)),
+            Feilmodus::ManglendeDokumentinnhold => Some(sikri_svar(VEDLEGGSSVAR)),
         }
+    }
+}
+
+fn sikri_svar(body: &str) -> EksekveringFeil {
+    super::sikri_arkiv_gateway::fra_sikri(sikri_client::SikriFeil::fra_http(
+        reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+        Some(body),
+    ))
+}
+
+/// Hvilken feil som injiseres, og hvilket kall den treffer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Feilinjeksjon {
+    modus: Feilmodus,
+    maal: Option<Arkivkall>,
+}
+
+impl Feilinjeksjon {
+    fn fra_env() -> Self {
+        match std::env::var(FAKE_SIKRI_FEIL_ENV) {
+            Ok(verdi) => Self::fra_kode(&verdi),
+            Err(_) => Self::default(),
+        }
+    }
+
+    fn fra_kode(verdi: &str) -> Self {
+        let (modus, maal) = match verdi.split_once('@') {
+            Some((modus, maal)) => (modus, Arkivkall::fra_kode(maal)),
+            None => (verdi, None),
+        };
+        Self {
+            modus: Feilmodus::fra_kode(modus),
+            maal,
+        }
+    }
+
+    fn feil_for(self, kall: Arkivkall) -> Option<EksekveringFeil> {
+        if self.maal.is_some_and(|maal| maal != kall) {
+            return None;
+        }
+        self.modus.som_feil()
     }
 }
 
@@ -64,20 +150,27 @@ pub struct FakeArkivGateway {
     journalpost_counter: Arc<AtomicI32>,
     dokument_counter: Arc<AtomicI32>,
     journalstatus: Arc<Mutex<HashMap<i32, ObservertJournalstatus>>>,
-    feilmodus: Feilmodus,
+    feilinjeksjon: Feilinjeksjon,
 }
 
 impl FakeArkivGateway {
     pub fn new() -> Self {
         Self {
-            feilmodus: Feilmodus::fra_env(),
+            feilinjeksjon: Feilinjeksjon::fra_env(),
             ..Default::default()
         }
     }
 
-    pub fn med_feilmodus(feilmodus: Feilmodus) -> Self {
+    pub fn med_feilmodus(modus: Feilmodus) -> Self {
         Self {
-            feilmodus,
+            feilinjeksjon: Feilinjeksjon { modus, maal: None },
+            ..Default::default()
+        }
+    }
+
+    pub fn med_feilinjeksjon(verdi: &str) -> Self {
+        Self {
+            feilinjeksjon: Feilinjeksjon::fra_kode(verdi),
             ..Default::default()
         }
     }
@@ -90,10 +183,10 @@ impl FakeArkivGateway {
             .insert(journalpost_id, status);
     }
 
-    /// Feiler hvert arkivkall så lenge modusen står. Vedvarende, ikke
-    /// engangs: en recoverable feil skal kunne observeres over flere forsøk.
-    fn sjekk_feilmodus(&self) -> Result<(), EksekveringFeil> {
-        match self.feilmodus.som_feil() {
+    /// Feiler så lenge modusen står. Vedvarende, ikke engangs: en recoverable
+    /// feil skal kunne observeres over flere forsøk.
+    fn sjekk_feilmodus(&self, kall: Arkivkall) -> Result<(), EksekveringFeil> {
+        match self.feilinjeksjon.feil_for(kall) {
             Some(feil) => Err(feil),
             None => Ok(()),
         }
@@ -106,7 +199,7 @@ impl ArkivGateway for FakeArkivGateway {
         &self,
         _attributter: &SakAttributter,
     ) -> Result<OpprettSakResultat, EksekveringFeil> {
-        self.sjekk_feilmodus()?;
+        self.sjekk_feilmodus(Arkivkall::OpprettSak)?;
         let seq = self.sak_counter.fetch_add(1, Ordering::SeqCst) + 1;
         let saksnummer = format!("2026/{:06}", 900000 + seq);
         super::fake_command_state_repo::registrer_fake_sak(&saksnummer);
@@ -119,7 +212,7 @@ impl ArkivGateway for FakeArkivGateway {
         _journalpost: &JournalpostAttributter,
         _hoveddokument: &DokumentAttributter,
     ) -> Result<OpprettJournalpostResultat, EksekveringFeil> {
-        self.sjekk_feilmodus()?;
+        self.sjekk_feilmodus(Arkivkall::OpprettJournalpost)?;
         let seq = self.journalpost_counter.fetch_add(1, Ordering::SeqCst) + 1;
         let journalpost_id = 10_000 + seq;
         self.journalstatus
@@ -134,7 +227,7 @@ impl ArkivGateway for FakeArkivGateway {
         _journalpost_id: i32,
         _vedlegg: &DokumentAttributter,
     ) -> Result<Option<i32>, EksekveringFeil> {
-        self.sjekk_feilmodus()?;
+        self.sjekk_feilmodus(Arkivkall::LeggTilVedlegg)?;
         let seq = self.dokument_counter.fetch_add(1, Ordering::SeqCst) + 1;
         Ok(Some(20_000 + seq))
     }
@@ -144,7 +237,7 @@ impl ArkivGateway for FakeArkivGateway {
         journalpost_id: i32,
         status: Journalstatus,
     ) -> Result<(), EksekveringFeil> {
-        self.sjekk_feilmodus()?;
+        self.sjekk_feilmodus(Arkivkall::SettJournalpostStatus)?;
         let observert = match status {
             Journalstatus::Journalfoert => ObservertJournalstatus::Journalfoert,
             Journalstatus::Ekspedert => ObservertJournalstatus::Ekspedert,
@@ -163,7 +256,7 @@ impl ArkivGateway for FakeArkivGateway {
         _kildesystem: Option<&str>,
         _merknad: Option<&str>,
     ) -> Result<(), EksekveringFeil> {
-        self.sjekk_feilmodus()?;
+        self.sjekk_feilmodus(Arkivkall::Avskriv)?;
         Ok(())
     }
 
@@ -172,7 +265,7 @@ impl ArkivGateway for FakeArkivGateway {
         &self,
         journalpost_id: i32,
     ) -> Result<ObservertJournalstatus, EksekveringFeil> {
-        self.sjekk_feilmodus()?;
+        self.sjekk_feilmodus(Arkivkall::HentJournalstatus)?;
         let mut statuser = self.journalstatus.lock().unwrap();
         let naavaerende = statuser
             .get(&journalpost_id)
@@ -190,7 +283,7 @@ impl ArkivGateway for FakeArkivGateway {
     }
 
     async fn avslutt_sak(&self, _saksnummer: &str) -> Result<(), EksekveringFeil> {
-        self.sjekk_feilmodus()?;
+        self.sjekk_feilmodus(Arkivkall::AvsluttSak)?;
         Ok(())
     }
 
@@ -200,7 +293,7 @@ impl ArkivGateway for FakeArkivGateway {
         _saksbehandler_id: &str,
         _saksbehandler_enhet: &str,
     ) -> Result<(), EksekveringFeil> {
-        self.sjekk_feilmodus()?;
+        self.sjekk_feilmodus(Arkivkall::SettSaksansvarlig)?;
         Ok(())
     }
 }
@@ -233,5 +326,48 @@ mod tests {
             let feil = gateway.avslutt_sak("2026/000001").await.unwrap_err();
             assert!(feil.er_recoverable());
         }
+    }
+
+    #[tokio::test]
+    async fn feilinjeksjon_kan_begrenses_til_en_operasjon() {
+        let gateway = FakeArkivGateway::med_feilinjeksjon("uavskrevne_restanser@avslutt_sak");
+
+        let feil = gateway.avslutt_sak("2026/000001").await.unwrap_err();
+        assert!(!feil.er_recoverable());
+        assert_eq!(feil.kode, "sikri_unresolved_journalposter");
+        assert_eq!(feil.error_code, StatusErrorCode::PrerequisitePending);
+        assert_eq!(
+            feil.melding,
+            "Saken har journalposter som ikke er avskrevet (restanser) og kan ikke avsluttes."
+        );
+
+        assert!(
+            gateway
+                .sett_saksansvarlig("2026/000001", "Z12345", "MT-1")
+                .await
+                .is_ok(),
+            "andre kall skal lykkes som før"
+        );
+    }
+
+    #[tokio::test]
+    async fn vedleggsfeil_treffer_bare_vedleggskallet() {
+        let gateway =
+            FakeArkivGateway::med_feilinjeksjon("manglende_dokumentinnhold@legg_til_vedlegg");
+        let vedlegg = DokumentAttributter {
+            tittel: "Vedlegg".to_string(),
+            rekkefolge: 1,
+            kilde: application::command::materialisering::Dokumentkilde::Bytes {
+                dokument_referanse: uuid::Uuid::from_u128(2),
+                filtype: "PDF".to_string(),
+            },
+        };
+
+        let feil = gateway.legg_til_vedlegg(1, &vedlegg).await.unwrap_err();
+        assert!(!feil.er_recoverable());
+        assert_eq!(feil.kode, "sikri_missing_document_content");
+        assert_eq!(feil.error_code, StatusErrorCode::InvalidRequest);
+
+        assert!(gateway.avslutt_sak("2026/000001").await.is_ok());
     }
 }

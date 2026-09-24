@@ -368,7 +368,8 @@ Terminal failure requires a positive match (SKU-0017): the classifier's floor is
 | `sikri_unknown_user` | Saksbehandler/systembruker not found in ePhorte | Irrecoverable |
 | `sikri_access_control_rejected` | Tilgangskode/tilgangshjemmel rejected | Irrecoverable |
 | `sikri_validation_failed` | Sikri rejected the content as invalid | Irrecoverable |
-| `sikri_missing_document_content` | Journalpost document files have no content | Irrecoverable |
+| `sikri_missing_document_content` | Journalpost or vedlegg document files have no content | Irrecoverable |
+| `sikri_unresolved_journalposter` | Sak has journalposter that are not avskrevet (restanser), so it cannot be closed | Irrecoverable |
 | `sikri_resource_not_found` | HTTP 404 from Sikri | Irrecoverable |
 | `sikri_request_validation_failed` | Local pre-flight validation rejected the payload | Irrecoverable |
 | `sikri_upstream_unavailable` | 502 Bad Gateway, or no response at all | Recoverable |
@@ -378,6 +379,25 @@ Terminal failure requires a positive match (SKU-0017): the classifier's floor is
 | `sikri_secret_unavailable` | Credentials could not be read from Secret Manager | Recoverable |
 | `sikri_response_unparsable` | 2xx in a shape we do not recognise | Recoverable |
 | `sikri_unknown_error` | Unclassified error | Recoverable |
+
+Two rules read the `errorMessage` field of Sikri's JSON envelope rather than the whole
+body, because the same response echoes the input parameters and a stack trace, and a copy
+of the text there is not Sikri's rejection:
+
+- `sikri_unresolved_journalposter` matches `Det finnes {N} ikke avskrevne restanser` with
+  a positive `{N}`, at HTTP 500 from `SetStatusForArkivSak`. It maps to the client-facing
+  code `PREREQUISITE_PENDING`. Terminal here means the outcome is decided — `hendelse =
+  feilet` with `terminal = true`, and no further attempt is made. It does not mean the sak
+  is repaired: the restanser must still be handled, and a previously failed AvsluttSak
+  keeps blocking a new one until the admin interface can repair it.
+- `sikri_missing_document_content` additionally matches `Vedleggslisten har dokument-filer
+  som mangler innhold` at HTTP 500 from `LeggTilVedleggPaaJournalpost`, alongside the
+  existing `Ny journalpost har dokument-filer som mangler innhold`. Both map to
+  `INVALID_REQUEST`.
+
+The distinction between logs and public status holds for both: the code and the raw body
+stay in logs and `operasjon.siste_detalj`, while the client receives only the pre-mapped
+Norwegian message and the coarse error code.
 
 `sikri_invalid_request` is deliberately recoverable. `401`/`403` most often mean a rotated
 credential rather than a bad request, and terminating is irreversible while retrying is not.

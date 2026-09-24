@@ -54,6 +54,7 @@ fn error_code_for(kode: &str) -> Option<StatusErrorCode> {
         | "sikri_invalid_request"
         | "sikri_request_validation_failed" => StatusErrorCode::InvalidRequest,
         "sikri_resource_not_found" => StatusErrorCode::NotFound,
+        "sikri_unresolved_journalposter" => StatusErrorCode::PrerequisitePending,
         "sikri_rate_limited"
         | "sikri_upstream_unavailable"
         | "sikri_upstream_error"
@@ -139,6 +140,18 @@ mod tests {
         assert_eq!(feil.kind, ArkivSakTilstandErrorKind::Irrecoverable);
         assert_eq!(feil.kode, "sikri_unknown_user");
         assert_eq!(feil.error_code, StatusErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn uavskrevne_restanser_er_terminal_ogsaa_i_valideringsadapteren() {
+        let feil = klassifiser(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Some(r#"{"errorMessage":"Det finnes 3 ikke avskrevne restanser"}"#),
+        );
+
+        assert_eq!(feil.kind, ArkivSakTilstandErrorKind::Irrecoverable);
+        assert_eq!(feil.kode, "sikri_unresolved_journalposter");
+        assert_eq!(feil.error_code, StatusErrorCode::PrerequisitePending);
     }
 
     #[test]

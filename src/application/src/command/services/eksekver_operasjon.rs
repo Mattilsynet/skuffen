@@ -614,7 +614,8 @@ impl EksekverOperasjonService {
             .await?;
 
         if hendelse.er_terminal() {
-            self.publiser_command_outcome(&command).await?;
+            self.publiser_command_outcome(&command, hendelse, melding, error_code)
+                .await?;
         }
 
         Ok(())
@@ -625,7 +626,13 @@ impl EksekverOperasjonService {
     /// resultatet aldri gå tilbake til ok — så eventet er sant i det øyeblikket
     /// det sendes og kan aldri trekkes tilbake.
     ///
-    async fn publiser_command_outcome(&self, command: &CommandMetadata) -> Result<()> {
+    async fn publiser_command_outcome(
+        &self,
+        command: &CommandMetadata,
+        hendelse: Operasjonshendelse,
+        operasjonsmelding: &str,
+        operasjonsfeilkode: Option<StatusErrorCode>,
+    ) -> Result<()> {
         let utfall = self
             .operasjon_repo
             .hent_command_outcome(command.command_id)
@@ -636,11 +643,25 @@ impl EksekverOperasjonService {
             CommandOutcome::Fullfort => {
                 (CommandEvent::Fullfort, "Forespørselen er fullført.", None)
             }
-            CommandOutcome::Feilet => (
+            // Årsaken er den operasjonen som nettopp feilet, ikke en generisk
+            // erstatning. Flere feilende søsken gir flere sanne, terminale
+            // hendelser, hver med sin egen årsak.
+            CommandOutcome::Feilet if hendelse == Operasjonshendelse::Feilet => (
                 CommandEvent::Feilet,
-                "Forespørselen kunne ikke fullføres.",
-                Some(StatusErrorCode::ProcessingFailed),
+                operasjonsmelding,
+                operasjonsfeilkode.or(Some(StatusErrorCode::ProcessingFailed)),
             ),
+            // Et søskens `ok` skal ikke skyve den presise feilårsaken ut av
+            // klientens siste status. Den ble publisert da operasjonen feilet;
+            // loggen gjør undertrykkelsen synlig for den som leter etter en
+            // kommando uten terminalt event.
+            CommandOutcome::Feilet => {
+                tracing::debug!(
+                    hendelse = hendelse.as_code(),
+                    "kommandofeil allerede publisert, undertrykker duplikat"
+                );
+                return Ok(());
+            }
             CommandOutcome::KreverAvklaring => (
                 CommandEvent::KreverAvklaring,
                 "Utfallet er ukjent og må avklares manuelt.",

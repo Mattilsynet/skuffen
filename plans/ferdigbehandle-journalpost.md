@@ -181,11 +181,14 @@ Verifiser representative Sikri-responser for:
 Validatoren skal avvise ufullstendig/tvetydig identitet; den skal ikke bruke
 `unwrap_or_default()` og opprette arkiv-ID `0`.
 
-### 4.5 `AvsluttSak`-feilfixture
+### 4.5 `AvsluttSak`-feilfixture (levert)
 
-Fang et sanitert ekte HTTP-status/body-eksempel for «saken har journalposter som
-ikke er journalført/avskrevet». Legg positiv Sikri-feilklassifisering fra den
-fixture-en. Ukjent 400/409/422 skal fortsatt følge SKU-0017 og ikke gjøres
+Levert gjennom [presise Sikri-feil i statusstrømmen](sikri-feil-til-status.md).
+Regelen leser `errorMessage` i Sikris JSON-envelope og gjenkjenner
+`Det finnes {N} ikke avskrevne restanser` med positivt `{N}` ved HTTP 500 fra
+`SetStatusForArkivSak`. Intern kode er `sikri_unresolved_journalposter`, public
+kode `PREREQUISITE_PENDING`. Testdataene er syntetiske; ingen produksjonsbody
+ligger i repoet. Ukjent 400/409/422 følger fortsatt SKU-0017 og gjøres ikke
 terminalt ved gjetting.
 
 ### 4.6 Race-sikker statusovergang
@@ -770,36 +773,40 @@ Hent journalpostkontekst fra commandens/operasjonens target-entitet, eller legg
 en eksplisitt command-target-relasjon. Terminal status skal inneholde requested
 `journalpost_id` uavhengig av hvem som først materialiserte journalposten.
 
-### 11.3 Ny `AvsluttSak` etter reparasjon
+### 11.3 Reparasjon av en tidligere feilet `AvsluttSak`
 
 Dagens `vurder_avslutt_sak` krever at **alle historiske** operasjoner på saken
 er `Ok`. En tidligere terminalt feilet `AvsluttSak` gjør dermed en ny
-`AvsluttSak` permanent blokkert, selv etter vellykket ferdigbehandling.
+`AvsluttSak` blokkert, selv etter vellykket ferdigbehandling.
 
-Avgrens første leveranse eksplisitt: ekskluder andre `AvsluttSak`-operasjoner fra
-søskenkravet; alle andre non-`Ok`-operasjoner blokkerer fortsatt. Ikke hev at
-generell «current relevance» er løst uten en separat modell. Dokumenter dette
-som en revisjon av SKU-0016 R3 og execution-design D4, og pin med
-domain/repositorytester.
+Operatøren har besluttet at dette repareres gjennom admin-grensesnittet i en
+separat leveranse. Det tidligere forslaget her — å ekskludere andre
+`AvsluttSak`-operasjoner fra søskenkravet og la klienten sende ny `command_id`
+som reparasjon — er forkastet.
 
-Klienten sender ny `command_id` når `AvsluttSak` forsøkes igjen.
+Søskenkravet står derfor uendret, og verken SKU-0016 R3 eller execution-design
+D4 revideres. Regresjonsdekningen er pinnet i
+`src/domain/src/eksekvering/operasjon/tests.rs`: tidligere feilet eller uavklart
+avslutning, og feilet vedlegg, blokkerer fortsatt. Admin-reparasjonens
+handlinger, autorisasjon, tilstandsoverganger og statuspublisering planlegges
+for seg.
 
-### 11.4 Actionable avslutningsfeil
+### 11.4 Actionable avslutningsfeil (levert)
 
-Når fixture i §4.5 er verifisert:
+Levert gjennom [presise Sikri-feil i statusstrømmen](sikri-feil-til-status.md):
 
-- legg positiv Sikri-klassifisering med stabil intern kode
-- klassifiser den terminalt, ikke retry for alltid
-- map til klientvennlig `PrerequisitePending` eller en ny eksplisitt public kode
-  dersom kontrakteier ønsker det
-- melding skal si at saken har journalposter som må leses og ferdigbehandles,
-  og at klienten deretter må sende `AvsluttSak` på nytt
-- behold rå Sikri-body kun på `debug!`
-- command-status må bevare den actionable årsaken; ikke erstatt den ubetinget
-  med generisk `ProcessingFailed`
+- positiv Sikri-klassifisering med stabil intern kode
+  `sikri_unresolved_journalposter`, terminal og uten retry
+- public kode `PrerequisitePending` (`PREREQUISITE_PENDING` på wire)
+- klientteksten er «Saken har journalposter som ikke er avskrevet (restanser) og
+  kan ikke avsluttes.» Den ber bevisst **ikke** klienten sende `AvsluttSak` på
+  nytt; reparasjon skjer gjennom admin-grensesnittet, jf. §11.3
+- rå Sikri-body ligger fortsatt kun på `debug!`
+- command-status bærer den faktiske årsaken og feilkoden fra operasjonen som
+  feilet, ikke en generisk `ProcessingFailed`
 
-Hvis Sikri-responsen ikke gir blocker-ID-er pålitelig, skal statusen ikke gjette
-dem. Klienten finner journalpostene gjennom read-flyten i §3.2.
+Statusen gjetter ikke blocker-ID-er; Sikri-svaret oppgir dem ikke pålitelig.
+Klienten finner journalpostene gjennom read-flyten i §3.2.
 
 ---
 

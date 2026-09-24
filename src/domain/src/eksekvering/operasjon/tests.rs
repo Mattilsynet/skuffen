@@ -1009,6 +1009,23 @@ fn avslutt_sak_blokkeres_av_terminalt_feilet_sosken() {
     );
 }
 
+/// Et tidligere terminalt feilet avslutningsforsøk blokkerer et nytt.
+/// Reparasjon skjer gjennom admin-grensesnittet, ikke ved ny innsending.
+#[test]
+fn avslutt_sak_blokkeres_av_tidligere_feilet_eller_uavklart_avslutning() {
+    let facts = sak(SakTilstand::Opprettet, Some("2026/1"), vec![]);
+
+    for status in [Operasjonsstatus::Feilet, Operasjonsstatus::KreverAvklaring] {
+        let sosken = vec![sammendrag(1, Operasjonstype::AvsluttSak, status)];
+
+        assert_eq!(
+            vurder_avslutt_sak(&sak_op_for(Operasjonstype::AvsluttSak), &facts, &sosken),
+            Beslutning::Blokkert(BlockedReason::SoskenIkkeFerdige),
+            "{status:?} skal fortsatt blokkere"
+        );
+    }
+}
+
 #[test]
 fn avslutt_sak_fanger_sett_saksansvarlig_som_ikke_er_ferdig() {
     let facts = sak(SakTilstand::Opprettet, Some("2026/1"), vec![]);

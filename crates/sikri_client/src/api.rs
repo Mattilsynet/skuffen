@@ -435,7 +435,26 @@ pub async fn legg_til_vedlegg(
     dokumenter: Vec<ElementsDokument>,
 ) -> Result<Vec<ElementsDokumentRespons>, SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
-    let url = format!("{}/api/Archive/LeggTilVedleggPaaJournalpost", base_url());
+    send_legg_til_vedlegg(
+        arkiv_client(),
+        &base_url(),
+        &username,
+        &password,
+        journalpost_id,
+        dokumenter,
+    )
+    .await
+}
+
+async fn send_legg_til_vedlegg(
+    client: &Client,
+    base_url: &str,
+    username: &str,
+    password: &str,
+    journalpost_id: i32,
+    dokumenter: Vec<ElementsDokument>,
+) -> Result<Vec<ElementsDokumentRespons>, SikriFeil> {
+    let url = format!("{base_url}/api/Archive/LeggTilVedleggPaaJournalpost");
     info!(
         target: "sikri.http",
         method = "POST",
@@ -443,7 +462,7 @@ pub async fn legg_til_vedlegg(
         dokument_count = dokumenter.len(),
         "Sending LeggTilVedlegg request to Sikri"
     );
-    let resp = arkiv_client()
+    let resp = client
         .post(&url)
         .basic_auth(username, Some(password))
         .query(&[("journalpostId", journalpost_id.to_string())])
@@ -542,14 +561,31 @@ async fn send_avskriv_journalpost(
 #[tracing::instrument(skip_all, name = "sikri.avslutt_sak")]
 pub async fn avslutt_sak(saksnummer: &str) -> Result<(), SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
-    let url = format!("{}/api/Archive/SetStatusForArkivSak", base_url());
+    send_avslutt_sak(
+        arkiv_client(),
+        &base_url(),
+        &username,
+        &password,
+        saksnummer,
+    )
+    .await
+}
+
+async fn send_avslutt_sak(
+    client: &Client,
+    base_url: &str,
+    username: &str,
+    password: &str,
+    saksnummer: &str,
+) -> Result<(), SikriFeil> {
+    let url = format!("{base_url}/api/Archive/SetStatusForArkivSak");
     info!(
         target: "sikri.http",
         method = "PUT",
         endpoint = safe_endpoint_label(&url),
         "Sending request to Sikri"
     );
-    let resp = arkiv_client()
+    let resp = client
         .put(&url)
         .basic_auth(username, Some(password))
         .query(&[("saksnr", saksnummer), ("nySaksstatus", "A")])
@@ -596,9 +632,17 @@ mod tests {
     use tokio::net::TcpListener;
 
     async fn start_mock_sikri(status: &str) -> (String, tokio::task::JoinHandle<String>) {
+        start_mock_sikri_med_body(status, "").await
+    }
+
+    async fn start_mock_sikri_med_body(
+        status: &str,
+        body: &str,
+    ) -> (String, tokio::task::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let status = status.to_string();
+        let body = body.to_string();
         let request = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut buffer = Vec::new();
@@ -615,8 +659,11 @@ mod tests {
             }
             stream
                 .write_all(
-                    format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                        .as_bytes(),
+                    format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
                 )
                 .await
                 .unwrap();
@@ -694,5 +741,94 @@ mod tests {
         let chunks = chunk_text_by_bytes("", 60_000);
 
         assert_eq!(chunks, vec![""]);
+    }
+
+    #[tokio::test]
+    async fn avslutt_sak_klassifiserer_uavskrevne_restanser_terminalt() {
+        let (base_url, received_request) = start_mock_sikri_med_body(
+            "500 Internal Server Error",
+            r#"{"errorMessage":"Det finnes 3 ikke avskrevne restanser","inputParameters":"saksnr=2026/000123","stackTrace":"at Sikri.Archive.SetStatusForArkivSak()"}"#,
+        )
+        .await;
+
+        let feil = send_avslutt_sak(
+            &Client::new(),
+            &base_url,
+            "bruker",
+            "passord",
+            "2026/000123",
+        )
+        .await
+        .unwrap_err();
+
+        let request = received_request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap(),
+            "PUT /api/Archive/SetStatusForArkivSak?saksnr=2026%2F000123&nySaksstatus=A HTTP/1.1"
+        );
+        assert_eq!(feil.kode, "sikri_unresolved_journalposter");
+        assert_eq!(feil.recoverability, crate::Recoverability::Irrecoverable);
+        assert_eq!(
+            feil.melding,
+            "Saken har journalposter som ikke er avskrevet (restanser) og kan ikke avsluttes."
+        );
+        assert!(!feil.melding.contains("2026/000123"));
+    }
+
+    #[tokio::test]
+    async fn avslutt_sak_retryer_ukjent_serverfeil() {
+        let (base_url, _received_request) =
+            start_mock_sikri_med_body("500 Internal Server Error", r#"{"errorMessage":"Ukjent"}"#)
+                .await;
+
+        let feil = send_avslutt_sak(
+            &Client::new(),
+            &base_url,
+            "bruker",
+            "passord",
+            "2026/000123",
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(feil.kode, "sikri_upstream_error");
+        assert_eq!(feil.recoverability, crate::Recoverability::Recoverable);
+    }
+
+    #[tokio::test]
+    async fn legg_til_vedlegg_klassifiserer_manglende_innhold_terminalt() {
+        let (base_url, received_request) = start_mock_sikri_med_body(
+            "500 Internal Server Error",
+            r#"{"errorMessage":"Vedleggslisten har dokument-filer som mangler innhold","stackTrace":"at Sikri.Archive.LeggTilVedleggPaaJournalpost()"}"#,
+        )
+        .await;
+
+        let feil = send_legg_til_vedlegg(
+            &Client::new(),
+            &base_url,
+            "bruker",
+            "passord",
+            123,
+            vec![ElementsDokument {
+                tittel: Some("Vedlegg".to_string()),
+                hoveddokument: false,
+                filtype: Some("PDF".to_string()),
+                innhold: Some(String::new()),
+            }],
+        )
+        .await
+        .unwrap_err();
+
+        let request = received_request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap(),
+            "POST /api/Archive/LeggTilVedleggPaaJournalpost?journalpostId=123 HTTP/1.1"
+        );
+        assert_eq!(feil.kode, "sikri_missing_document_content");
+        assert_eq!(feil.recoverability, crate::Recoverability::Irrecoverable);
+        assert_eq!(
+            feil.melding,
+            "Sikri/Elements avviste forespørselen fordi dokumentet mangler innhold."
+        );
     }
 }

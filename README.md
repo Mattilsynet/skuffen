@@ -360,7 +360,8 @@ og bare når ingen søskenoperasjon allerede har feilet terminalt — `feilet` e
 Statusstrømmen er **at-least-once og deduplisert av ingen** (SKU-0020 R5). Klienten må
 tåle duplikater. Det gjelder særlig `Feilet` på `.command`: den publiseres hver gang en
 operasjon feiler terminalt, så feiler to vedlegg på samme journalpost kommer den to
-ganger. Inbox- og ready-strømmene beholder `Nats-Msg-Id` på `command_id`, fordi de
+ganger. Hver av dem bærer sin egen operasjons faktiske årsak og feilkode, ikke en generisk
+erstatningstekst; et søskens `ok` publiserer ingen ny kommandofeil oppå den. Inbox- og ready-strømmene beholder `Nats-Msg-Id` på `command_id`, fordi de
 beskytter mot dobbel dekomponering — en annen sak.
 
 Alle JetStream-streams og `arkiv_media` object store konfigureres med `num_replicas = 3`.
@@ -538,7 +539,13 @@ regelsett, og bunnen er `Recoverable`: en feil vi ikke har en regel for, retryes
 inn en. `401` og `403` er recoverable — et rotert passord skal ikke terminere hver operasjon som er
 underveis, siden `feilet` er monotont og ikke kan trekkes tilbake. `404` er irrecoverable.
 Body-regler går foran statusregler, så kjent feiltekst terminerer selv der statuskoden alene ville
-gitt retry.
+gitt retry. To regler leser `errorMessage` i Sikris JSON-envelope framfor hele bodyen, fordi samme
+svar ekkoer input-parametrene og en stacktrace: `Det finnes {N} ikke avskrevne restanser` ved
+avslutning gir `sikri_unresolved_journalposter` og klientkoden `PREREQUISITE_PENDING`, og
+`Vedleggslisten har dokument-filer som mangler innhold` gir `sikri_missing_document_content` og
+`INVALID_REQUEST`. Terminal her betyr at utfallet er avgjort, ikke at saken er reparert:
+restansene må fortsatt håndteres, og et tidligere feilet avslutningsforsøk blokkerer en ny
+avslutning til det repareres gjennom admin-grensesnittet.
 
 Klassifiseringen bæres som en typet feil hele veien. `sikri_client` eier kode og klientvendt
 melding; adapterne i `infrastructure` legger på klientvendt feilkode; `application` videreformidler

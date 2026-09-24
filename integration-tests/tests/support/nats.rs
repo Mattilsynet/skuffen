@@ -10,7 +10,9 @@ use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::journalpost::JournalpostKey as DtoJournalpostKey;
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
 use lib_schemas::skuffen::query::queries::{HentJournalpostQuery, HentSakQuery};
-use lib_schemas::skuffen::status::{SkuffenCommandEvent, SkuffenCommandStatusV1};
+use lib_schemas::skuffen::status::{
+    SkuffenCommandEvent, SkuffenCommandStatusV1, SkuffenOperasjonHendelse, SkuffenOperasjonStatusV1,
+};
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
 use tokio::time::Instant;
@@ -110,6 +112,72 @@ pub async fn wait_for_status_events(
     }
 
     Ok(events)
+}
+
+/// Operasjonshendelsene for én kommando, lest fra JetStream.
+///
+/// Samler til `ferdig` er sann eller tiden er ute. Payloaden verifiseres av
+/// kalleren; logglinjen «publisert» skrives før publish-ack og beviser ikke
+/// levering.
+pub async fn wait_for_operasjon_events(
+    nats_url: &str,
+    command_id: uuid::Uuid,
+    timeout: Duration,
+    ferdig: impl Fn(&[SkuffenOperasjonStatusV1]) -> bool,
+) -> Result<Vec<SkuffenOperasjonStatusV1>> {
+    let client = async_nats::connect(nats_url).await?;
+    let jetstream = jetstream::new(client);
+    let stream = jetstream
+        .get_or_create_stream(jetstream::stream::Config {
+            name: "arkiv_status".to_string(),
+            subjects: vec!["arkiv.status.>".to_string()],
+            max_age: Duration::from_secs(60 * 60 * 24 * 180),
+            ..Default::default()
+        })
+        .await?;
+    let consumer = stream
+        .create_consumer(jetstream::consumer::pull::Config {
+            durable_name: None,
+            ack_policy: jetstream::consumer::AckPolicy::Explicit,
+            deliver_policy: jetstream::consumer::DeliverPolicy::All,
+            filter_subject: format!("arkiv.status.{command_id}.operasjon.*"),
+            ..Default::default()
+        })
+        .await?;
+    let mut messages = consumer.messages().await?;
+
+    let deadline = Instant::now() + timeout;
+    let mut events: Vec<SkuffenOperasjonStatusV1> = Vec::new();
+    while !ferdig(&events) {
+        let now = Instant::now();
+        if now >= deadline {
+            anyhow::bail!("Timed out waiting for operasjon events, fikk {events:?}");
+        }
+        let wait_for = deadline
+            .checked_duration_since(now)
+            .unwrap_or_else(|| Duration::from_secs(0));
+        let Ok(Some(message)) = tokio::time::timeout(wait_for, messages.next()).await else {
+            anyhow::bail!("Timed out waiting for operasjon events, fikk {events:?}");
+        };
+        let message = message?;
+        let event: SkuffenOperasjonStatusV1 = serde_json::from_slice(&message.payload)?;
+        if event.command_id == command_id {
+            events.push(event);
+        }
+        message
+            .ack()
+            .await
+            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    }
+
+    Ok(events)
+}
+
+/// Sann når en operasjon har feilet terminalt.
+pub fn terminalt_feilet(events: &[SkuffenOperasjonStatusV1]) -> bool {
+    events
+        .iter()
+        .any(|event| event.hendelse == SkuffenOperasjonHendelse::Feilet && event.terminal)
 }
 
 pub async fn send_command_batch(

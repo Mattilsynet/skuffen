@@ -111,6 +111,9 @@ pub fn user_message_for_sikri_kode(kode: &str) -> &'static str {
         "sikri_missing_document_content" => {
             "Sikri/Elements avviste forespørselen fordi dokumentet mangler innhold."
         }
+        "sikri_unresolved_journalposter" => {
+            "Saken har journalposter som ikke er avskrevet (restanser) og kan ikke avsluttes."
+        }
         "sikri_resource_not_found" => "Ressursen ble ikke funnet i Sikri/Elements.",
         "sikri_rate_limited" => {
             "Sikri/Elements avviser midlertidig for mange forespørsler. Prøv igjen senere."
@@ -143,6 +146,13 @@ pub fn safe_detail_for_http_error(status: StatusCode, body: Option<&str>) -> &'s
         && contains_missing_user_pattern(body_text)
     {
         return "sikri_unknown_user";
+    }
+
+    if let Some(body_text) = body
+        && unresolved_journalposter_failure_is_irrecoverable(status)
+        && contains_unresolved_journalposter_pattern(body_text)
+    {
+        return "sikri_unresolved_journalposter";
     }
 
     if let Some(body_text) = body
@@ -196,6 +206,7 @@ pub const ALLE_SIKRI_KODER: &[&str] = &[
     "sikri_access_control_rejected",
     "sikri_validation_failed",
     "sikri_missing_document_content",
+    "sikri_unresolved_journalposter",
     "sikri_resource_not_found",
     "sikri_rate_limited",
     "sikri_upstream_error",
@@ -338,6 +349,16 @@ fn rule_matches(rule: &ErrorRule, status: StatusCode, normalized_body: Option<&s
 /// `feilet` er monotont og publiseres til klienten uten vei tilbake (SKU-0016
 /// R8). Kodene i `siste_detalj` gjør de ukartlagte tilfellene synlige.
 pub fn classify_http_error(status: StatusCode, body: Option<&str>) -> Recoverability {
+    // errorMessage-reglene leser JSON-envelopen og lar seg ikke uttrykke som
+    // substringtreff i ERROR_RULES.
+    if let Some(body_text) = body
+        && status == StatusCode::INTERNAL_SERVER_ERROR
+        && (contains_unresolved_journalposter_pattern(body_text)
+            || contains_attachment_missing_content_pattern(body_text))
+    {
+        return Recoverability::Irrecoverable;
+    }
+
     let normalized_body = body.map(|body_text| body_text.to_lowercase());
 
     for rule in ERROR_RULES {
@@ -365,10 +386,60 @@ fn contains_upstream_bad_gateway_pattern(body: &str) -> bool {
 fn contains_missing_document_content_pattern(body: &str) -> bool {
     body.to_lowercase()
         .contains("ny journalpost har dokument-filer som mangler innhold")
+        || contains_attachment_missing_content_pattern(body)
 }
 
 fn missing_document_content_failure_is_irrecoverable(status: StatusCode) -> bool {
     status == StatusCode::BAD_REQUEST || status == StatusCode::INTERNAL_SERVER_ERROR
+}
+
+/// Sikri ekkoer input-parametrene og en stacktrace i samme svar. Bare
+/// `errorMessage` er avvisningen; en kopi av teksten et annet sted i bodyen
+/// skal ikke gjøre en operasjon terminal.
+fn error_message_field(body: &str) -> Option<String> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+    json.as_object()?
+        .iter()
+        .find(|(navn, _)| navn.eq_ignore_ascii_case("errorMessage"))
+        .and_then(|(_, verdi)| verdi.as_str())
+        .map(str::to_lowercase)
+}
+
+const RESTANSE_PREFIKS: &str = "det finnes ";
+const RESTANSE_SUFFIKS: &str = " ikke avskrevne restanser";
+
+fn er_restansemelding(melding: &str) -> bool {
+    let mut rest = melding;
+    while let Some(start) = rest.find(RESTANSE_PREFIKS) {
+        let etter = &rest[start + RESTANSE_PREFIKS.len()..];
+        let siffer = etter.len()
+            - etter
+                .trim_start_matches(|tegn: char| tegn.is_ascii_digit())
+                .len();
+        if etter[..siffer]
+            .parse::<u64>()
+            .is_ok_and(|antall| antall > 0)
+            && etter[siffer..].starts_with(RESTANSE_SUFFIKS)
+        {
+            return true;
+        }
+        rest = etter;
+    }
+    false
+}
+
+fn contains_unresolved_journalposter_pattern(body: &str) -> bool {
+    error_message_field(body).is_some_and(|melding| er_restansemelding(&melding))
+}
+
+fn unresolved_journalposter_failure_is_irrecoverable(status: StatusCode) -> bool {
+    status == StatusCode::INTERNAL_SERVER_ERROR
+}
+
+fn contains_attachment_missing_content_pattern(body: &str) -> bool {
+    error_message_field(body).is_some_and(|melding| {
+        melding.contains("vedleggslisten har dokument-filer som mangler innhold")
+    })
 }
 
 fn contains_access_control_pattern(body: &str) -> bool {
@@ -778,6 +849,8 @@ mod tests {
             Some("Mangler tilgangshjemmel"),
             Some("Brukeren ikke har rettighet"),
             Some("Validering feilet"),
+            Some(r#"{"errorMessage":"Det finnes 3 ikke avskrevne restanser"}"#),
+            Some(r#"{"errorMessage":"Vedleggslisten har dokument-filer som mangler innhold"}"#),
         ];
 
         for status in statuser {
@@ -871,5 +944,189 @@ mod tests {
             SikriFeil::uparsbart_svar().kode,
             "sikri_response_unparsable"
         );
+    }
+
+    fn restansesvar(antall: &str) -> String {
+        serde_json::json!({
+            "errorMessage": format!("Det finnes {antall} ikke avskrevne restanser"),
+            "inputParameters": "saksnr=2026/000123&nySaksstatus=A&bruker=Z12345",
+            "stackTrace": "at Sikri.Archive.SetStatusForArkivSak()"
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn uavskrevne_restanser_avvises_terminalt_uansett_antall() {
+        for antall in ["1", "2", "17", "1234"] {
+            let body = restansesvar(antall);
+            let feil = SikriFeil::fra_http(StatusCode::INTERNAL_SERVER_ERROR, Some(&body));
+
+            assert_eq!(feil.recoverability, Recoverability::Irrecoverable);
+            assert_eq!(feil.kode, "sikri_unresolved_journalposter");
+            assert_eq!(
+                feil.melding,
+                "Saken har journalposter som ikke er avskrevet (restanser) og kan ikke avsluttes."
+            );
+        }
+    }
+
+    #[test]
+    fn restanseregelen_krever_den_kjente_formuleringen_med_positivt_antall() {
+        let avvisninger = [
+            serde_json::json!({"errorMessage": "Det finnes 0 ikke avskrevne restanser"})
+                .to_string(),
+            serde_json::json!({"errorMessage": "Det finnes ikke avskrevne restanser"}).to_string(),
+            serde_json::json!({"errorMessage": "Det finnes to ikke avskrevne restanser"})
+                .to_string(),
+            serde_json::json!({"errorMessage": "Saken har restanser og kan ikke avsluttes"})
+                .to_string(),
+            // Teksten kun i ekkoet input og stacktrace er ikke Sikris avvisning.
+            serde_json::json!({
+                "errorMessage": "Ukjent feil",
+                "inputParameters": "merknad=Det finnes 3 ikke avskrevne restanser",
+                "stackTrace": "Det finnes 3 ikke avskrevne restanser"
+            })
+            .to_string(),
+            "Det finnes 3 ikke avskrevne restanser".to_string(),
+            "{ikke gyldig json".to_string(),
+            String::new(),
+        ];
+
+        for body in avvisninger {
+            let feil = SikriFeil::fra_http(StatusCode::INTERNAL_SERVER_ERROR, Some(&body));
+            assert_ne!(
+                feil.kode, "sikri_unresolved_journalposter",
+                "{body} skal ikke treffe restanseregelen"
+            );
+            assert_eq!(feil.recoverability, Recoverability::Recoverable);
+        }
+
+        assert_ne!(
+            SikriFeil::fra_http(StatusCode::INTERNAL_SERVER_ERROR, None).kode,
+            "sikri_unresolved_journalposter"
+        );
+    }
+
+    #[test]
+    fn restanseregelen_gjelder_kun_500() {
+        let body = restansesvar("3");
+
+        for status in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let feil = SikriFeil::fra_http(status, Some(&body));
+            assert_ne!(
+                feil.kode, "sikri_unresolved_journalposter",
+                "{status} skal beholde dagens atferd"
+            );
+        }
+
+        assert_eq!(
+            SikriFeil::fra_http(StatusCode::NOT_FOUND, Some(&body)).kode,
+            "sikri_resource_not_found"
+        );
+        assert_eq!(
+            SikriFeil::fra_http(StatusCode::TOO_MANY_REQUESTS, Some(&body)).kode,
+            "sikri_rate_limited"
+        );
+    }
+
+    #[test]
+    fn vedleggsliste_uten_innhold_avvises_som_manglende_dokumentinnhold() {
+        let body = serde_json::json!({
+            "errorMessage": "Vedleggslisten har dokument-filer som mangler innhold",
+            "inputParameters": "journalpostId=123",
+            "stackTrace": "at Sikri.Archive.LeggTilVedleggPaaJournalpost()"
+        })
+        .to_string();
+        let feil = SikriFeil::fra_http(StatusCode::INTERNAL_SERVER_ERROR, Some(&body));
+
+        assert_eq!(feil.recoverability, Recoverability::Irrecoverable);
+        assert_eq!(feil.kode, "sikri_missing_document_content");
+        assert_eq!(
+            feil.melding,
+            "Sikri/Elements avviste forespørselen fordi dokumentet mangler innhold."
+        );
+    }
+
+    #[test]
+    fn journalpostvarianten_av_manglende_dokumentinnhold_treffer_fortsatt() {
+        let feil = SikriFeil::fra_http(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Some("Ny journalpost har dokument-filer som mangler innhold"),
+        );
+
+        assert_eq!(feil.recoverability, Recoverability::Irrecoverable);
+        assert_eq!(feil.kode, "sikri_missing_document_content");
+    }
+
+    #[test]
+    fn vedleggsteksten_utenfor_error_message_gir_ikke_terminal_feil() {
+        let body = serde_json::json!({
+            "errorMessage": "Ukjent feil",
+            "inputParameters": "tittel=Vedleggslisten har dokument-filer som mangler innhold",
+            "stackTrace": "Vedleggslisten har dokument-filer som mangler innhold"
+        })
+        .to_string();
+        let feil = SikriFeil::fra_http(StatusCode::INTERNAL_SERVER_ERROR, Some(&body));
+
+        assert_eq!(feil.recoverability, Recoverability::Recoverable);
+        assert_eq!(feil.kode, "sikri_upstream_error");
+    }
+
+    #[test]
+    fn nye_tekster_ved_400_beholder_dagens_asymmetri() {
+        // Dagens dokumentinnholdsmapping gir koden ved 400, men ingen
+        // regel gjør 400 irrecoverable. Asymmetrien låses her framfor å
+        // endres som sidearbeid.
+        let vedlegg = serde_json::json!({
+            "errorMessage": "Vedleggslisten har dokument-filer som mangler innhold"
+        })
+        .to_string();
+        let feil = SikriFeil::fra_http(StatusCode::BAD_REQUEST, Some(&vedlegg));
+        assert_eq!(feil.kode, "sikri_missing_document_content");
+        assert_eq!(feil.recoverability, Recoverability::Recoverable);
+        assert_eq!(
+            feil.melding,
+            "Sikri/Elements avviste forespørselen fordi dokumentet mangler innhold."
+        );
+
+        let restanse = restansesvar("3");
+        let feil = SikriFeil::fra_http(StatusCode::BAD_REQUEST, Some(&restanse));
+        assert_eq!(feil.kode, "sikri_invalid_request");
+        assert_eq!(feil.recoverability, Recoverability::Recoverable);
+        assert_eq!(feil.melding, "Sikri/Elements avviste forespørselen.");
+    }
+
+    #[test]
+    fn nye_regler_lekker_ikke_ekkoet_input_eller_stacktrace() {
+        let bodyer = [
+            serde_json::json!({
+                "errorMessage": "Det finnes 3 ikke avskrevne restanser",
+                "inputParameters": "saksnr=2026/000123&bruker=Z12345&tilgangskode=UO",
+                "stackTrace": "at Sikri.Archive.SetStatusForArkivSak() i C:\\sikri\\Archive.cs"
+            })
+            .to_string(),
+            serde_json::json!({
+                "errorMessage": "Vedleggslisten har dokument-filer som mangler innhold",
+                "inputParameters": "journalpostId=123&bruker=Z12345",
+                "stackTrace": "at Sikri.Archive.LeggTilVedleggPaaJournalpost()"
+            })
+            .to_string(),
+        ];
+
+        for body in bodyer {
+            let feil = SikriFeil::fra_http(StatusCode::INTERNAL_SERVER_ERROR, Some(&body));
+            for markor in ["Z12345", "2026/000123", "UO", "C:\\sikri", "Sikri.Archive"] {
+                assert!(!feil.kode.contains(markor), "kode lekker {markor}");
+                assert!(!feil.melding.contains(markor), "melding lekker {markor}");
+            }
+        }
     }
 }

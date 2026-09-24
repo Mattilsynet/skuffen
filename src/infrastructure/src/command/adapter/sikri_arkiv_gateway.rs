@@ -28,7 +28,7 @@ const TATT_TIL_ETTERRETNING: &str = "TE";
 /// ferdigmappet brukertekst. Denne funksjonen legger kun til hvilken
 /// klientvendt feilkode koden svarer til — det er den ene oversettelsen
 /// `sikri_client` ikke kan gjøre selv, siden `StatusErrorCode` bor i `domain`.
-fn fra_sikri(feil: SikriFeil) -> EksekveringFeil {
+pub(crate) fn fra_sikri(feil: SikriFeil) -> EksekveringFeil {
     let error_code = error_code_for(feil.kode).unwrap_or(StatusErrorCode::ProcessingFailed);
     match feil.recoverability {
         Recoverability::Recoverable => {
@@ -51,6 +51,7 @@ fn error_code_for(kode: &str) -> Option<StatusErrorCode> {
         | "sikri_invalid_request"
         | "sikri_request_validation_failed" => StatusErrorCode::InvalidRequest,
         "sikri_resource_not_found" => StatusErrorCode::NotFound,
+        "sikri_unresolved_journalposter" => StatusErrorCode::PrerequisitePending,
         "sikri_rate_limited"
         | "sikri_upstream_unavailable"
         | "sikri_upstream_error"
@@ -540,5 +541,51 @@ mod tests {
         assert_eq!(feil.kode, "sikri_resource_not_found");
         assert_eq!(feil.error_code, StatusErrorCode::NotFound);
         assert_eq!(feil.melding, "Fant ikke ressursen.");
+    }
+
+    /// Går gjennom klassifiseringen, ikke en ferdiglaget feil: det er
+    /// kallveien fra Sikris svar til klientens status som skal holde.
+    fn klassifiser(status: reqwest::StatusCode, body: &str) -> EksekveringFeil {
+        fra_sikri(SikriFeil::fra_http(status, Some(body)))
+    }
+
+    #[test]
+    fn uavskrevne_restanser_blir_terminal_prerequisite_pending() {
+        let feil = klassifiser(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"errorMessage":"Det finnes 3 ikke avskrevne restanser","inputParameters":"saksnr=2026/000123"}"#,
+        );
+
+        assert!(!feil.er_recoverable());
+        assert_eq!(feil.kode, "sikri_unresolved_journalposter");
+        assert_eq!(feil.error_code, StatusErrorCode::PrerequisitePending);
+        assert_eq!(
+            feil.melding,
+            "Saken har journalposter som ikke er avskrevet (restanser) og kan ikke avsluttes."
+        );
+        assert!(!feil.melding.contains("2026/000123"));
+    }
+
+    #[test]
+    fn vedlegg_uten_innhold_blir_terminal_invalid_request() {
+        let feil = klassifiser(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"errorMessage":"Vedleggslisten har dokument-filer som mangler innhold"}"#,
+        );
+
+        assert!(!feil.er_recoverable());
+        assert_eq!(feil.kode, "sikri_missing_document_content");
+        assert_eq!(feil.error_code, StatusErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn ukjent_serverfeil_ved_avslutning_retryes_fortsatt() {
+        let feil = klassifiser(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"errorMessage":"Ukjent feil"}"#,
+        );
+
+        assert!(feil.er_recoverable());
+        assert_eq!(feil.error_code, StatusErrorCode::TemporaryUnavailable);
     }
 }

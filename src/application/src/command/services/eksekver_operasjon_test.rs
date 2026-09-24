@@ -23,8 +23,8 @@ use domain::eksekvering::tilstand::{
     Saksansvarlig,
 };
 use domain::eksekvering::typer::{
-    CommandTypeCode, EksekveringFeil, Operasjonshendelse, Operasjonstatus, StatusErrorCode,
-    Statuskontekst,
+    CommandEvent, CommandStatus, CommandTypeCode, EksekveringFeil, Operasjonshendelse,
+    Operasjonstatus, StatusErrorCode, Statuskontekst,
 };
 use uuid::Uuid;
 
@@ -64,6 +64,8 @@ enum Skriving {
 struct FakeOperasjonRepository {
     skrivinger: Arc<Mutex<Vec<Skriving>>>,
     outcome: Arc<Mutex<CommandOutcome>>,
+    kontekst: Arc<Mutex<Statuskontekst>>,
+    correlation_id: Arc<Mutex<Option<Uuid>>>,
 }
 
 impl Default for FakeOperasjonRepository {
@@ -72,6 +74,8 @@ impl Default for FakeOperasjonRepository {
             skrivinger: Arc::new(Mutex::new(Vec::new())),
             // Uavklart: kommandostatus folder vi ikke over i disse testene.
             outcome: Arc::new(Mutex::new(CommandOutcome::Uavklart)),
+            kontekst: Arc::new(Mutex::new(Statuskontekst::default())),
+            correlation_id: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -83,6 +87,18 @@ impl FakeOperasjonRepository {
 
     fn push(&self, skriving: Skriving) {
         self.skrivinger.lock().unwrap().push(skriving);
+    }
+
+    fn sett_command_outcome(&self, outcome: CommandOutcome) {
+        *self.outcome.lock().unwrap() = outcome;
+    }
+
+    fn sett_kontekst(&self, kontekst: Statuskontekst) {
+        *self.kontekst.lock().unwrap() = kontekst;
+    }
+
+    fn sett_correlation_id(&self, correlation_id: Option<Uuid>) {
+        *self.correlation_id.lock().unwrap() = correlation_id;
     }
 }
 
@@ -209,10 +225,10 @@ impl OperasjonRepository for FakeOperasjonRepository {
         _operasjon_id: OperasjonId,
     ) -> Result<CommandMetadata, anyhow::Error> {
         Ok(CommandMetadata {
-            command_id: Uuid::from_u128(42),
-            correlation_id: None,
+            command_id: COMMAND_ID,
+            correlation_id: *self.correlation_id.lock().unwrap(),
             command_type: CommandTypeCode::SettSaksansvarlig,
-            kontekst: Statuskontekst::default(),
+            kontekst: self.kontekst.lock().unwrap().clone(),
         })
     }
 
@@ -408,14 +424,19 @@ impl RenderOperasjon for UbruktRenderOperasjon {
 #[derive(Clone, Default)]
 struct FakeStatusPublisher {
     operasjonstatuser: Arc<Mutex<Vec<Operasjonstatus>>>,
+    command_statuser: Arc<Mutex<Vec<CommandStatus>>>,
+}
+
+impl FakeStatusPublisher {
+    fn command_statuser(&self) -> Vec<CommandStatus> {
+        self.command_statuser.lock().unwrap().clone()
+    }
 }
 
 #[async_trait]
 impl StatusPublisher for FakeStatusPublisher {
-    async fn publiser_command_status(
-        &self,
-        _status: domain::eksekvering::typer::CommandStatus,
-    ) -> Result<(), anyhow::Error> {
+    async fn publiser_command_status(&self, status: CommandStatus) -> Result<(), anyhow::Error> {
+        self.command_statuser.lock().unwrap().push(status);
         Ok(())
     }
 
@@ -430,6 +451,7 @@ impl StatusPublisher for FakeStatusPublisher {
 // ---------------------------------------------------------------------------
 
 const SAKSNUMMER: &str = "2026/000123";
+const COMMAND_ID: Uuid = Uuid::from_u128(42);
 
 fn sak_id() -> SkuffenSakId {
     SkuffenSakId::from(Uuid::from_u128(1))
@@ -719,4 +741,190 @@ async fn intern_feil_lekker_ikke_detaljen_til_klienten() {
     assert_eq!(siste.melding, "Intern feil i behandlingen.");
     assert!(!siste.melding.contains("column"));
     assert_eq!(siste.error_code, Some(StatusErrorCode::ProcessingFailed));
+}
+
+// ---------------------------------------------------------------------------
+// Årsak og identifikatorer på kommandonivå
+// ---------------------------------------------------------------------------
+
+fn oppsett_allerede_utfort() -> Oppsett {
+    let operasjon_repo = FakeOperasjonRepository::default();
+    let gateway = FeilendeArkivGateway::new(sikri_irrecoverable());
+    let publisher = FakeStatusPublisher::default();
+    let mut facts = facts_klar_for_sett_saksansvarlig();
+    facts.naavaerende_saksansvarlig = facts.oensket_saksansvarlig.clone();
+
+    let service = EksekverOperasjonService::new(
+        Box::new(operasjon_repo.clone()),
+        Box::new(FakeFaktaRepository {
+            facts,
+            journalpost_attributter: None,
+        }),
+        Box::new(gateway.clone()),
+        Box::new(UbruktRenderOperasjon),
+        Box::new(publisher.clone()),
+        "test-executor",
+        Duration::from_secs(60),
+    );
+
+    Oppsett {
+        operasjon_repo,
+        gateway,
+        publisher,
+        service,
+    }
+}
+
+fn restansefeil() -> EksekveringFeil {
+    EksekveringFeil::irrecoverable(
+        "sikri_unresolved_journalposter",
+        "Saken har journalposter som ikke er avskrevet (restanser) og kan ikke avsluttes.",
+        StatusErrorCode::PrerequisitePending,
+    )
+}
+
+#[tokio::test]
+async fn terminal_feil_baerer_operasjonens_aarsak_opp_paa_kommandonivaa() {
+    let correlation_id = Uuid::from_u128(99);
+    let Oppsett {
+        operasjon_repo,
+        publisher,
+        service,
+        ..
+    } = oppsett(restansefeil());
+    operasjon_repo.sett_command_outcome(CommandOutcome::Feilet);
+    operasjon_repo.sett_correlation_id(Some(correlation_id));
+    operasjon_repo.sett_kontekst(Statuskontekst {
+        sak_client_reference: Some("klient-ref-1".to_string()),
+        saksnummer: Some(SAKSNUMMER.to_string()),
+        ..Statuskontekst::default()
+    });
+
+    service.execute(operasjon()).await.unwrap();
+
+    let command = publisher.command_statuser();
+    assert_eq!(command.len(), 1);
+    assert_eq!(command[0].hendelse, CommandEvent::Feilet);
+    assert!(command[0].terminal);
+    assert_eq!(
+        command[0].melding,
+        "Saken har journalposter som ikke er avskrevet (restanser) og kan ikke avsluttes."
+    );
+    assert_eq!(
+        command[0].error_code,
+        Some(StatusErrorCode::PrerequisitePending)
+    );
+    assert_eq!(command[0].command_id, COMMAND_ID);
+    assert_eq!(command[0].correlation_id, Some(correlation_id));
+    assert_eq!(
+        command[0].kontekst.sak_client_reference.as_deref(),
+        Some("klient-ref-1")
+    );
+    assert_eq!(command[0].kontekst.saksnummer.as_deref(), Some(SAKSNUMMER));
+
+    let operasjon = publisher.operasjonstatuser.lock().unwrap();
+    let siste = operasjon.last().unwrap();
+    assert_eq!(siste.hendelse, Operasjonshendelse::Feilet);
+    assert_eq!(siste.melding, command[0].melding);
+    assert_eq!(siste.error_code, command[0].error_code);
+    assert_eq!(siste.command_id, COMMAND_ID);
+}
+
+#[tokio::test]
+async fn sak_adressert_med_saksnummer_utelater_manglende_identifikatorer() {
+    let Oppsett {
+        operasjon_repo,
+        publisher,
+        service,
+        ..
+    } = oppsett(restansefeil());
+    operasjon_repo.sett_command_outcome(CommandOutcome::Feilet);
+    operasjon_repo.sett_kontekst(Statuskontekst {
+        saksnummer: Some(SAKSNUMMER.to_string()),
+        ..Statuskontekst::default()
+    });
+
+    service.execute(operasjon()).await.unwrap();
+
+    let command = publisher.command_statuser();
+    assert_eq!(command[0].kontekst.saksnummer.as_deref(), Some(SAKSNUMMER));
+    assert_eq!(command[0].kontekst.sak_client_reference, None);
+    assert_eq!(command[0].correlation_id, None);
+}
+
+#[tokio::test]
+async fn soesken_som_gaar_ok_skyver_ikke_bort_den_presise_feilaarsaken() {
+    let Oppsett {
+        publisher,
+        service,
+        operasjon_repo,
+        ..
+    } = oppsett_allerede_utfort();
+    // Et søsken har allerede feilet terminalt, så foldet står på Feilet.
+    operasjon_repo.sett_command_outcome(CommandOutcome::Feilet);
+
+    service.execute(operasjon()).await.unwrap();
+
+    assert_eq!(
+        publisher
+            .operasjonstatuser
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .hendelse,
+        Operasjonshendelse::Ok,
+        "operasjonens eget utfall skal fortsatt publiseres"
+    );
+    assert!(
+        publisher.command_statuser().is_empty(),
+        "en generisk kommandofeil ville skjult årsaken i klientens siste status"
+    );
+}
+
+#[tokio::test]
+async fn fullfort_kommando_publiseres_fortsatt_som_fullfort() {
+    let Oppsett {
+        publisher,
+        service,
+        operasjon_repo,
+        ..
+    } = oppsett_allerede_utfort();
+    operasjon_repo.sett_command_outcome(CommandOutcome::Fullfort);
+
+    service.execute(operasjon()).await.unwrap();
+
+    let command = publisher.command_statuser();
+    assert_eq!(command.len(), 1);
+    assert_eq!(command[0].hendelse, CommandEvent::Fullfort);
+    assert_eq!(command[0].melding, "Forespørselen er fullført.");
+    assert_eq!(command[0].error_code, None);
+}
+
+#[tokio::test]
+async fn ugyldig_operasjon_gaar_fortsatt_gjennom_den_publiserende_stien() {
+    let Oppsett {
+        publisher,
+        service,
+        operasjon_repo,
+        ..
+    } = oppsett(sikri_irrecoverable());
+    operasjon_repo.sett_command_outcome(CommandOutcome::Feilet);
+    // Journalpostentitet på en sakoperasjon er et domenebrudd, ikke en
+    // arkivfeil.
+    let ugyldig = Operasjon {
+        entitet_id: EntitetId::Journalpost(SkuffenJournalpostId::from(Uuid::from_u128(7))),
+        ..operasjon()
+    };
+
+    service.execute(ugyldig).await.unwrap();
+
+    let command = publisher.command_statuser();
+    assert_eq!(command.len(), 1);
+    assert_eq!(command[0].hendelse, CommandEvent::Feilet);
+    assert_eq!(command[0].melding, "Operasjonen kan ikke utføres.");
+    assert_eq!(
+        command[0].error_code,
+        Some(StatusErrorCode::ProcessingFailed)
+    );
 }

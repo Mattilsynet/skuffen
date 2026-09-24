@@ -161,6 +161,49 @@ impl CommandScenario {
         }
     }
 
+    /// Inngående journalpost med både hoveddokument og et ekte vedlegg, slik
+    /// at sekvensen får en `LeggTilVedlegg`-operasjon.
+    pub fn opprett_inngaende_med_vedlegg(
+        &self,
+        saksbehandler_id: &str,
+        saksbehandler_enhet: &str,
+        sak_key: DtoSakKey,
+        title: &str,
+    ) -> CommandEnvelope<Command> {
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            correlation_id: Some(Uuid::new_v4()),
+            payload: Command::OpprettInngåendeJournalpost(OpprettInngåendeJournalpost {
+                felles: JournalpostCommon {
+                    client_reference: self.journalpost_inngaende_client_reference,
+                    tittel: title.to_string(),
+                    dokument_dato: "2025-01-02".to_string(),
+                    saksbehandler: saksbehandler_id.to_string(),
+                    saksbehandler_enhet: saksbehandler_enhet.to_string(),
+                    tilgjengelighet: Tilgjengelighet::Offentlig,
+                    dokumenter: vec![
+                        DtoDokument {
+                            client_reference: self.dokument_client_reference,
+                            tittel: "Hoveddokument".to_string(),
+                            form: self.bytes_form(),
+                        },
+                        DtoDokument {
+                            client_reference: self.vedlegg_client_reference,
+                            tittel: "Vedlegg".to_string(),
+                            form: self.bytes_form(),
+                        },
+                    ],
+                    sak_key,
+                    kildesystem: None,
+                },
+                avsender: Korrespondansepart {
+                    navn: "Avsender".to_string(),
+                    parttype: Parttype::Virksomhet,
+                },
+            }),
+        }
+    }
+
     pub fn opprett_utgaaende(
         &self,
         saksbehandler_id: &str,
