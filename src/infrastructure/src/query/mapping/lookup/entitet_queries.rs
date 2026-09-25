@@ -43,6 +43,29 @@ pub async fn lookup_skuffen_id_fra_arkiv_id(saksnummer: Saksnummer) -> Result<Uu
     }
 }
 
+pub async fn lookup_sak_skuffen_id_fra_client_reference(client_reference: Uuid) -> Result<Uuid> {
+    let repo = get_repo();
+    let maybe_entitet = repo.hent_for_client_reference(client_reference).await?;
+
+    match maybe_entitet {
+        Some(entitet) if entitet.entitet_type == EntitetType::Sak => Ok(entitet.skuffen_id),
+        Some(entitet) => {
+            error!(
+                client_reference = %client_reference,
+                entitet_type = entitet.entitet_type.as_code(),
+                "client_reference tilhører ikke en sak"
+            );
+            Err(anyhow::anyhow!("client_reference tilhører ikke en sak"))
+        }
+        None => {
+            error!(client_reference = %client_reference, "fant ikke Skuffen-id for client_reference");
+            Err(anyhow::anyhow!(
+                "Skuffen ID ikke funnet for client_reference"
+            ))
+        }
+    }
+}
+
 pub async fn lookup_arkiv_id_fra_skuffen_id(skuffen_id: Uuid) -> Result<Saksnummer> {
     let repo = get_repo();
     let maybe_arkiv_id = repo.hent_arkiv_id(skuffen_id).await?;

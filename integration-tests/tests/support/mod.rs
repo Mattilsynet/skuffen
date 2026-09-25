@@ -14,6 +14,7 @@ pub use nats::{
     ADMIN_COMMAND_SUBJECT, ADMIN_SAK_SUBJECT, admin_hent_command, admin_hent_sak,
     admin_raw_request, admin_raw_request_alle_svar, extract_saksnummer,
     hent_bruker_mt_enheter_via_nats, hent_journalpost_via_nats, hent_sak_via_nats_by_arkiv_id,
-    publish_media, send_command_batch, send_raw_command_payload, terminalt_feilet,
-    wait_for_operasjon_events, wait_for_queue_members, wait_for_status_events,
+    hent_sak_via_nats_by_client_reference, publish_media, send_command_batch,
+    send_raw_command_payload, terminalt_feilet, wait_for_operasjon_events, wait_for_queue_members,
+    wait_for_status_events,
 };

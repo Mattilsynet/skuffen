@@ -302,13 +302,12 @@ async fn nats_server_ping(nats_url: &str) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
-pub async fn hent_sak_via_nats(
+pub async fn hent_sak_via_nats_by_client_reference(
     nats_url: &str,
-    skuffen_id: uuid::Uuid,
+    client_reference: uuid::Uuid,
 ) -> Result<serde_json::Value> {
     let query = HentSakQuery {
-        key: DtoSakKey::ClientReference(skuffen_id),
+        key: DtoSakKey::ClientReference(client_reference),
     };
     request_via_nats(nats_url, "arkiv.request.sak.hent", &query).await
 }

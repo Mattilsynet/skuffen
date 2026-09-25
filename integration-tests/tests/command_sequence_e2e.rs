@@ -19,7 +19,8 @@ use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 
 use support::{
     CommandScenario, extract_saksnummer, hent_bruker_mt_enheter_via_nats,
-    hent_journalpost_via_nats, hent_sak_via_nats_by_arkiv_id, publish_media, send_command_batch,
+    hent_journalpost_via_nats, hent_sak_via_nats_by_arkiv_id,
+    hent_sak_via_nats_by_client_reference, publish_media, send_command_batch,
     send_raw_command_payload, terminalt_feilet, wait_for_operasjon_events, wait_for_status_events,
 };
 
@@ -246,6 +247,57 @@ async fn query_hent_sak_via_nats_slaar_opp_entitet() -> Result<()> {
     // Query by arkiv_id (slår opp entitet internt)
     let response = hent_sak_via_nats_by_arkiv_id(&env.nats_url, &saksnummer).await?;
     assert_eq!(response.get("status").and_then(|s| s.as_str()), Some("Ok"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn query_hent_sak_via_nats_paa_client_reference() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    let scenario = CommandScenario::new();
+    let opprett_sak = CommandEnvelope {
+        command_id: Uuid::new_v4(),
+        correlation_id: Some(Uuid::new_v4()),
+        payload: Command::OpprettSak(OpprettSak {
+            client_reference: scenario.sak_client_reference,
+            sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
+                "Query client_reference {}",
+                Uuid::new_v4()
+            ))
+            .unwrap(),
+            arkivdel: Arkivdel::Tilsynsdivisjonene,
+            saksbehandler_id: "Z12345".to_string(),
+            saksbehandler_enhet: "42".to_string(),
+            ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
+            tilgjengelighet: Tilgjengelighet::Offentlig,
+        }),
+    };
+    send_command_batch(&env.nats_url, std::slice::from_ref(&opprett_sak)).await?;
+    let events = wait_for_status_events(
+        &env.nats_url,
+        [opprett_sak.command_id],
+        Duration::from_secs(20),
+    )
+    .await?;
+    let saksnummer = extract_saksnummer(&events, opprett_sak.command_id)
+        .expect("OpprettSak should return saksnummer");
+
+    let response =
+        hent_sak_via_nats_by_client_reference(&env.nats_url, scenario.sak_client_reference).await?;
+    assert_eq!(
+        response.get("status").and_then(|s| s.as_str()),
+        Some("Ok"),
+        "{response}"
+    );
+    assert_eq!(
+        response
+            .pointer("/payload/saksnummer")
+            .and_then(|s| s.as_str()),
+        Some(saksnummer.as_str())
+    );
+
+    let ukjent = hent_sak_via_nats_by_client_reference(&env.nats_url, Uuid::new_v4()).await?;
+    assert_eq!(ukjent.get("status").and_then(|s| s.as_str()), Some("Error"));
     Ok(())
 }
 
