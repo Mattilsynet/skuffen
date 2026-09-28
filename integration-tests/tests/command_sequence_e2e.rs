@@ -10,6 +10,7 @@ use uuid::Uuid;
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::command::sak::{Arkivdel, AvsluttSak, OpprettSak};
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
+use lib_schemas::skuffen::query::responses::SakResponse;
 use lib_schemas::skuffen::sak::Saksnummer as DtoSaksnummer;
 use lib_schemas::skuffen::status::{
     SkuffenCommandEvent, SkuffenCommandStatusV1, SkuffenOperasjonHendelse,
@@ -18,8 +19,8 @@ use lib_schemas::skuffen::status::{
 use lib_schemas::skuffen::tilgang::Tilgjengelighet;
 
 use support::{
-    CommandScenario, extract_saksnummer, hent_bruker_mt_enheter_via_nats,
-    hent_journalpost_via_nats, hent_sak_via_nats_by_arkiv_id,
+    CommandScenario, admin_hent_sak, extract_saksnummer, hent_bruker_mt_enheter_via_nats,
+    hent_journalpost_via_nats, hent_sak_med_journalposter_via_nats, hent_sak_via_nats_by_arkiv_id,
     hent_sak_via_nats_by_client_reference, publish_media, send_command_batch,
     send_raw_command_payload, terminalt_feilet, wait_for_operasjon_events, wait_for_status_events,
 };
@@ -296,8 +297,73 @@ async fn query_hent_sak_via_nats_paa_client_reference() -> Result<()> {
         Some(saksnummer.as_str())
     );
 
+    let med_journalposter = hent_sak_med_journalposter_via_nats(
+        &env.nats_url,
+        DtoSakKey::ClientReference(scenario.sak_client_reference),
+    )
+    .await?;
+    assert_eq!(
+        med_journalposter
+            .pointer("/payload/saksnummer")
+            .and_then(|s| s.as_str()),
+        Some(saksnummer.as_str()),
+        "{med_journalposter}"
+    );
+
     let ukjent = hent_sak_via_nats_by_client_reference(&env.nats_url, Uuid::new_v4()).await?;
     assert_eq!(ukjent.get("status").and_then(|s| s.as_str()), Some("Error"));
+    let ukjent = hent_sak_med_journalposter_via_nats(
+        &env.nats_url,
+        DtoSakKey::ClientReference(Uuid::new_v4()),
+    )
+    .await?;
+    assert_eq!(ukjent.get("status").and_then(|s| s.as_str()), Some("Error"));
+    Ok(())
+}
+
+fn sak_payload(response: &serde_json::Value) -> Result<SakResponse> {
+    assert_eq!(
+        response.get("status").and_then(|s| s.as_str()),
+        Some("Ok"),
+        "{response}"
+    );
+    Ok(serde_json::from_value(response["payload"].clone())?)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn query_sak_paa_saksnummer_krever_ikke_lokal_sak_og_skriver_ingenting() -> Result<()> {
+    let env = support::start_runtime().await?;
+    let saksnummer = format!("2026/{}", Uuid::new_v4().as_u128() % 1_000_000);
+
+    let uten = sak_payload(&hent_sak_via_nats_by_arkiv_id(&env.nats_url, &saksnummer).await?)?;
+    assert_eq!(uten.saksnummer.as_str(), saksnummer);
+    assert_eq!(uten.journalposter, Some(vec![]));
+
+    let med = sak_payload(
+        &hent_sak_med_journalposter_via_nats(
+            &env.nats_url,
+            DtoSakKey::ArkivId(DtoSaksnummer::new(&saksnummer)?),
+        )
+        .await?,
+    )?;
+    assert_eq!(med.saksnummer.as_str(), saksnummer);
+    let journalposter = med.journalposter.expect("journalposter skal være med");
+    assert_eq!(journalposter.len(), 1);
+    let dokumenter = &journalposter[0].dokumenter;
+    assert_eq!(dokumenter.len(), 2);
+    assert_eq!(dokumenter[0].tittel, "Fake hoveddokument");
+    assert!(!dokumenter[0].dokument_id.as_str().is_empty());
+    assert_eq!(
+        journalposter[0].dokument_dato.to_string(),
+        "2025-10-14 00:00:00"
+    );
+
+    let lokal = admin_hent_sak(
+        &env.nats_url,
+        serde_json::json!({ "type": "arkivId", "value": saksnummer }),
+    )
+    .await?;
+    assert_eq!(lokal["status"], "Error", "{lokal}");
     Ok(())
 }
 

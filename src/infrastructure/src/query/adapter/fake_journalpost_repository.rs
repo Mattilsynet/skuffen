@@ -1,5 +1,6 @@
 use async_trait::async_trait;
-use domain::model::dokument::Dokument as DomainDokument;
+use chrono::NaiveDate;
+use domain::model::dokument::{ArkivDokumentId, Dokument as DomainDokument};
 use domain::model::journalpost::{Journalpost, JournalpostKey, JournalpostType, Journalpoststatus};
 
 use application::query::services::hent_journalpost::JournalpostRepository;
@@ -22,12 +23,15 @@ impl JournalpostRepository for FakeJournalpostRepository {
                 JournalpostKey::ArkivId(_) => uuid::Uuid::new_v4(),
             }),
             tittel: "Fake journalpost".to_string(),
-            dokument_dato: "2026-01-01".to_string(),
+            dokument_dato: NaiveDate::from_ymd_opt(2026, 1, 1)
+                .and_then(|dato| dato.and_hms_opt(0, 0, 0))
+                .ok_or_else(|| anyhow::anyhow!("ugyldig fake-dato"))?,
             journalposttype: JournalpostType::InterntNotat,
             journalstatus: Journalpoststatus::Journalført,
             tilgang: None,
-            saksbehandler: "Z00000".to_string(),
+            saksbehandler: Some("Z00000".to_string()),
             dokumenter: vec![DomainDokument {
+                dokument_id: ArkivDokumentId(20_000),
                 client_reference: Some(uuid::Uuid::new_v4()),
                 tittel: "Fake dokument".to_string(),
                 filtype: "PDF".to_string(),

@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use domain::model::sak::{Ordningsverdi, Sak, SakKey, Saksbehandler, Saksstatus, Sakstittel};
+use chrono::NaiveDate;
+use domain::model::dokument::{ArkivDokumentId, Dokument};
+use domain::model::journalpost::{Journalpost, JournalpostType, Journalpoststatus};
+use domain::model::sak::{Ordningsverdi, Sak, Saksbehandler, Saksnummer, Saksstatus, Sakstittel};
 
 use application::query::services::hent_sak::SakRepository;
 
@@ -16,8 +19,8 @@ impl FakeSakRepository {
 impl SakRepository for FakeSakRepository {
     async fn hent_sak(
         &self,
-        key: SakKey,
-        _inkluder_journalposter: bool,
+        saksnummer: Saksnummer,
+        inkluder_journalposter: bool,
     ) -> Result<Sak, anyhow::Error> {
         let saksbehandler = Saksbehandler::new("Z00000".to_string(), "42".to_string())?;
         Ok(Sak {
@@ -26,11 +29,42 @@ impl SakRepository for FakeSakRepository {
             saksbehandler: saksbehandler.saksbehandler_id,
             saksstatus: Saksstatus::UnderBehandling,
             tilgang: None,
-            sak_key: key,
+            saksnummer,
             kildesystem: "SKUFFEN".to_string(),
             lukket: false,
-            journalposter: vec![],
+            journalposter: Some(if inkluder_journalposter {
+                vec![fake_journalpost()?]
+            } else {
+                vec![]
+            }),
             ordningsverdi: Ordningsverdi::new("2026-1".to_string())?,
         })
     }
+}
+
+fn fake_journalpost() -> Result<Journalpost, anyhow::Error> {
+    let dokument = |id, tittel: &str, filtype: &str| Dokument {
+        dokument_id: ArkivDokumentId(id),
+        client_reference: None,
+        tittel: tittel.to_string(),
+        filtype: filtype.to_string(),
+        dokument_referanse: None,
+    };
+    Ok(Journalpost {
+        client_reference: None,
+        tittel: "Fake journalpost".to_string(),
+        dokument_dato: NaiveDate::from_ymd_opt(2025, 10, 14)
+            .and_then(|dato| dato.and_hms_opt(0, 0, 0))
+            .ok_or_else(|| anyhow::anyhow!("ugyldig fake-dato"))?,
+        journalposttype: JournalpostType::Inngående,
+        journalstatus: Journalpoststatus::Registrert,
+        tilgang: None,
+        saksbehandler: None,
+        dokumenter: vec![
+            dokument(20_001, "Fake hoveddokument", "PDF"),
+            dokument(20_002, "Fake vedlegg", "TXT"),
+        ],
+        journalpost_id: 10_001,
+        kildesystem: None,
+    })
 }

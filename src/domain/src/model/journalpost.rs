@@ -1,3 +1,4 @@
+use chrono::NaiveDateTime;
 use uuid::Uuid;
 
 use crate::model::{dokument::Dokument, tilgang::Tilgang};
@@ -10,12 +11,13 @@ pub struct JournalpostId(pub String);
 pub struct Journalpost {
     pub client_reference: Option<Uuid>,
     pub tittel: String,
-    pub dokument_dato: String,
+    pub dokument_dato: NaiveDateTime,
     pub journalposttype: JournalpostType,
     pub journalstatus: Journalpoststatus,
     pub tilgang: Option<Tilgang>,
 
-    pub saksbehandler: String,
+    pub saksbehandler: Option<String>,
+    /// Hoveddokumentet først, deretter vedlegg.
     pub dokumenter: Vec<Dokument>,
     pub journalpost_id: i32,
     pub kildesystem: Option<String>,

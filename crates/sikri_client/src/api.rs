@@ -270,8 +270,28 @@ pub async fn get_sak(
     inkluder_journalposter: bool,
 ) -> Result<ElementsSakMedJournalposterResponse, SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
+    send_get_sak(
+        arkiv_client(),
+        &base_url(),
+        &username,
+        &password,
+        saksnummer,
+        kildesystem,
+        inkluder_journalposter,
+    )
+    .await
+}
 
-    let url = format!("{}/api/Archive/HentArkivsak", base_url());
+async fn send_get_sak(
+    client: &Client,
+    base_url: &str,
+    username: &str,
+    password: &str,
+    saksnummer: &str,
+    kildesystem: &str,
+    inkluder_journalposter: bool,
+) -> Result<ElementsSakMedJournalposterResponse, SikriFeil> {
+    let url = format!("{base_url}/api/Archive/HentArkivsak");
 
     let mut params = vec![("kildesystem", kildesystem), ("saksnr", saksnummer)];
     if inkluder_journalposter {
@@ -286,7 +306,7 @@ pub async fn get_sak(
         "Sending request to Sikri"
     );
 
-    let resp = arkiv_client()
+    let resp = client
         .get(&url)
         .query(&params)
         .basic_auth(username, Some(password))
@@ -726,6 +746,84 @@ mod tests {
         );
         assert_eq!(feil.kode, "sikri_resource_not_found");
         assert_eq!(feil.recoverability, crate::Recoverability::Irrecoverable);
+    }
+
+    #[tokio::test]
+    async fn get_sak_med_journalposter_sender_flagg_og_leser_nested_dokumenter() {
+        let body = r#"{
+            "saksid": 1,
+            "saksnr": "2026/000123",
+            "sakstittel": "Syntetisk sak",
+            "saksbehandler": "Z00001",
+            "saksstatus": "B",
+            "ordningsverdi": "430",
+            "lukket": false,
+            "antallJournalposter": 1,
+            "journalposter": [{
+                "journalpostId": 11,
+                "tittel": "Syntetisk journalpost",
+                "journalposttype": "I",
+                "journalstatus": "S",
+                "dokumentDato": "2025-10-14T00:00:00",
+                "hoveddokId": 21,
+                "harHoveddokument": true,
+                "antallVedlegg": 1,
+                "saksbehandler": "---",
+                "dokumenterRespons": [
+                    {"dokumentId": 21, "hoveddokId": 21, "tittel": "Hoved", "hoveddokument": true, "filtype": "PDF", "dokumentBase64": null},
+                    {"dokumentId": 22, "hoveddokId": 21, "tittel": "Vedlegg", "hoveddokument": false, "filtype": "TXT", "dokumentBase64": null}
+                ],
+                "dokumenter": null
+            }]
+        }"#;
+        let (base_url, received_request) = start_mock_sikri_med_body("200 OK", body).await;
+
+        let sak = send_get_sak(
+            &Client::new(),
+            &base_url,
+            "bruker",
+            "passord",
+            "2026/000123",
+            "SKUFFEN",
+            true,
+        )
+        .await
+        .unwrap();
+
+        let request = received_request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap(),
+            "GET /api/Archive/HentArkivsak?kildesystem=SKUFFEN&saksnr=2026%2F000123&inkluderJournalposter=true HTTP/1.1"
+        );
+        let journalposter = sak.journalposter.unwrap();
+        let dokumenter = journalposter[0].dokumenter_respons.as_ref().unwrap();
+        assert_eq!(dokumenter.len(), 2);
+        assert_eq!(dokumenter[1].dokument_id, Some(22));
+        assert_eq!(dokumenter[1].hoveddokument, Some(false));
+    }
+
+    #[tokio::test]
+    async fn get_sak_uten_journalposter_sender_ikke_flagg() {
+        let body =
+            r#"{"saksnr": "2026/000123", "sakstittel": "Syntetisk sak", "journalposter": []}"#;
+        let (base_url, received_request) = start_mock_sikri_med_body("200 OK", body).await;
+
+        send_get_sak(
+            &Client::new(),
+            &base_url,
+            "bruker",
+            "passord",
+            "2026/000123",
+            "SKUFFEN",
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            received_request.await.unwrap().lines().next().unwrap(),
+            "GET /api/Archive/HentArkivsak?kildesystem=SKUFFEN&saksnr=2026%2F000123 HTTP/1.1"
+        );
     }
 
     #[test]

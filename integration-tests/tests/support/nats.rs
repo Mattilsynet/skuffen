@@ -9,7 +9,9 @@ use lib_nats::chunked_upload::{ChunkedUploadClient, ChunkedUploadClientConfig, U
 use lib_schemas::skuffen::command::commands::{Command, CommandEnvelope};
 use lib_schemas::skuffen::journalpost::JournalpostKey as DtoJournalpostKey;
 use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
-use lib_schemas::skuffen::query::queries::{HentJournalpostQuery, HentSakQuery};
+use lib_schemas::skuffen::query::queries::{
+    HentJournalpostQuery, HentSakMedJournalposterQuery, HentSakQuery,
+};
 use lib_schemas::skuffen::status::{
     SkuffenCommandEvent, SkuffenCommandStatusV1, SkuffenOperasjonHendelse, SkuffenOperasjonStatusV1,
 };
@@ -310,6 +312,14 @@ pub async fn hent_sak_via_nats_by_client_reference(
         key: DtoSakKey::ClientReference(client_reference),
     };
     request_via_nats(nats_url, "arkiv.request.sak.hent", &query).await
+}
+
+pub async fn hent_sak_med_journalposter_via_nats(
+    nats_url: &str,
+    key: DtoSakKey,
+) -> Result<serde_json::Value> {
+    let query = HentSakMedJournalposterQuery { key };
+    request_via_nats(nats_url, "arkiv.request.sak.med_journalposter", &query).await
 }
 
 pub async fn hent_journalpost_via_nats(

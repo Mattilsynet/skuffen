@@ -47,7 +47,7 @@ gcp_auth = "0.12.7"
 http = "1.5.0"
 infrastructure = { path = "src/infrastructure" }
 lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats", tag = "1.7.2" }
-lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas", tag = "1.7.2" }
+lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas", branch = "master" }
 lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.7.2" }
 opentelemetry = "0.33.0"
 opentelemetry-otlp = "0.33.0"

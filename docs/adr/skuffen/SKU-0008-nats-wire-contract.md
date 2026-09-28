@@ -1,7 +1,7 @@
 # SKU-0008. NATS wire contract for arkivering og queries
 
 Date: 2026-05-22
-Last-reviewed: 2026-09-02
+Last-reviewed: 2026-09-28
 Tier: B
 Status: Accepted
 Crates: skuffen, infrastructure, application, skuffen-integration-tests
@@ -26,7 +26,7 @@ R3 [5]: `Ok.command_ids` skal inneholde alle aksepterte command ids i innsendt r
 
 R4 [5]: Command intake error replies skal være statiske og sanitiserte; wire-meldinger er `invalid payload format`, `media validation failed`, `invalid command sequence` eller `internal error`.
 
-R5 [5]: Synkrone read/query subjects er `arkiv.request.sak.hent`, `arkiv.request.journalpost.hent` og `arkiv.request.bruker.mt_enheter`, uten legacy aliases.
+R5 [5]: Synkrone read/query subjects er `arkiv.request.sak.hent`, `arkiv.request.sak.med_journalposter`, `arkiv.request.journalpost.hent` og `arkiv.request.bruker.mt_enheter`, uten legacy aliases.
 
 R6 [5]: Query replies bruker `NatsResponse<T>`; `arkiv.request.bruker.mt_enheter` er en live stub som returnerer `NatsResponse::Error { message: "Not implemented" }`.
 
@@ -61,6 +61,25 @@ cutover-grunnlag som over):
 R1-R10 formuleringene over står uendret; `ArkiveringKvittering`- og
 `NatsResponse<T>`-rammene beholdes. Detaljerte regler for skjerming, merking,
 gateway-utledning og audit eies av SKU-0015.
+
+### Sak med journalposter
+
+`arkiv.request.sak.med_journalposter` tar samme `key` som `arkiv.request.sak.hent`
+og svarer med samme `SakResponse`, men ber alltid arkivet om journalposter.
+Inkluderingen er bundet til subjectet, ikke til et request-felt, slik at en eldre
+instans under utrullingsoverlapp aldri stille kan ignorere ønsket.
+
+Svaret bærer dokumentmetadata, ikke filinnhold. Første dokument er hoveddokumentet.
+`DokumentResponse` fikk arkivets `dokument_id`, og `JournalpostResponse.dokument_dato`
+er `NaiveDateTime` i stedet for `String`: arkivet oppgir dato og klokkeslett uten
+tidssone, og Skuffen dikter ikke opp en. Begge er breaking for typed Rust-klienter
+av de delte responstypene.
+
+Saksoppslag på `arkivId` går direkte til arkivet uten krav om lokal identitet.
+
+Midlertidig unntak fra R8: `lib-schemas` følger `branch = "master"` inntil eier
+tagger en release med disse typene. `Cargo.lock` er fortsatt resolved boundary;
+`lib-nats` og `lib-sql` blir på tag `1.7.2`.
 
 ### Statusstrømmen (SKU-0020)
 

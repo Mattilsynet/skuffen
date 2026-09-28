@@ -11,6 +11,8 @@ pub struct DokumentRespons {
     pub filtype: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hoveddokument: Option<bool>,
 }
 
 impl From<ElementsDokumentRespons> for DokumentRespons {
@@ -20,6 +22,7 @@ impl From<ElementsDokumentRespons> for DokumentRespons {
             tittel: src.tittel,
             filtype: src.filtype,
             url: src.dokument_url,
+            hoveddokument: src.hoveddokument,
         }
     }
 }

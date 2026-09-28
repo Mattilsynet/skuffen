@@ -13,10 +13,10 @@ pub struct Sak {
     pub saksbehandler: String,
     pub saksstatus: Saksstatus,
     pub tilgang: Option<Tilgang>,
-    pub sak_key: SakKey,
+    pub saksnummer: Saksnummer,
     pub kildesystem: String,
     pub lukket: bool,
-    pub journalposter: Vec<Journalpost>,
+    pub journalposter: Option<Vec<Journalpost>>,
     pub ordningsverdi: Ordningsverdi,
 }
 
@@ -123,9 +123,12 @@ impl Ordningsverdi {
         &self.0
     }
 }
+/// Hvordan en klient adresserer en sak ved lesing. Saksnummer går direkte til
+/// arkivet; klientreferansen må slås opp lokalt.
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
-pub struct SakKey {
-    pub skuffen_id: Uuid,
+pub enum SakKey {
+    ClientReference(Uuid),
+    ArkivId(Saksnummer),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

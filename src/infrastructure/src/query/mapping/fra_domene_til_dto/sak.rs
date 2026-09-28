@@ -7,9 +7,8 @@ use lib_schemas::skuffen::sak::{
 
 use crate::query::mapping::fra_domene_til_dto::journalpost::from_domain_journalpost_to_dto;
 use crate::query::mapping::fra_domene_til_dto::tilgang::from_domain_tilgang_to_tilgjengelighet;
-use crate::query::mapping::lookup::entitet_queries::lookup_arkiv_id_fra_skuffen_id;
 
-pub async fn from_domain_sak_to_dto(sak: domain::model::sak::Sak) -> Result<DtoSak> {
+pub fn from_domain_sak_to_dto(sak: domain::model::sak::Sak) -> Result<DtoSak> {
     Ok(DtoSak {
         sakstittel: DtoSakstittel::try_from(sak.sakstittel.0.as_str())?,
         saksbehandler: Some(sak.saksbehandler),
@@ -17,17 +16,18 @@ pub async fn from_domain_sak_to_dto(sak: domain::model::sak::Sak) -> Result<DtoS
         saksstatus: from_domain_saksstatus_to_dto(sak.saksstatus),
         tilgjengelighet: from_domain_tilgang_to_tilgjengelighet(sak.tilgang),
         ordningsverdi: from_domain_ordningsverdi_to_dto(sak.ordningsverdi)?,
-        saksnummer: from_domain_saksnummer_to_dto(
-            lookup_arkiv_id_fra_skuffen_id(sak.sak_key.skuffen_id).await?,
-        )?,
+        saksnummer: from_domain_saksnummer_to_dto(sak.saksnummer)?,
         kildesystem: sak.kildesystem,
         lukket: sak.lukket,
-        journalposter: Some(
-            sak.journalposter
-                .into_iter()
-                .map(|jp| from_domain_journalpost_to_dto(jp.clone()))
-                .collect::<Result<_>>()?,
-        ),
+        journalposter: sak
+            .journalposter
+            .map(|journalposter| {
+                journalposter
+                    .into_iter()
+                    .map(from_domain_journalpost_to_dto)
+                    .collect::<Result<_>>()
+            })
+            .transpose()?,
     })
 }
 

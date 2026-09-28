@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use async_trait::async_trait;
 use futures::StreamExt;
 use lib_schemas::skuffen::query::{
-    queries::{HentJournalpostQuery, HentSakQuery},
+    queries::{HentJournalpostQuery, HentSakMedJournalposterQuery, HentSakQuery},
     responses::{JournalpostResponse, SakResponse},
 };
 use tracing::{Instrument, debug, error, info};
@@ -17,8 +17,12 @@ use crate::query::mapping::fra_dto_til_domene::{
 };
 
 pub const HENT_SAK_SUBJECT: &str = "arkiv.request.sak.hent";
+pub const HENT_SAK_MED_JOURNALPOSTER_SUBJECT: &str = "arkiv.request.sak.med_journalposter";
 pub const HENT_JOURNALPOST_SUBJECT: &str = "arkiv.request.journalpost.hent";
 pub const BRUKER_MT_ENHETER_SUBJECT: &str = "arkiv.request.bruker.mt_enheter";
+
+const MAKS_SVAR_BYTES: usize = 8 * 1024 * 1024;
+const RESPONSE_TOO_LARGE: &str = "Response too large";
 
 #[async_trait]
 pub trait UseCase<Request, Response> {
@@ -68,15 +72,40 @@ where
     T: application::query::ports::use_cases::HentSakUseCase + Send + Sync,
 {
     async fn handle(&self, req: HentSakQuery) -> Result<SakResponse, anyhow::Error> {
-        let domain_sak = application::query::ports::use_cases::HentSakUseCase::handle(
-            self,
-            from_dto_sak_key_to_domain(req.key).await?,
-            false,
-        )
-        .await?;
-        let response = from_domain_sak_to_dto(domain_sak).await?;
+        let mut response = hent_sak(self, req.key, false).await?;
+        response.journalposter.get_or_insert_with(Vec::new);
         Ok(response)
     }
+}
+
+#[async_trait]
+impl<T> UseCase<HentSakMedJournalposterQuery, SakResponse> for T
+where
+    T: application::query::ports::use_cases::HentSakUseCase + Send + Sync,
+{
+    async fn handle(
+        &self,
+        req: HentSakMedJournalposterQuery,
+    ) -> Result<SakResponse, anyhow::Error> {
+        hent_sak(self, req.key, true).await
+    }
+}
+
+async fn hent_sak<T>(
+    use_case: &T,
+    key: lib_schemas::skuffen::query::queries::SakKey,
+    inkluder_journalposter: bool,
+) -> Result<SakResponse, anyhow::Error>
+where
+    T: application::query::ports::use_cases::HentSakUseCase + Send + Sync,
+{
+    let domain_sak = application::query::ports::use_cases::HentSakUseCase::handle(
+        use_case,
+        from_dto_sak_key_to_domain(key)?,
+        inkluder_journalposter,
+    )
+    .await?;
+    from_domain_sak_to_dto(domain_sak)
 }
 
 #[async_trait]
@@ -207,6 +236,18 @@ where
         };
 
         let bytes = match serde_json::to_vec(&nats_response) {
+            Ok(b) if b.len() > MAKS_SVAR_BYTES => {
+                error!(bytes = b.len(), "Query response exceeds size limit");
+                match serde_json::to_vec(&NatsResponse::<Res>::Error {
+                    message: RESPONSE_TOO_LARGE.to_string(),
+                }) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        error!(error = %e, "Failed to serialize response");
+                        return;
+                    }
+                }
+            }
             Ok(b) => b,
             Err(e) => {
                 error!(error = %e, "Failed to serialize response");
@@ -224,5 +265,81 @@ where
         } else {
             debug!("Successfully replied with JSON NatsResponse");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use domain::model::sak::{Ordningsverdi, Sak, SakKey, Saksnummer, Saksstatus, Sakstittel};
+    use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct RecordingHentSak {
+        kall: Mutex<Vec<(SakKey, bool)>>,
+    }
+
+    #[async_trait]
+    impl application::query::ports::use_cases::HentSakUseCase for RecordingHentSak {
+        async fn handle(
+            &self,
+            req: SakKey,
+            inkluder_journalposter: bool,
+        ) -> Result<Sak, anyhow::Error> {
+            self.kall
+                .lock()
+                .unwrap()
+                .push((req, inkluder_journalposter));
+            Ok(Sak {
+                client_reference: None,
+                sakstittel: Sakstittel("Sak".to_string()),
+                saksbehandler: "Z00001".to_string(),
+                saksstatus: Saksstatus::UnderBehandling,
+                tilgang: None,
+                saksnummer: Saksnummer::new("2026/1")?,
+                kildesystem: "SKUFFEN".to_string(),
+                lukket: false,
+                journalposter: None,
+                ordningsverdi: Ordningsverdi::new("430".to_string())?,
+            })
+        }
+    }
+
+    fn arkiv_key() -> DtoSakKey {
+        DtoSakKey::ArkivId(lib_schemas::skuffen::sak::Saksnummer::new("2026/1").unwrap())
+    }
+
+    #[tokio::test]
+    async fn sak_hent_ber_ikke_om_journalposter_og_beholder_tom_liste() {
+        let use_case = RecordingHentSak::default();
+
+        let response = UseCase::<HentSakQuery, SakResponse>::handle(
+            &use_case,
+            HentSakQuery { key: arkiv_key() },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.journalposter, Some(vec![]));
+        assert_eq!(
+            *use_case.kall.lock().unwrap(),
+            vec![(SakKey::ArkivId(Saksnummer::new("2026/1").unwrap()), false)]
+        );
+    }
+
+    #[tokio::test]
+    async fn sak_med_journalposter_ber_alltid_om_journalposter() {
+        let use_case = RecordingHentSak::default();
+
+        let response = UseCase::<HentSakMedJournalposterQuery, SakResponse>::handle(
+            &use_case,
+            HentSakMedJournalposterQuery { key: arkiv_key() },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.journalposter, None);
+        assert!(use_case.kall.lock().unwrap()[0].1);
     }
 }

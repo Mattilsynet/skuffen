@@ -309,7 +309,10 @@ Stabile feilsvar fra admin read:
 bevisst gjennom admin read: de er nødvendige for å adressere riktig mål i en reparasjon.
 
 Request-reply (les / queries):
-- `arkiv.request.sak.hent` — hent sak. Request: `HentSakQuery` med `SakKey::ClientReference(uuid)` eller `SakKey::ArkivId(Saksnummer)`. Reply: `NatsResponse<SakResponse>`.
+- `arkiv.request.sak.hent` — hent sak uten journalposter. Request: `HentSakQuery` med `SakKey::ClientReference(uuid)` eller `SakKey::ArkivId(Saksnummer)`. Reply: `NatsResponse<SakResponse>` med `journalposter: []`.
+- `arkiv.request.sak.med_journalposter` — hent sak med journalposter og dokumentmetadata, uten dokumentinnhold. Request: `HentSakMedJournalposterQuery` med samme `key` som `HentSakQuery`. Reply: `NatsResponse<SakResponse>`. Første dokument i hver journalposts `dokumenter` er hoveddokumentet; resten er vedlegg. Hvert dokument har arkivets `dokument_id`. `dokument_dato` er dato og klokkeslett uten tidssone, slik arkivet oppgir den (`2025-10-14T00:00:00`). Utelatt `journalposter` betyr at arkivet ikke oppga listen, ikke at saken er tom.
+
+Saksoppslag med `arkivId` går direkte til arkivet og krever ikke at Skuffen kjenner saken. Oppslag med `clientReference` slås opp i Skuffens entitetsregister og krever at referansen tilhører en sak med saksnummer. Lesing oppretter aldri lokal identitet eller state. Query-svar over 8 MB gir `Response too large`.
 - `arkiv.request.journalpost.hent` — hent journalpost. Request: `HentJournalpostQuery` med `JournalpostKey::ClientReference(uuid)` eller `JournalpostKey::JournalpostId(journalpost_id)`. Reply: `NatsResponse<JournalpostResponse>`. NB: subjectet er koblet opp, men backing repository er foreløpig fake/testdata.
 - `arkiv.request.bruker.mt_enheter` — bruker/MT-enheter. Request: `{}`. Reply: `NatsResponse::Error { message: "Not implemented" }` inntil kontrakt og backing implementation er avklart.
 
@@ -413,7 +416,7 @@ arkivkall, med egen id, egen status, egen retry og egen statuslinje utad.
 ## Runtime-prioritering
 
 - `command_listener`, `media_listener` og `health_check` regnes som kritiske for opptak. `command_listener` har et begrenset internt restartbudsjett. `media_listener` drives av `ChunkedUploadServer`; hvis serveren stopper eller feiler, avsluttes prosessen slik at Cloud Run kan restarte instansen. Ved shutdown stopper den nye `begin`-requests og gir aktive receiver-sessioner fem sekunder til å fullføre.
-- `validation_listener`, `execution_listener`, `execution_worker`, `query_listener`, `admin_listener` og `ready_replier` regnes som degradérbare. `query_listener` dekker `arkiv.request.sak.hent`, `arkiv.request.journalpost.hent` og `arkiv.request.bruker.mt_enheter`. `admin_listener` dekker `arkiv.admin.read.command.hent` og `arkiv.admin.read.sak.hent`.
+- `validation_listener`, `execution_listener`, `execution_worker`, `query_listener`, `admin_listener` og `ready_replier` regnes som degradérbare. `query_listener` dekker `arkiv.request.sak.hent`, `arkiv.request.sak.med_journalposter`, `arkiv.request.journalpost.hent` og `arkiv.request.bruker.mt_enheter`. `admin_listener` dekker `arkiv.admin.read.command.hent` og `arkiv.admin.read.sak.hent`.
 - Alle åtte arbeidstasks kjører under `TaskSupervisor` med et rullende restartbudsjett på fem forsøk og nedstengingssignalet. **Tømt budsjett avslutter prosessen uansett kritikalitet** ([SKU-0021](docs/adr/skuffen/SKU-0021-bakgrunnstasks-er-supervisert.md) R3): en task som ikke kom seg opp av fem restarter er ikke degradert, den er død. Kritikalitet styrer bare hva som skjer når en task avslutter rent utenfor nedstenging.
 - Ved SIGTERM avslutter Skuffen kontrollert: tasks får åtte sekunder på å avslutte selv, og resten aborteres. Det holder oss innenfor Cloud Runs ti sekunder.
 - Helsesjekken har to endepunkter. `/health/live` svarer alltid 200 og beviser bare at runtimen svarer — den avhenger av ingenting. `/health/ready` svarer 200 når migrasjonene er ferdige, NATS er tilkoblet og alle superviserte tasks er oppe, ellers 503. `/` er alias for `/health/live`. Porten bindes først av alt, før NATS og migrasjoner, slik at startup-proben kan lykkes.
@@ -485,6 +488,7 @@ En query er et rent lesekall.
 
 Eksempler:
 	•	`arkiv.request.sak.hent` — hent sak
+	•	`arkiv.request.sak.med_journalposter` — hent sak med journalposter og dokumentmetadata
 	•	`arkiv.request.journalpost.hent` — hent journalpost
 	•	`arkiv.request.bruker.mt_enheter` — bruker/MT-enheter, foreløpig `Not implemented`
 	•	Hent status for kommando eller sekvens

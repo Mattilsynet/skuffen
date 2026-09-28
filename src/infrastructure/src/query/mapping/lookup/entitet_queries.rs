@@ -26,23 +26,6 @@ fn get_repo() -> Arc<dyn EntitetRepository + Send + Sync> {
         .expect("EntitetRepository not initialized")
 }
 
-pub async fn lookup_skuffen_id_fra_arkiv_id(saksnummer: Saksnummer) -> Result<Uuid> {
-    let repo = get_repo();
-    let maybe_entitet = repo
-        .hent_for_arkiv_id(EntitetType::Sak, saksnummer.as_str())
-        .await?;
-
-    match maybe_entitet {
-        Some(entitet) => Ok(entitet.skuffen_id),
-        None => {
-            // Arkividentifikatoren hører hjemme i loggen som strukturert felt,
-            // ikke interpolert inn i feilteksten (SKU-0015 R11).
-            error!(saksnummer = %saksnummer.as_str(), "fant ikke Skuffen-id for arkiv-id");
-            Err(anyhow::anyhow!("Skuffen ID ikke funnet for arkiv_id"))
-        }
-    }
-}
-
 pub async fn lookup_sak_skuffen_id_fra_client_reference(client_reference: Uuid) -> Result<Uuid> {
     let repo = get_repo();
     let maybe_entitet = repo.hent_for_client_reference(client_reference).await?;

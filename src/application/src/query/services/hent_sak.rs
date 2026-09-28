@@ -1,7 +1,8 @@
 use std::fmt::Debug;
 
 use async_trait::async_trait;
-use domain::model::sak::{Sak, SakKey};
+use domain::model::sak::{Sak, SakKey, Saksnummer};
+use uuid::Uuid;
 
 use crate::query::ports::use_cases::HentSakUseCase;
 
@@ -9,14 +10,24 @@ use crate::query::ports::use_cases::HentSakUseCase;
 pub trait SakRepository {
     async fn hent_sak(
         &self,
-        id: SakKey,
+        saksnummer: Saksnummer,
         inkluder_journalposter: bool,
     ) -> Result<Sak, anyhow::Error>;
 }
 
-// #[derive(Debug)] // removed derive
+/// Lokalt oppslag fra klientreferanse til saksnummer. Leser bare; oppretter
+/// aldri identitet.
+#[async_trait]
+pub trait SaksnummerOppslag {
+    async fn saksnummer_for_client_reference(
+        &self,
+        client_reference: Uuid,
+    ) -> Result<Saksnummer, anyhow::Error>;
+}
+
 pub struct HentSakService {
     repo: Box<dyn SakRepository + Send + Sync>,
+    oppslag: Box<dyn SaksnummerOppslag + Send + Sync>,
 }
 
 impl Debug for HentSakService {
@@ -26,8 +37,11 @@ impl Debug for HentSakService {
 }
 
 impl HentSakService {
-    pub fn new(repo: Box<dyn SakRepository + Send + Sync>) -> Self {
-        Self { repo }
+    pub fn new(
+        repo: Box<dyn SakRepository + Send + Sync>,
+        oppslag: Box<dyn SaksnummerOppslag + Send + Sync>,
+    ) -> Self {
+        Self { repo, oppslag }
     }
 }
 
@@ -38,6 +52,14 @@ impl HentSakUseCase for HentSakService {
         req: SakKey,
         inkluder_journalposter: bool,
     ) -> Result<Sak, anyhow::Error> {
-        self.repo.hent_sak(req, inkluder_journalposter).await
+        let saksnummer = match req {
+            SakKey::ArkivId(saksnummer) => saksnummer,
+            SakKey::ClientReference(client_reference) => {
+                self.oppslag
+                    .saksnummer_for_client_reference(client_reference)
+                    .await?
+            }
+        };
+        self.repo.hent_sak(saksnummer, inkluder_journalposter).await
     }
 }

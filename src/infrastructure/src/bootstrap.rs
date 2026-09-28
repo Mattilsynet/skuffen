@@ -39,12 +39,12 @@ use crate::nats::jetstream_setup::{ensure_media_object_store, ensure_publisering
 use crate::nats::setup::setup_nats;
 use crate::query::adapter::fake_journalpost_repository::FakeJournalpostRepository;
 use crate::query::adapter::fake_sak_repository::FakeSakRepository;
-use crate::query::adapter::hent_sak::SikriRepository;
+use crate::query::adapter::hent_sak::{EntitetSaksnummerOppslag, SikriRepository};
 use crate::query::adapter::not_implemented_journalpost_repository::NotImplementedJournalpostRepository;
 use crate::query::mapping::lookup::entitet_queries;
 use crate::query::nats::listener::{
     BRUKER_MT_ENHETER_SUBJECT, BrukerMtEnheterNotImplementedUseCase, HENT_JOURNALPOST_SUBJECT,
-    HENT_SAK_SUBJECT, NatsReplier, UseCase,
+    HENT_SAK_MED_JOURNALPOSTER_SUBJECT, HENT_SAK_SUBJECT, NatsReplier, UseCase,
 };
 use crate::query::nats::query_listener::QueryListener;
 
@@ -92,12 +92,16 @@ pub async fn prepare_runtime() -> anyhow::Result<RuntimeDeps> {
     })
 }
 
-pub fn build_query_listener(nats: NatsClient, use_fake_sikri: bool) -> QueryListener {
-    let hent_sak_uc = if use_fake_sikri {
-        HentSakService::new(Box::new(FakeSakRepository::new()))
+fn hent_sak_service(use_fake_sikri: bool) -> HentSakService {
+    let oppslag = Box::new(EntitetSaksnummerOppslag);
+    if use_fake_sikri {
+        HentSakService::new(Box::new(FakeSakRepository::new()), oppslag)
     } else {
-        HentSakService::new(Box::new(SikriRepository))
-    };
+        HentSakService::new(Box::new(SikriRepository), oppslag)
+    }
+}
+
+pub fn build_query_listener(nats: NatsClient, use_fake_sikri: bool) -> QueryListener {
     // Fake journalpost-data skal aldri nå ekte klienter. Inntil ekte backing
     // finnes returnerer produksjonsadapteren en tydelig feil (SKU-0008 R7).
     let hent_journalpost_uc = if use_fake_sikri {
@@ -105,7 +109,16 @@ pub fn build_query_listener(nats: NatsClient, use_fake_sikri: bool) -> QueryList
     } else {
         HentJournalpostService::new(Box::new(NotImplementedJournalpostRepository::new()))
     };
-    let hent_sak_replier = NatsReplier::new(nats.clone(), HENT_SAK_SUBJECT, Box::new(hent_sak_uc));
+    let hent_sak_replier = NatsReplier::new(
+        nats.clone(),
+        HENT_SAK_SUBJECT,
+        Box::new(hent_sak_service(use_fake_sikri)),
+    );
+    let hent_sak_med_journalposter_replier = NatsReplier::new(
+        nats.clone(),
+        HENT_SAK_MED_JOURNALPOSTER_SUBJECT,
+        Box::new(hent_sak_service(use_fake_sikri)),
+    );
     let hent_journalpost_replier = NatsReplier::new(
         nats.clone(),
         HENT_JOURNALPOST_SUBJECT,
@@ -119,6 +132,7 @@ pub fn build_query_listener(nats: NatsClient, use_fake_sikri: bool) -> QueryList
 
     QueryListener::new(
         hent_sak_replier,
+        hent_sak_med_journalposter_replier,
         hent_journalpost_replier,
         bruker_mt_enheter_replier,
     )
