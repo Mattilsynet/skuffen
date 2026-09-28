@@ -1,6 +1,15 @@
 # Audit config file for GitHub Actions
 
 [advisories]
-ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2024-0363", "RUSTSEC-2026-0049"] # advisory IDs to ignore; async-nats fix pending in https://github.com/nats-io/nats.rs/pull/1550
+ignore = [
+    "RUSTSEC-2023-0071",
+    "RUSTSEC-2024-0363",
+    "RUSTSEC-2026-0049", # async-nats fix pending in https://github.com/nats-io/nats.rs/pull/1550
+    # Gjelder NLnet Labs' DNS-crate `domain` på crates.io, ikke vår path-crate med
+    # samme navn: cargo-audit matcher på navn og versjon, ikke kilde. cargo-deny
+    # skiller på kilde og fanger fortsatt en ekte avhengighet. Fjernes hvis
+    # workspace-craten får nytt navn.
+    "RUSTSEC-2026-0310",
+]
 informational_warnings = ["unmaintained"] # warn for categories of informational advisories
 severity_threshold = "low" # CVSS severity ("none", "low", "medium", "high", "critical")
