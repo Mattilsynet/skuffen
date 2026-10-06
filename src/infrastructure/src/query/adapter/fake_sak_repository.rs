@@ -27,6 +27,7 @@ impl SakRepository for FakeSakRepository {
             client_reference: None,
             sakstittel: Sakstittel("Fake sak".to_string()),
             saksbehandler: saksbehandler.saksbehandler_id,
+            saksbehandler_enhet: Some(saksbehandler.saksbehandler_enhet),
             saksstatus: Saksstatus::UnderBehandling,
             tilgang: None,
             saksnummer,
@@ -60,6 +61,7 @@ fn fake_journalpost() -> Result<Journalpost, anyhow::Error> {
         journalstatus: Journalpoststatus::Registrert,
         tilgang: None,
         saksbehandler: None,
+        saksbehandler_enhet: None,
         dokumenter: vec![
             dokument(20_001, "Fake hoveddokument", "PDF"),
             dokument(20_002, "Fake vedlegg", "TXT"),

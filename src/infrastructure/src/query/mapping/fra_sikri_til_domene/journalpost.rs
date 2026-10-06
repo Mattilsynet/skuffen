@@ -33,6 +33,7 @@ pub fn from_sikri_journalpost_to_domain_journalpost(
         )?,
         tilgang,
         saksbehandler: sikri_journalpost.saksbehandler,
+        saksbehandler_enhet: sikri_journalpost.saksbehandler_enhet,
         dokumenter,
         journalpost_id: sikri_journalpost.journalpost_id,
         kildesystem: sikri_journalpost.kildesystem,

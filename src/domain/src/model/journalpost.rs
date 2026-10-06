@@ -17,6 +17,7 @@ pub struct Journalpost {
     pub tilgang: Option<Tilgang>,
 
     pub saksbehandler: Option<String>,
+    pub saksbehandler_enhet: Option<String>,
     /// Hoveddokumentet først, deretter vedlegg.
     pub dokumenter: Vec<Dokument>,
     pub journalpost_id: i32,

@@ -30,6 +30,7 @@ impl JournalpostRepository for FakeJournalpostRepository {
             journalstatus: Journalpoststatus::Journalført,
             tilgang: None,
             saksbehandler: Some("Z00000".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
             dokumenter: vec![DomainDokument {
                 dokument_id: ArkivDokumentId(20_000),
                 client_reference: Some(uuid::Uuid::new_v4()),

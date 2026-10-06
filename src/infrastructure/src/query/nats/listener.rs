@@ -295,6 +295,7 @@ mod tests {
                 client_reference: None,
                 sakstittel: Sakstittel("Sak".to_string()),
                 saksbehandler: "Z00001".to_string(),
+                saksbehandler_enhet: None,
                 saksstatus: Saksstatus::UnderBehandling,
                 tilgang: None,
                 saksnummer: Saksnummer::new("2026/1")?,

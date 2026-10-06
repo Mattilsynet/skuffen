@@ -61,6 +61,7 @@ mod tests {
             client_reference: None,
             sakstittel: Sakstittel("Test Sak 1".to_string()),
             saksbehandler: "Z99999".to_string(),
+            saksbehandler_enhet: None,
             saksstatus: Saksstatus::UnderBehandling,
             tilgang: None,
             saksnummer,

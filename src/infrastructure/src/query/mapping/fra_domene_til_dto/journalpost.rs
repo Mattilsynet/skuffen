@@ -15,7 +15,7 @@ pub fn from_domain_journalpost_to_dto(
         journalstatus: from_domain_journalpoststatus_to_dto(domain_journalpost.journalstatus),
         tilgjengelighet: from_domain_tilgang_to_tilgjengelighet(domain_journalpost.tilgang),
         saksbehandler: domain_journalpost.saksbehandler,
-        saksbehandler_enhet: None,
+        saksbehandler_enhet: domain_journalpost.saksbehandler_enhet,
         // Domenets read-modell bærer ennå ikke avsender/mottaker; feltet
         // rapporteres derfor som fraværende (None), ikke tom liste.
         korrespondanseparter: None,

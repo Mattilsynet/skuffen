@@ -11,6 +11,7 @@ pub struct Sak {
     pub client_reference: Option<Uuid>,
     pub sakstittel: Sakstittel,
     pub saksbehandler: String,
+    pub saksbehandler_enhet: Option<String>,
     pub saksstatus: Saksstatus,
     pub tilgang: Option<Tilgang>,
     pub saksnummer: Saksnummer,

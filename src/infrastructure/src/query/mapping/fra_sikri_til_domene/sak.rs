@@ -28,6 +28,7 @@ pub fn from_sikri_sak_to_domain_sak(sikri_sak: SikriSak) -> Result<domain::model
         saksbehandler: sikri_sak
             .saksbehandler
             .ok_or_else(|| anyhow!("Sak har ikke saksbehandler"))?,
+        saksbehandler_enhet: sikri_sak.saksbehandler_enhet,
         saksstatus: saksstatus_from_char(
             sikri_sak
                 .saksstatus
@@ -96,6 +97,7 @@ mod tests {
             "harHoveddokument": true,
             "antallVedlegg": 1,
             "saksbehandler": null,
+            "saksbehandlerEnhet": "M00002",
             "dokumenterRespons": [
                 {"dokumentId": 22, "hoveddokId": 21, "tittel": "Vedlegg", "hoveddokument": false, "filtype": "TXT", "dokumentBase64": "c2hvdWxkLW5vdC1sZWFr"},
                 {"dokumentId": 21, "hoveddokId": 21, "tittel": "Hoved", "hoveddokument": true, "filtype": "PDF", "dokumentBase64": null}
@@ -109,6 +111,7 @@ mod tests {
             "saksnr": "2026/000123",
             "sakstittel": "Syntetisk sak",
             "saksbehandler": "Z00001",
+            "saksbehandlerEnhet": "M00001",
             "saksstatus": "B",
             "ordningsverdi": "430",
             "lukket": false
@@ -130,7 +133,9 @@ mod tests {
         let respons = til_respons(sikri_sak(Some(json!([sikri_journalpost(11)])))).unwrap();
 
         assert_eq!(respons["saksnummer"], "2026/000123");
+        assert_eq!(respons["saksbehandler_enhet"], "M00001");
         let journalpost = &respons["journalposter"][0];
+        assert_eq!(journalpost["saksbehandler_enhet"], "M00002");
         assert_eq!(journalpost["dokument_dato"], "2025-10-14T00:00:00");
         assert_eq!(journalpost["saksbehandler"], Value::Null);
         assert_eq!(
