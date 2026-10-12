@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use domain::eksekvering::id::SkuffenSakId;
 use uuid::Uuid;
 
 use crate::command::{Command, CommandEnvelope};
@@ -30,4 +31,8 @@ pub trait CommandRepository: Send + Sync {
     ) -> Result<Mottaksresultat, anyhow::Error>;
 
     async fn marker_dispatchet(&self, command_id: Uuid) -> Result<(), anyhow::Error>;
+
+    /// Kobler kommandoen til saken den gjelder. Første kobling vinner, så en
+    /// replay ikke kan flytte kommandoen til en annen sak.
+    async fn knytt_sak(&self, command_id: Uuid, sak_id: SkuffenSakId) -> Result<(), anyhow::Error>;
 }

@@ -622,10 +622,10 @@ impl EksekverOperasjonService {
     }
 
     /// Terminal feil publiseres umiddelbart, ikke ved quiescence (SKU-0016 R8).
-    /// Foldet er monotont — når én operasjon har feilet terminalt kan
-    /// resultatet aldri gå tilbake til ok — så eventet er sant i det øyeblikket
-    /// det sendes og kan aldri trekkes tilbake.
-    ///
+    /// Foldet er monotont i ordinær behandling — når én operasjon har feilet
+    /// terminalt kan resultatet ikke gå tilbake til ok — så eventet er sant i
+    /// det øyeblikket det sendes. Bare en eksplisitt admin retry kan åpne det
+    /// igjen (SKU-0023).
     async fn publiser_command_outcome(
         &self,
         command: &CommandMetadata,

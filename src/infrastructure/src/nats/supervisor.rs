@@ -20,17 +20,19 @@ pub mod tasknavn {
     pub const COMMAND_LISTENER: &str = "command_listener";
     pub const VALIDATION_LISTENER: &str = "validation_listener";
     pub const ADMIN_LISTENER: &str = "admin_listener";
+    pub const ADMIN_RETRY_LISTENER: &str = "admin_retry_listener";
     pub const DEKOMPONERING_LISTENER: &str = "dekomponering_listener";
     pub const EXECUTION_WORKER: &str = "execution_worker";
 
     /// Alle tasks som kjører under supervisor.
-    pub const ALLE: [&str; 8] = [
+    pub const ALLE: [&str; 9] = [
         QUERY_LISTENER,
         READY_REPLIER,
         MEDIA_LISTENER,
         COMMAND_LISTENER,
         VALIDATION_LISTENER,
         ADMIN_LISTENER,
+        ADMIN_RETRY_LISTENER,
         DEKOMPONERING_LISTENER,
         EXECUTION_WORKER,
     ];

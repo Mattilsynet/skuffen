@@ -39,7 +39,7 @@ Normative regler for hvordan kode, dokumentasjon og agentarbeid skal se ut i Sku
 5. **Observability og safe logging:**
     - **Traceability:** Logging på tvers av lag (HTTP -> Domain -> DB). Bruk strukturert logging (f.eks. `tracing`) med correlation IDs/spans.
     - **Sanitization:** Ingen PII eller secrets i logs. Logg flyt og outcome, ikke sensitive payloads.
-    - **Unntak, `utfort_av` i admin read:** Admin read-listeneren logger den selvdeklarerte operatøridentifikatoren `utfort_av` på `info!`, én linje per request. Dette er det eneste menneskeidentifiserende feltet som er tillatt på `info!`. Verdien trimmes, avvises ved blankhet, control characters eller mer enn 128 UTF-8 bytes, og lagres aldri. Unntaket gjelder ikke andre request- eller response-felt; rå `ArkivId` logges ikke. Se ADR `SKU-0018`.
+    - **Unntak, `utfort_av` i admin read og admin retry:** Admin-listenerne logger den selvdeklarerte operatøridentifikatoren `utfort_av` på `info!` — admin read én linje per request, admin retry ved start og ved svar. Dette er det eneste menneskeidentifiserende feltet som er tillatt på `info!`. Verdien trimmes, avvises ved blankhet, control characters eller mer enn 128 UTF-8 bytes, og lagres aldri. Unntaket gjelder ikke andre request- eller response-felt; rå `ArkivId` logges ikke. Se ADR `SKU-0018` og `SKU-0023`.
 6. **Type safety:** Utnytt type system ("Parse, don't validate").
 7. **DRY:** Gjenbruk kode der det gir mening. Hold kodebasen minimal.
 8. **Comments:** Minimer kommentarer. Kun der det er nødvendig.

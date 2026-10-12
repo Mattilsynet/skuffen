@@ -32,11 +32,11 @@ const SAK_QUEUE_GROUP: &str = "skuffen-admin-read-sak-hent-v1";
 /// `utfort_av` er selvdeklarert attribusjon. Grensen hindrer loggmisbruk.
 const MAX_UTFORT_AV_BYTES: usize = 128;
 
-const INVALID_REQUEST: &str = "Invalid request format";
-const COMMAND_NOT_FOUND: &str = "Command not found";
-const SAK_NOT_FOUND: &str = "Sak not found";
-const RESPONSE_TOO_LARGE: &str = "Response too large";
-const INTERNAL_ERROR: &str = "Internal error";
+pub(crate) const INVALID_REQUEST: &str = "Invalid request format";
+pub(crate) const COMMAND_NOT_FOUND: &str = "Command not found";
+pub(crate) const SAK_NOT_FOUND: &str = "Sak not found";
+pub(crate) const RESPONSE_TOO_LARGE: &str = "Response too large";
+pub(crate) const INTERNAL_ERROR: &str = "Internal error";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdminAction {
@@ -376,19 +376,19 @@ struct AdminSvar {
     key_type: &'static str,
 }
 
-struct UgyldigRequest {
-    payload: Vec<u8>,
+pub(crate) struct UgyldigRequest {
+    pub(crate) payload: Vec<u8>,
 }
 
 impl UgyldigRequest {
-    fn ny() -> Self {
+    pub(crate) fn ny() -> Self {
         Self {
             payload: feilsvar(INVALID_REQUEST),
         }
     }
 }
 
-fn feilsvar(message: &str) -> Vec<u8> {
+pub(crate) fn feilsvar(message: &str) -> Vec<u8> {
     serde_json::to_vec(&NatsResponse::<()>::Error {
         message: message.to_string(),
     })
@@ -397,7 +397,9 @@ fn feilsvar(message: &str) -> Vec<u8> {
 
 /// `ArkivId` er fri tekst i kontrakten og kan inneholde historisk eller
 /// uventet innhold; attribusjonsloggen bruker derfor bare key-typen.
-fn nokkel_logg(key: &lib_schemas::skuffen::admin::AdminSakKeyV1) -> (&'static str, String) {
+pub(crate) fn nokkel_logg(
+    key: &lib_schemas::skuffen::admin::AdminSakKeyV1,
+) -> (&'static str, String) {
     use lib_schemas::skuffen::admin::AdminSakKeyV1;
     match key {
         AdminSakKeyV1::SkuffenId(id) => ("skuffen_id", uuid_logg(*id)),
@@ -412,7 +414,7 @@ fn uuid_logg(id: Uuid) -> String {
 
 /// Trimmer, avviser blank verdi og control characters, og setter en eksplisitt
 /// øvre grense. Verdien sendes ikke inn i application-laget.
-fn valider_utfort_av(verdi: &str) -> Result<String, UgyldigRequest> {
+pub(crate) fn valider_utfort_av(verdi: &str) -> Result<String, UgyldigRequest> {
     let trimmet = verdi.trim();
     if trimmet.is_empty()
         || trimmet.len() > MAX_UTFORT_AV_BYTES

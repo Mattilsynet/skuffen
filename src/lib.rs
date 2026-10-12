@@ -75,6 +75,13 @@ pub async fn run() -> anyhow::Result<()> {
         helse.clone(),
         shutdown.clone(),
     );
+    let admin_retry_listener = infrastructure::bootstrap::build_admin_retry_listener(
+        runtime.nats.clone(),
+        runtime.db_pool.clone(),
+        runtime.use_fake_sikri,
+        helse.clone(),
+        shutdown.clone(),
+    );
     let media_nats = runtime.nats.clone();
     let media_store = runtime.media_store.clone();
     let (eksekvering_listener, eksekvering_worker) =
@@ -173,6 +180,17 @@ pub async fn run() -> anyhow::Result<()> {
         "admin_listener",
         TaskCriticality::Degraded,
         async move { admin_listener.run().await.context("admin listener failed") },
+    );
+    spawn_named_task(
+        &mut tasks,
+        "admin_retry_listener",
+        TaskCriticality::Degraded,
+        async move {
+            admin_retry_listener
+                .run()
+                .await
+                .context("admin retry listener failed")
+        },
     );
     spawn_named_task(
         &mut tasks,

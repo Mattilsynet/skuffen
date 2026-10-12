@@ -11,6 +11,7 @@ Subjects and flows:
 - `arkiv.request.bruker.mt_enheter` (NATS core): live read/query stub returning `Not implemented`
 - `arkiv.admin.read.command.hent` (NATS core): admin read request-reply for one command and its current operasjon rows
 - `arkiv.admin.read.sak.hent` (NATS core): admin read request-reply for one sak with materialised local state
+- `arkiv.admin.write.retry.commands` and `arkiv.admin.write.retry.sak` (NATS core): admin retry request-reply for a command list or one case, respectively (SKU-0023)
 - `arkiv.command.inbox.<entity>.<command_id>` (JetStream): ingested commands
 - `arkiv.command.ready.<entity>.<command_id>` (JetStream): validated commands ready for execution
 - `arkiv.command.done.<entity>.<command_id>` (JetStream): terminal execution result
@@ -21,12 +22,13 @@ Durability and availability:
 - Durable consumers `validator` and `executor` use explicit ack and `num_replicas = 3`.
 - `validation_listener` and `eksekvering_listener` run in restart loops that recreate stream/consumer state after NATS disruptions.
 - `admin_listener` is degradable. It queue-subscribes to the two exact admin subjects with the stable queue groups `skuffen-admin-read-command-hent-v1` and `skuffen-admin-read-sak-hent-v1`, so only one instance answers during deploy overlap. Both subscriptions run under one `TaskSupervisor::background`; a subscription that ends returns `Err` so the supervisor restarts both.
+- `admin_retry_listener` is separate from admin read. It queue-subscribes to `arkiv.admin.write.retry.commands` and `arkiv.admin.write.retry.sak` with the stable queue groups `skuffen-admin-write-retry-commands-v1` and `skuffen-admin-write-retry-sak-v1`, respectively. The subscriptions are supervised together; either stream ending restarts both. Write access is granted per subject in NATS.
 - Shutdown is cancellation-aware end to end: supervisor backoff waits on the shutdown token, and the root runtime gives tasks eight seconds to finish before aborting the rest. That keeps us inside Cloud Run's ten seconds.
 - `command_listener` and `media_listener` are intake-critical. The command listener has a bounded restart budget; the session-based media server remains critical without an outer restart loop, so a stopped server crashes the process and Cloud Run can replace the instance. During shutdown it stops begin intake and keeps receiver sessions available for a five-second grace period.
 
 Database state:
 - `entitet`: master for `skuffen_id` (client_reference / arkiv_id)
-- `command`: mottaksjournal, holder `correlation_id` og dispatch-milepælene
+- `command`: mottaksjournal, holder `correlation_id`, dispatch-milepælene og `sak_id` (saken kommandoen gjelder, registrert ved mottak)
 - `sak_tilstand`, `journalpost_tilstand`, `dokument_tilstand`: materialiserte fakta
 - `operasjon`, `operasjon_forsok`: eksekveringstilstand og forsøkshistorikk
 
@@ -149,6 +151,7 @@ Handlers using this pattern:
 - `validation_listener` (`nats.validate`)
 - `dekomponering_listener` (`nats.dekomponer`)
 - `admin_listener` (`admin.read`)
+- `admin_retry_listener` (`admin.write`)
 - `NatsReplier` (`query.handle`)
 
 ## Admin read attribution logging
@@ -169,6 +172,38 @@ addresses and document metadata are never logged. `utfort_av` is the only
 human-identifying field permitted at `info!`, and the listener rejects blank
 values, control characters and anything over 128 UTF-8 bytes.
 
+## Admin retry attribution logging
+
+Admin retry (SKU-0023) carries the same mandatory `utfort_av`, validated the same
+way. Because retry has side effects, attribution is logged before the work
+starts and again when the reply is published:
+- `admin retry startet` with `admin_action = "write.retry.commands"` or
+  `"write.retry.sak"`, according to the subject, and `utfort_av`
+  and `selection`: `commands` includes `command_ids`; `sak` includes `key_type`
+  and `lookup`, with raw `ArkivId` omitted as in admin read.
+- Case selection logs the resolved `command_ids` before any retry work starts,
+  within the same trace. The `admin.retry.sak` span carries `selection = "sak"`;
+  it never captures the raw key.
+- `admin retry: forsøker <command_type>` per selected command, from
+  `AdminRetryService`, with `command_id`, `command_type` and `sak_id`, before
+  release and validation. This records intent, not a completed handler call
+  or a new command outcome.
+- `admin retry utført` with `resultat`: `ok` | `invalid_request` | `not_found` |
+  `original_not_available` | `unresolved_outcome` | `busy` | `error`
+
+After that the ordinary milestones take over: a revalidated command logs
+`kommando validert` / `avvist` from `ValidateCommandService`, and freed
+operations are picked up by the executor. A search on `jsonPayload.command_id`
+therefore shows the original rejection, the admin action and the new attempt in
+one sequence. Payloads are never logged.
+
+Admin returns only an acknowledgement, not per-command outcomes or counts.
+Technical handler errors retain the command ID in the logged error context and
+stop subsequent revalidation; earlier release/dispatch effects may remain.
+Transient validation is logged by the validator but emits no status event and
+has no automatic redelivery when called directly by admin. Unchanged completed
+work also emits no new status event.
+
 The `lib-nats` media server owns its own protocol handlers and is not included.
 
 ## Span coverage
@@ -177,8 +212,9 @@ Infrastructure owns the transport boundary; application owns the unit of work.
 
 | Span | Layer | Boundary |
 |---|---|---|
-| `nats.command_batch`, `nats.validate`, `nats.dekomponer`, `admin.read`, `query.handle` | infrastructure | One inbound message |
+| `nats.command_batch`, `nats.validate`, `nats.dekomponer`, `admin.read`, `admin.write`, `query.handle` | infrastructure | One inbound message |
 | `command.ingest`, `command.validate`, `command.dekomponer` | application | One command |
+| `admin.retry`, `admin.retry.sak` | application | One admin retry request / case selection |
 | `operasjon.utfor` | application | One operation attempt |
 | `operasjon.evaluer` | application | One evaluation pass |
 | `sikri.*`, `nats.publish.*`, `sak.hent` | infrastructure | One outbound call |
@@ -206,6 +242,7 @@ known, and only once.
 |---|---|
 | `kommandobatch mottatt og videresendt: <n> kommandoer` | `command_listener`, with `command_count` and `command_ids` |
 | `kommando mottatt og dispatchet: <command_type>` / `allerede dispatchet` | `IngestCommandService` |
+| `admin retry: forsøker <command_type>` | `AdminRetryService`, with `command_id`, `command_type` and `sak_id`, before release and validation |
 | `kommando validert: <command_type>` / `avvist` / `venter på ny levering` | `ValidateCommandService`, with `error_code` and `arsak` |
 | `kommando dekomponert: <command_type> til <n> operasjoner` | `DekomponerCommandService`, with `nye_operasjoner` |
 | `operasjon blokkert: <operasjonstype>` / `allerede utført` / `er ugyldig` | `EksekverOperasjonService`, with `grunn` |

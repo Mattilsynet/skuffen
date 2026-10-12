@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use domain::eksekvering::id::SkuffenSakId;
 use domain::eksekvering::operasjon::EntitetType;
 use domain::eksekvering::typer::{CommandEvent, CommandStatus, CommandTypeCode, Statuskontekst};
 use uuid::Uuid;
@@ -82,6 +83,7 @@ impl IngestCommandService {
         }
 
         self.registrer_entiteter(&envelope).await?;
+        self.knytt_sak(&envelope).await?;
 
         self.dispatcher
             .dispatch(&envelope)
@@ -160,6 +162,22 @@ impl IngestCommandService {
         Ok(())
     }
 
+    /// Kobler mottaksraden til saken før validering, slik at en kommando som
+    /// avvises før dekomponering fortsatt kan finnes fra saken. En ukjent sak
+    /// gir ingen kobling; validering avviser den.
+    async fn knytt_sak(&self, envelope: &CommandEnvelope<Command>) -> Result<()> {
+        let sak_id = finn_sak_id(self.entitet_repo.as_ref(), &envelope.payload.sak_key())
+            .await
+            .context("failed to resolve sak for command")?;
+        if let Some(sak_id) = sak_id {
+            self.command_repo
+                .knytt_sak(envelope.command_id, sak_id)
+                .await
+                .context("failed to link command to sak")?;
+        }
+        Ok(())
+    }
+
     /// En arkiv-id er et eksternt faktum vi bringer inn i vår identitetsmodell;
     /// den kan derfor opprettes. En client_reference kan ikke — den må komme
     /// fra en kommando som faktisk oppretter saken.
@@ -190,6 +208,30 @@ impl IngestCommandService {
             .context("failed to register entitet")?;
         Ok(())
     }
+}
+
+/// Rent oppslag av sakens `skuffen_id`, uten å opprette noe. Referansen må
+/// peke på en sak; en gjenbrukt `client_reference` for en journalpost gir
+/// ingen treff.
+pub async fn finn_sak_id(
+    entitet_repo: &dyn EntitetRepository,
+    sak_key: &SakKey,
+) -> Result<Option<SkuffenSakId>> {
+    let entitet = match sak_key {
+        SakKey::ClientReference(client_reference) => {
+            entitet_repo
+                .hent_for_client_reference(*client_reference)
+                .await?
+        }
+        SakKey::ArkivId(arkiv_id) => {
+            entitet_repo
+                .hent_for_arkiv_id(EntitetType::Sak, arkiv_id)
+                .await?
+        }
+    };
+    Ok(entitet
+        .filter(|entitet| entitet.entitet_type == EntitetType::Sak)
+        .map(|entitet| SkuffenSakId::from(entitet.skuffen_id)))
 }
 
 pub fn command_type(command: &Command) -> CommandTypeCode {

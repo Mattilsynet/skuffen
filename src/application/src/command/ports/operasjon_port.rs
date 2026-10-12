@@ -48,7 +48,8 @@ pub enum CommandOutcome {
     Uavklart,
     /// Alle operasjoner terminalt ok.
     Fullfort,
-    /// Minst én terminalt feilet. Monotont: kan ikke gå tilbake.
+    /// Minst én terminalt feilet. Går bare tilbake når en operatør eksplisitt
+    /// frigir arbeidet med admin retry (SKU-0023).
     Feilet,
     /// Minst én operasjon har ukjent utfall etter recovery (SKU-0016 R5).
     /// Ikke terminal — den kan bli `ok` etter admin write.
@@ -98,8 +99,9 @@ pub trait OperasjonRepository: Send + Sync {
     /// Skriver entitet, state og operasjonsrader i én transaksjon.
     /// Operasjonslisten kommer fra domenets `dekomponer`.
     ///
-    /// Idempotent via `UNIQUE (command_id, operasjonstype, entitet_id)`, så en
-    /// replay setter inn null rader.
+    /// Idempotent: er kommandoen allerede dekomponert, skrives ingenting og
+    /// resultatet er null nye rader. En replay kan dermed ikke overskrive
+    /// fakta med payloaden fra en eldre levering.
     async fn lagre_dekomponering(
         &self,
         plan: Dekomponeringsplan,

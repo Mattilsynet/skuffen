@@ -1,3 +1,4 @@
+use domain::eksekvering::typer::CommandTypeCode;
 use lib_schemas::skuffen::command::commands::Command;
 use uuid::Uuid;
 
@@ -26,18 +27,42 @@ pub fn routing_token_from_wire_command(command: &Command) -> &'static str {
     }
 }
 
+/// Samme token som [`routing_token_from_wire_command`], utledet fra den
+/// lagrede kommandotypen når payloaden ikke er tilgjengelig.
+pub fn routing_token_from_command_type(command_type: CommandTypeCode) -> &'static str {
+    match command_type {
+        CommandTypeCode::OpprettSak
+        | CommandTypeCode::AvsluttSak
+        | CommandTypeCode::SettSaksansvarlig => "sak",
+        CommandTypeCode::OpprettInngaaendeJournalpost
+        | CommandTypeCode::OpprettUtgaaendeJournalpost
+        | CommandTypeCode::OpprettInterntNotatJournalpost => "journalpost",
+    }
+}
+
 pub fn command_subject(stage: CommandStreamStage, command: &Command, command_id: Uuid) -> String {
+    command_subject_for_token(stage, routing_token_from_wire_command(command), command_id)
+}
+
+pub fn command_subject_for_token(
+    stage: CommandStreamStage,
+    routing_token: &str,
+    command_id: Uuid,
+) -> String {
     format!(
         "arkiv.command.{}.{}.{}",
         stage.as_wire_token(),
-        routing_token_from_wire_command(command),
+        routing_token,
         command_id
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandStreamStage, command_subject, routing_token_from_wire_command};
+    use super::{
+        CommandStreamStage, command_subject, routing_token_from_command_type,
+        routing_token_from_wire_command,
+    };
     use lib_schemas::skuffen::command::commands::Command;
     use lib_schemas::skuffen::command::journalpost::{
         JournalpostCommon, Korrespondansepart, OpprettInngåendeJournalpost,
@@ -155,6 +180,25 @@ mod tests {
                 "journalpost",
             ),
         ]
+    }
+
+    #[test]
+    fn token_fra_lagret_kommandotype_stemmer_med_token_fra_payload() {
+        for (command_id, command, expected_token) in command_cases() {
+            let envelope = crate::command::wire_mapper::map_wire_envelope(
+                lib_schemas::skuffen::command::commands::CommandEnvelope {
+                    command_id,
+                    correlation_id: None,
+                    payload: command,
+                },
+            );
+            let command_type =
+                application::command::services::ingest_command::command_type(&envelope.payload);
+            assert_eq!(
+                routing_token_from_command_type(command_type),
+                expected_token
+            );
+        }
     }
 
     #[test]

@@ -30,6 +30,19 @@ impl Command {
             Self::AvsluttSak(_) | Self::SettSaksansvarlig(_) => None,
         }
     }
+
+    /// Saken kommandoen gjelder. For `OpprettSak` er det saken den oppretter;
+    /// for journalposter er det sakens referanse, ikke journalpostens egen.
+    pub fn sak_key(&self) -> SakKey {
+        match self {
+            Self::OpprettSak(command) => SakKey::ClientReference(command.client_reference),
+            Self::OpprettInngaaendeJournalpost(command)
+            | Self::OpprettUtgaaendeJournalpost(command)
+            | Self::OpprettInterntNotatJournalpost(command) => command.felles().sak_key.clone(),
+            Self::AvsluttSak(command) => command.sak_key.clone(),
+            Self::SettSaksansvarlig(command) => command.sak_key.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +266,23 @@ pub mod test_fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sak_key_er_sakens_referanse_ogsaa_for_journalposter() {
+        use super::test_fixtures::{avslutt_sak, internt_notat, opprett_sak};
+
+        let sak = Uuid::new_v4();
+        assert_eq!(opprett_sak(sak).sak_key(), SakKey::ClientReference(sak));
+
+        let notat = internt_notat(SakKey::ClientReference(sak));
+        assert_eq!(notat.sak_key(), SakKey::ClientReference(sak));
+        assert_ne!(notat.client_reference(), Some(sak));
+
+        assert_eq!(
+            avslutt_sak(SakKey::ArkivId("2026/1".to_string())).sak_key(),
+            SakKey::ArkivId("2026/1".to_string())
+        );
+    }
 
     #[test]
     fn new_sets_command_id_and_payload_without_correlation_id() {

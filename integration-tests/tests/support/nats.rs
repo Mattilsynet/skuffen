@@ -509,3 +509,79 @@ pub async fn wait_for_queue_members(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Admin retry
+// ---------------------------------------------------------------------------
+
+pub const ADMIN_RETRY_SAK_SUBJECT: &str = "arkiv.admin.write.retry.sak";
+pub const ADMIN_RETRY_COMMANDS_SUBJECT: &str = "arkiv.admin.write.retry.commands";
+
+/// Retry-listeneren subscriber uavhengig av readiness-proben, så første
+/// forespørsel kan treffe før den er oppe.
+pub async fn admin_retry(nats_url: &str, command_ids: &[uuid::Uuid]) -> Result<Value> {
+    let payload =
+        serde_json::json!({ "utfort_av": "test-operator", "command_ids": command_ids }).to_string();
+    admin_retry_request(nats_url, ADMIN_RETRY_COMMANDS_SUBJECT, &payload).await
+}
+
+pub async fn wait_for_admin_retry_responders(nats_url: &str) -> Result<()> {
+    for subject in [ADMIN_RETRY_SAK_SUBJECT, ADMIN_RETRY_COMMANDS_SUBJECT] {
+        let svar = admin_retry_request(nats_url, subject, "{}").await?;
+        anyhow::ensure!(
+            svar["status"] == "Error" && svar["payload"]["message"] == "Invalid request format",
+            "uventet admin retry-svar på {subject}: {svar}"
+        );
+    }
+    Ok(())
+}
+
+async fn admin_retry_request(nats_url: &str, subject: &str, payload: &str) -> Result<Value> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match admin_raw_request(nats_url, subject, payload).await {
+            Err(err) if Instant::now() < deadline && err.to_string().contains("No responders") => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            svar => return svar,
+        }
+    }
+}
+
+/// Venter på en bestemt hendelse, også etter at kommandoen har vært terminal.
+pub async fn wait_for_command_event(
+    nats_url: &str,
+    command_id: uuid::Uuid,
+    hendelse: SkuffenCommandEvent,
+    timeout: Duration,
+) -> Result<Vec<SkuffenCommandStatusV1>> {
+    let client = async_nats::connect(nats_url).await?;
+    let stream = jetstream::new(client).get_stream("arkiv_status").await?;
+    let consumer = stream
+        .create_consumer(jetstream::consumer::pull::Config {
+            durable_name: None,
+            ack_policy: jetstream::consumer::AckPolicy::None,
+            deliver_policy: jetstream::consumer::DeliverPolicy::All,
+            filter_subject: format!("arkiv.status.{command_id}.command"),
+            ..Default::default()
+        })
+        .await?;
+    let mut messages = consumer.messages().await?;
+
+    let deadline = Instant::now() + timeout;
+    let mut events = Vec::new();
+    loop {
+        let wait_for = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| anyhow::anyhow!("Timed out waiting for {hendelse:?}: {events:?}"))?;
+        let Ok(Some(message)) = tokio::time::timeout(wait_for, messages.next()).await else {
+            anyhow::bail!("Timed out waiting for {hendelse:?}: {events:?}");
+        };
+        let event: SkuffenCommandStatusV1 = serde_json::from_slice(&message?.payload)?;
+        let ferdig = event.hendelse == hendelse;
+        events.push(event);
+        if ferdig {
+            return Ok(events);
+        }
+    }
+}

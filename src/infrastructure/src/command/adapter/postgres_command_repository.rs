@@ -3,6 +3,7 @@ use application::command::ports::command_port::{CommandRepository, Mottaksresult
 use application::command::services::ingest_command::command_type;
 use application::command::{Command, CommandEnvelope};
 use async_trait::async_trait;
+use domain::eksekvering::id::SkuffenSakId;
 use lib_sql::database_config::DbPool;
 use uuid::Uuid;
 
@@ -67,6 +68,16 @@ impl CommandRepository for PostgresCommandRepository {
         .execute(&self.pool)
         .await
         .context("failed to mark command dispatched")?;
+        Ok(())
+    }
+
+    async fn knytt_sak(&self, command_id: Uuid, sak_id: SkuffenSakId) -> Result<()> {
+        sqlx::query("UPDATE command SET sak_id = $2 WHERE command_id = $1 AND sak_id IS NULL")
+            .bind(command_id)
+            .bind(Uuid::from(sak_id))
+            .execute(&self.pool)
+            .await
+            .context("failed to link command to sak")?;
         Ok(())
     }
 }

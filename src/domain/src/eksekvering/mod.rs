@@ -1,3 +1,4 @@
+pub mod gjenopptak;
 pub mod html_template;
 pub mod id;
 pub mod operasjon;

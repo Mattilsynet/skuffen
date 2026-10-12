@@ -217,6 +217,22 @@ impl OperasjonRepository for PostgresOperasjonRepository {
     ) -> Result<Dekomponeringsresultat> {
         let mut tx = self.pool.begin().await.context("failed to begin")?;
 
+        // Radlåsen serialiserer dekomponeringer av samme kommando. En replay
+        // etter fullført dekomponering skal ikke skrive planen på nytt: den
+        // bærer payloaden fra da den ble sendt, og ville ellers kunnet
+        // overskrive ønsket saksansvarlig med en eldre verdi.
+        let allerede_dekomponert: Option<bool> = sqlx::query_scalar(
+            "SELECT dekomponert_at IS NOT NULL FROM command WHERE command_id = $1 FOR UPDATE",
+        )
+        .bind(plan.command_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .context("failed to lock command for decomposition")?;
+        if allerede_dekomponert == Some(true) {
+            tx.commit().await.context("failed to end decomposition")?;
+            return Ok(Dekomponeringsresultat { nye_operasjoner: 0 });
+        }
+
         super::postgres_dekomponering::skriv_plan(&mut tx, &plan).await?;
 
         let mut nye = 0u64;
@@ -239,11 +255,16 @@ impl OperasjonRepository for PostgresOperasjonRepository {
             nye += resultat.rows_affected();
         }
 
-        sqlx::query("UPDATE command SET dekomponert_at = now() WHERE command_id = $1")
-            .bind(plan.command_id)
-            .execute(&mut *tx)
-            .await
-            .context("failed to mark decomposed")?;
+        sqlx::query(
+            r#"UPDATE command
+               SET dekomponert_at = now(), sak_id = COALESCE(sak_id, $2)
+               WHERE command_id = $1"#,
+        )
+        .bind(plan.command_id)
+        .bind(Uuid::from(plan.sak.sak_id))
+        .execute(&mut *tx)
+        .await
+        .context("failed to mark decomposed")?;
 
         tx.commit()
             .await

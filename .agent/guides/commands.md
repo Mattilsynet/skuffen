@@ -126,6 +126,61 @@ nats request arkiv.admin.read.sak.hent \
 `NatsResponse<T>`; stabile feilmeldinger er `Invalid request format`,
 `Command not found`, `Sak not found`, `Response too large` og `Internal error`.
 
+## Admin retry over NATS
+
+Admin retry (SKU-0023) slipper stoppede kommandoer inn i ordinær behandling
+igjen, for eksempel etter at en sak er gjenåpnet i arkivet. Egen skrivetilgang,
+adskilt fra admin read.
+
+```bash
+nats request arkiv.admin.write.retry.commands \
+  '{"utfort_av":"test-operator","command_ids":["00000000-0000-0000-0000-000000000001"]}'
+```
+
+Retry per sak har eget subject:
+
+```bash
+nats request arkiv.admin.write.retry.sak \
+  '{"utfort_av":"test-operator","key":{"type":"clientReference","value":"00000000-0000-0000-0000-000000000002"}}'
+```
+
+- `retry.commands` krever `command_ids`; `retry.sak` krever `key`. Begge krever
+  `utfort_av`. Feil request-type eller begge feltene sammen avvises.
+  Saksnøkkelen støtter `skuffenId`, `clientReference` og `arkivId`, som admin read.
+- Bare de to eksakte subjects støttes; ingen alias eller wildcard-subscription.
+  NATS-skrivetilgang gis per subject, separat fra admin read.
+- Saksutvalget leses fra ett lokalt snapshot, i mottaksrekkefølge (command-id
+  bryter lik mottakstid). Fullførte kommandoer inngår, men røres ikke.
+  Nye kommandoer etter oppslaget er ikke del av forespørselen.
+- Utvalget bruker `command.sak_id`, med operasjonskoblingen som fallback når
+  kolonnen er `NULL`. Historiske avvisninger uten begge koblinger finnes ikke
+  ved saksoppslag; bruk eksplisitte command-id-er for disse.
+- Ukjent lokal sak gir `Sak not found`. Kjent sak uten tilknyttede kommandoer
+  gir vanlig `Ok` uten å utføre arbeid.
+- Kommandoer uten operasjoner revalideres med originalen fra inbox-strømmen.
+- Feilede operasjoner blir `klar`; `retry_venter`/`blokkert` fremskyndes.
+  Pågående og fullført arbeid røres ikke.
+- `krever_avklaring` på en berørt sak avviser hele forespørselen før frigivelse
+  og revalidering. Planlegging kan allerede ha lagret manglende sakskoblinger.
+- Ved låskonflikt returneres vanlig `Error` med meldingen
+  `Saken har operasjoner som utføres. Prøv igjen senere`.
+  Admin venter ikke og forsøker ikke automatisk igjen; operatøren må sende et nytt kall.
+- Vellykket admin-kall gir `{"status":"Ok","payload":null}`. Det kvitterer
+  for admin-handlingen, ikke for godkjent validering eller fullført arkivering.
+  Admin har ingen egen resultatmodell; følg ordinære statushendelser og logger.
+- Teknisk feil gir `Internal error` og stopper videre revalidering i kallet.
+  Arbeid som allerede er frigitt eller sendt videre rulles ikke tilbake.
+  Timeout eller manglende svar betyr heller ikke at ingenting ble gjort.
+- Vanlig valideringsavvisning håndteres av validatoren og gir ikke adminfeil.
+  Midlertidig uavklart validering logges av validatoren, men direkte admin-kall
+  gir verken automatisk ny levering eller et nytt statusevent i dette tilfellet.
+- Stabile feilmeldinger: `Invalid request format`, `Command not found`, `Sak not found`,
+  `Original command not available`, `Sak has operations with unresolved outcome`,
+  `Saken har operasjoner som utføres. Prøv igjen senere`, `Internal error`.
+- Maks 100 unike kommandoer per forespørsel, også ved saksutvalg. Større utvalg
+  avvises med `Invalid request format` før arbeid slippes inn; ingen trunkering
+  eller automatisk batching. Duplikater i en kommandoliste behandles én gang.
+
 ## Useful targeted commands
 
 - Check one crate: `cargo check -p infrastructure`

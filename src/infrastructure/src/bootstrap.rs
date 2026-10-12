@@ -12,8 +12,11 @@ use lib_nats::jetstream;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
+use crate::admin::adapter::nats_original_command_kilde::NatsOriginalCommandKilde;
 use crate::admin::adapter::postgres_admin_read_repository::PostgresAdminReadRepository;
+use crate::admin::adapter::postgres_admin_retry_repository::PostgresAdminRetryRepository;
 use crate::admin::nats::listener::{AdminListener, NatsAdminTransport};
+use crate::admin::nats::retry_listener::AdminRetryListener;
 use crate::command::adapter::fake_arkiv_gateway::FakeArkivGateway;
 use crate::command::adapter::fake_command_state_repo::FakeArkivSakTilstandRepository;
 use crate::command::adapter::html2pdf_renderer_adapter::{
@@ -195,6 +198,43 @@ pub fn build_admin_listener(
     AdminListener::new(
         std::sync::Arc::new(NatsAdminTransport::new(nats)),
         service,
+        helse,
+        shutdown,
+    )
+}
+
+/// Revalidering går gjennom den ordinære validatoren. Eneste forskjell er
+/// meldings-id-en på ready-publiseringen, så en tidligere levering av samme
+/// kommando ikke dedupliserer bort det nye forsøket.
+pub fn build_admin_retry_listener(
+    nats: NatsClient,
+    db_pool: lib_sql::database_config::DbPool,
+    use_fake_sikri: bool,
+    helse: Helse,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> AdminRetryListener {
+    use application::admin::services::admin_retry_service::AdminRetryService;
+    use application::command::services::validate_command::ValidateCommandService;
+
+    let validator = ValidateCommandService::new(
+        command_state_repository(use_fake_sikri),
+        Box::new(PostgresEntitetRepository::new(db_pool.clone())),
+        Box::new(NatsValidatedCommandDispatcher::for_admin_revalidering(
+            nats.clone(),
+        )),
+        Box::new(NatsStatusPublisher::new(nats.clone())),
+    );
+    let service = AdminRetryService::new(
+        std::sync::Arc::new(PostgresAdminRetryRepository::new(db_pool.clone())),
+        std::sync::Arc::new(NatsOriginalCommandKilde::new(nats.clone())),
+        std::sync::Arc::new(PostgresCommandRepository::new(db_pool.clone())),
+        std::sync::Arc::new(PostgresEntitetRepository::new(db_pool)),
+        validator,
+    );
+
+    AdminRetryListener::new(
+        std::sync::Arc::new(NatsAdminTransport::new(nats)),
+        std::sync::Arc::new(service),
         helse,
         shutdown,
     )

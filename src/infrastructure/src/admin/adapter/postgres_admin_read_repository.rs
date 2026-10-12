@@ -193,7 +193,7 @@ async fn sak_i_snapshot(
     }))
 }
 
-async fn hent_sak_identitet(
+pub(super) async fn hent_sak_identitet(
     tx: &mut Transaction<'_, Postgres>,
     key: AdminSakNokkel,
 ) -> Result<Option<AdminEntitetIdentitet>> {

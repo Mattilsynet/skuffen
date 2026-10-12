@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use domain::eksekvering::id::SkuffenSakId;
 use domain::eksekvering::operasjon::EntitetType;
 use domain::eksekvering::typer::{CommandEvent, CommandStatus, Operasjonstatus};
 use uuid::Uuid;
@@ -11,7 +12,7 @@ use crate::command::ports::command_port::{CommandRepository, Mottaksresultat};
 use crate::command::ports::entitet_port::{Entitet, EntitetRepository, NyEntitet};
 use crate::command::ports::status_publisher_port::StatusPublisher;
 use crate::command::services::ingest_command::IngestCommandService;
-use crate::command::{Command, CommandEnvelope, test_fixtures};
+use crate::command::{Command, CommandEnvelope, SakKey, test_fixtures};
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -22,6 +23,7 @@ use crate::command::{Command, CommandEnvelope, test_fixtures};
 #[derive(Clone, Default)]
 struct FakeCommandRepository {
     mottatt: Arc<Mutex<HashMap<Uuid, bool>>>,
+    saker: Arc<Mutex<HashMap<Uuid, SkuffenSakId>>>,
 }
 
 #[async_trait]
@@ -43,6 +45,15 @@ impl CommandRepository for FakeCommandRepository {
 
     async fn marker_dispatchet(&self, command_id: Uuid) -> Result<(), anyhow::Error> {
         self.mottatt.lock().unwrap().insert(command_id, true);
+        Ok(())
+    }
+
+    async fn knytt_sak(&self, command_id: Uuid, sak_id: SkuffenSakId) -> Result<(), anyhow::Error> {
+        self.saker
+            .lock()
+            .unwrap()
+            .entry(command_id)
+            .or_insert(sak_id);
         Ok(())
     }
 }
@@ -84,10 +95,20 @@ impl EntitetRepository for FakeEntitetRepository {
 
     async fn hent_for_arkiv_id(
         &self,
-        _entitet_type: EntitetType,
-        _arkiv_id: &str,
+        entitet_type: EntitetType,
+        arkiv_id: &str,
     ) -> Result<Option<Entitet>, anyhow::Error> {
-        Ok(None)
+        Ok(self
+            .arkiv
+            .lock()
+            .unwrap()
+            .get(arkiv_id)
+            .map(|skuffen_id| Entitet {
+                skuffen_id: *skuffen_id,
+                entitet_type,
+                client_reference: None,
+                arkiv_id: Some(arkiv_id.to_string()),
+            }))
     }
 
     async fn hent_eller_opprett_for_arkiv_id(
@@ -367,4 +388,65 @@ async fn batch_beholder_rekkefolgen() {
 
     assert_eq!(command_ids, ids);
     assert_eq!(*dispatcher.dispatched.lock().unwrap(), ids);
+}
+
+#[tokio::test]
+async fn mottak_kobler_kommandoen_til_saken_for_validering() {
+    let command = FakeCommandRepository::default();
+    let entitet = FakeEntitetRepository::default();
+    let service = build_service(
+        command.clone(),
+        entitet.clone(),
+        FakeCommandDispatcher::default(),
+        FakeStatusPublisher::default(),
+    );
+
+    let sak = Uuid::new_v4();
+    let opprett = test_fixtures::opprett_sak_envelope(Uuid::new_v4(), sak);
+    let notat = test_fixtures::envelope(test_fixtures::internt_notat(SakKey::ClientReference(sak)));
+    let avslutt = test_fixtures::envelope(test_fixtures::avslutt_sak(SakKey::ArkivId(
+        "2026/7".to_string(),
+    )));
+    let ids = [opprett.command_id, notat.command_id, avslutt.command_id];
+
+    service.handle(vec![opprett, notat, avslutt]).await.unwrap();
+
+    let sak_id = SkuffenSakId::from(
+        entitet
+            .hent_for_client_reference(sak)
+            .await
+            .unwrap()
+            .unwrap()
+            .skuffen_id,
+    );
+    let arkiv_sak_id = SkuffenSakId::from(entitet.arkiv.lock().unwrap()["2026/7"]);
+    let saker = command.saker.lock().unwrap();
+    assert_eq!(saker.get(&ids[0]), Some(&sak_id));
+    assert_eq!(
+        saker.get(&ids[1]),
+        Some(&sak_id),
+        "journalposten kobles til saken, ikke til sin egen entitet"
+    );
+    assert_eq!(saker.get(&ids[2]), Some(&arkiv_sak_id));
+}
+
+#[tokio::test]
+async fn ukjent_sak_gir_ingen_kobling_og_stopper_ikke_mottaket() {
+    let command = FakeCommandRepository::default();
+    let dispatcher = FakeCommandDispatcher::default();
+    let service = build_service(
+        command.clone(),
+        FakeEntitetRepository::default(),
+        dispatcher.clone(),
+        FakeStatusPublisher::default(),
+    );
+
+    let avslutt = test_fixtures::envelope(test_fixtures::avslutt_sak(SakKey::ClientReference(
+        Uuid::new_v4(),
+    )));
+    let command_id = avslutt.command_id;
+    service.handle(vec![avslutt]).await.unwrap();
+
+    assert!(command.saker.lock().unwrap().get(&command_id).is_none());
+    assert_eq!(*dispatcher.dispatched.lock().unwrap(), vec![command_id]);
 }
