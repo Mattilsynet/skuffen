@@ -15,6 +15,7 @@ pub struct RetryGrunnlag {
     /// koblingen.
     pub sak_id: Option<SkuffenSakId>,
     pub dekomponert: bool,
+    pub forkastet: bool,
     pub operasjoner: Vec<Operasjonsstatus>,
 }
 

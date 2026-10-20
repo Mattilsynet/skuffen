@@ -12,6 +12,7 @@ Subjects and flows:
 - `arkiv.admin.read.command.hent` (NATS core): admin read request-reply for one command and its current operasjon rows
 - `arkiv.admin.read.sak.hent` (NATS core): admin read request-reply for one sak with materialised local state
 - `arkiv.admin.write.retry.commands` and `arkiv.admin.write.retry.sak` (NATS core): admin retry request-reply for a command list or one case, respectively (SKU-0023)
+- `arkiv.admin.write.forkast.commands` (NATS core): admin request-reply that discards a list of commands (SKU-0024)
 - `arkiv.command.inbox.<entity>.<command_id>` (JetStream): ingested commands
 - `arkiv.command.ready.<entity>.<command_id>` (JetStream): validated commands ready for execution
 - `arkiv.command.done.<entity>.<command_id>` (JetStream): terminal execution result
@@ -23,12 +24,13 @@ Durability and availability:
 - `validation_listener` and `eksekvering_listener` run in restart loops that recreate stream/consumer state after NATS disruptions.
 - `admin_listener` is degradable. It queue-subscribes to the two exact admin subjects with the stable queue groups `skuffen-admin-read-command-hent-v1` and `skuffen-admin-read-sak-hent-v1`, so only one instance answers during deploy overlap. Both subscriptions run under one `TaskSupervisor::background`; a subscription that ends returns `Err` so the supervisor restarts both.
 - `admin_retry_listener` is separate from admin read. It queue-subscribes to `arkiv.admin.write.retry.commands` and `arkiv.admin.write.retry.sak` with the stable queue groups `skuffen-admin-write-retry-commands-v1` and `skuffen-admin-write-retry-sak-v1`, respectively. The subscriptions are supervised together; either stream ending restarts both. Write access is granted per subject in NATS.
+- `admin_forkast_listener` queue-subscribes to `arkiv.admin.write.forkast.commands` with the stable queue group `skuffen-admin-write-forkast-commands-v1`. Write access is granted per subject in NATS.
 - Shutdown is cancellation-aware end to end: supervisor backoff waits on the shutdown token, and the root runtime gives tasks eight seconds to finish before aborting the rest. That keeps us inside Cloud Run's ten seconds.
 - `command_listener` and `media_listener` are intake-critical. The command listener has a bounded restart budget; the session-based media server remains critical without an outer restart loop, so a stopped server crashes the process and Cloud Run can replace the instance. During shutdown it stops begin intake and keeps receiver sessions available for a five-second grace period.
 
 Database state:
 - `entitet`: master for `skuffen_id` (client_reference / arkiv_id)
-- `command`: mottaksjournal, holder `correlation_id`, dispatch-milepælene og `sak_id` (saken kommandoen gjelder, registrert ved mottak)
+- `command`: mottaksjournal, holder `correlation_id`, `forkastet_at` (SKU-0024), dispatch-milepælene og `sak_id` (saken kommandoen gjelder, registrert ved mottak)
 - `sak_tilstand`, `journalpost_tilstand`, `dokument_tilstand`: materialiserte fakta
 - `operasjon`, `operasjon_forsok`: eksekveringstilstand og forsøkshistorikk
 
@@ -189,7 +191,7 @@ starts and again when the reply is published:
   release and validation. This records intent, not a completed handler call
   or a new command outcome.
 - `admin retry utført` with `resultat`: `ok` | `invalid_request` | `not_found` |
-  `original_not_available` | `unresolved_outcome` | `busy` | `error`
+  `discarded` | `original_not_available` | `unresolved_outcome` | `busy` | `error`
 
 After that the ordinary milestones take over: a revalidated command logs
 `kommando validert` / `avvist` from `ValidateCommandService`, and freed
@@ -204,6 +206,14 @@ Transient validation is logged by the validator but emits no status event and
 has no automatic redelivery when called directly by admin. Unchanged completed
 work also emits no new status event.
 
+## Admin forkast attribution logging
+
+Admin forkast (SKU-0024) logs `admin forkast startet` and `admin forkast utført`
+with `utfort_av` and `command_ids`, like admin retry, inside the `admin.forkast`
+span. A blocked `AvsluttSak`
+logs `avslutning venter på kommandoer uten operasjoner` with
+`udekomponerte_command_ids`.
+
 The `lib-nats` media server owns its own protocol handlers and is not included.
 
 ## Span coverage
@@ -215,6 +225,7 @@ Infrastructure owns the transport boundary; application owns the unit of work.
 | `nats.command_batch`, `nats.validate`, `nats.dekomponer`, `admin.read`, `admin.write`, `query.handle` | infrastructure | One inbound message |
 | `command.ingest`, `command.validate`, `command.dekomponer` | application | One command |
 | `admin.retry`, `admin.retry.sak` | application | One admin retry request / case selection |
+| `admin.forkast` | application | One admin forkast request |
 | `operasjon.utfor` | application | One operation attempt |
 | `operasjon.evaluer` | application | One evaluation pass |
 | `sikri.*`, `nats.publish.*`, `sak.hent` | infrastructure | One outbound call |

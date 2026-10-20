@@ -175,11 +175,31 @@ nats request arkiv.admin.write.retry.sak \
   Midlertidig uavklart validering logges av validatoren, men direkte admin-kall
   gir verken automatisk ny levering eller et nytt statusevent i dette tilfellet.
 - Stabile feilmeldinger: `Invalid request format`, `Command not found`, `Sak not found`,
-  `Original command not available`, `Sak has operations with unresolved outcome`,
+  `Command is discarded`, `Original command not available`, `Sak has operations with unresolved outcome`,
   `Saken har operasjoner som utføres. Prøv igjen senere`, `Internal error`.
 - Maks 100 unike kommandoer per forespørsel, også ved saksutvalg. Større utvalg
   avvises med `Invalid request format` før arbeid slippes inn; ingen trunkering
   eller automatisk batching. Duplikater i en kommandoliste behandles én gang.
+
+## Admin-forkasting over NATS
+
+`AvsluttSak` venter på alle andre kommandoer på saken til de er fullført eller
+forkastet (SKU-0024). Forkast en kommando som ikke skal gjennomføres:
+
+```bash
+nats request arkiv.admin.write.forkast.commands \
+  '{"utfort_av":"test-operator","command_ids":["00000000-0000-0000-0000-000000000001"]}'
+```
+
+- Kommandoen dekomponeres ikke, operasjonene plukkes ikke opp, og retry per
+  sak tar den ikke med. Ingenting reverseres.
+- Alltid tillatt, også mens arbeid pågår og ved ukjent utfall. Operatøren tar
+  ansvaret.
+- Ukjent kommando gir `Command not found`, og ingenting endres. Fullført
+  kommando røres ikke.
+- Forkasting er endelig. Retry med command-id avvises med `Command is discarded`;
+  klienten må sende en ny kommando.
+- Hvem som forkastet står i loggen. Ingen angre, ingen statusmelding til klient.
 
 ## Useful targeted commands
 

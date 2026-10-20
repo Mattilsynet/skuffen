@@ -82,6 +82,12 @@ pub async fn run() -> anyhow::Result<()> {
         helse.clone(),
         shutdown.clone(),
     );
+    let admin_forkast_listener = infrastructure::bootstrap::build_admin_forkast_listener(
+        runtime.nats.clone(),
+        runtime.db_pool.clone(),
+        helse.clone(),
+        shutdown.clone(),
+    );
     let media_nats = runtime.nats.clone();
     let media_store = runtime.media_store.clone();
     let (eksekvering_listener, eksekvering_worker) =
@@ -190,6 +196,17 @@ pub async fn run() -> anyhow::Result<()> {
                 .run()
                 .await
                 .context("admin retry listener failed")
+        },
+    );
+    spawn_named_task(
+        &mut tasks,
+        "admin_forkast_listener",
+        TaskCriticality::Degraded,
+        async move {
+            admin_forkast_listener
+                .run()
+                .await
+                .context("admin forkast listener failed")
         },
     );
     spawn_named_task(

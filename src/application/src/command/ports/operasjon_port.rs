@@ -183,11 +183,19 @@ pub trait OperasjonRepository: Send + Sync {
         operasjon_id: OperasjonId,
     ) -> Result<(), anyhow::Error>;
 
-    /// Søskenoperasjoner på saken. Hentes kun for `AvsluttSak` (D4).
+    /// Søskenoperasjoner på saken, uten forkastede kommandoer. Hentes kun
+    /// for `AvsluttSak` (D4, SKU-0024).
     async fn hent_sammendrag_for_sak(
         &self,
         sak_id: domain::eksekvering::id::SkuffenSakId,
     ) -> Result<Vec<OperasjonSammendrag>, anyhow::Error>;
+
+    /// Mottatte kommandoer på saken uten operasjoner, for eksempel avvist i
+    /// validering. Forkastede er ikke med (SKU-0024).
+    async fn hent_udekomponerte_kommandoer(
+        &self,
+        sak_id: domain::eksekvering::id::SkuffenSakId,
+    ) -> Result<Vec<Uuid>, anyhow::Error>;
 
     async fn hent_command_metadata(
         &self,

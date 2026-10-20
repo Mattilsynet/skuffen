@@ -989,7 +989,12 @@ fn avslutt_sak_blokkeres_naar_sosken_ikke_er_ferdige() {
     ];
 
     assert_eq!(
-        vurder_avslutt_sak(&sak_op_for(Operasjonstype::AvsluttSak), &facts, &sosken),
+        vurder_avslutt_sak(
+            &sak_op_for(Operasjonstype::AvsluttSak),
+            &facts,
+            &sosken,
+            &[]
+        ),
         Beslutning::Blokkert(BlockedReason::SoskenIkkeFerdige)
     );
 }
@@ -1004,7 +1009,12 @@ fn avslutt_sak_blokkeres_av_terminalt_feilet_sosken() {
     )];
 
     assert_eq!(
-        vurder_avslutt_sak(&sak_op_for(Operasjonstype::AvsluttSak), &facts, &sosken),
+        vurder_avslutt_sak(
+            &sak_op_for(Operasjonstype::AvsluttSak),
+            &facts,
+            &sosken,
+            &[]
+        ),
         Beslutning::Blokkert(BlockedReason::SoskenIkkeFerdige)
     );
 }
@@ -1019,7 +1029,12 @@ fn avslutt_sak_blokkeres_av_tidligere_feilet_eller_uavklart_avslutning() {
         let sosken = vec![sammendrag(1, Operasjonstype::AvsluttSak, status)];
 
         assert_eq!(
-            vurder_avslutt_sak(&sak_op_for(Operasjonstype::AvsluttSak), &facts, &sosken),
+            vurder_avslutt_sak(
+                &sak_op_for(Operasjonstype::AvsluttSak),
+                &facts,
+                &sosken,
+                &[]
+            ),
             Beslutning::Blokkert(BlockedReason::SoskenIkkeFerdige),
             "{status:?} skal fortsatt blokkere"
         );
@@ -1036,7 +1051,12 @@ fn avslutt_sak_fanger_sett_saksansvarlig_som_ikke_er_ferdig() {
     )];
 
     assert_eq!(
-        vurder_avslutt_sak(&sak_op_for(Operasjonstype::AvsluttSak), &facts, &sosken),
+        vurder_avslutt_sak(
+            &sak_op_for(Operasjonstype::AvsluttSak),
+            &facts,
+            &sosken,
+            &[]
+        ),
         Beslutning::Blokkert(BlockedReason::SoskenIkkeFerdige)
     );
 }
@@ -1050,7 +1070,12 @@ fn avslutt_sak_er_utfor_naar_alle_sosken_er_terminalt_ok() {
     ];
 
     assert_eq!(
-        vurder_avslutt_sak(&sak_op_for(Operasjonstype::AvsluttSak), &facts, &sosken),
+        vurder_avslutt_sak(
+            &sak_op_for(Operasjonstype::AvsluttSak),
+            &facts,
+            &sosken,
+            &[]
+        ),
         Beslutning::Utfor
     );
 }
@@ -1065,7 +1090,25 @@ fn avslutt_sak_ignorerer_seg_selv_i_soskenlisten() {
         status: Operasjonsstatus::Kjorer,
     }];
 
-    assert_eq!(vurder_avslutt_sak(&op, &facts, &sosken), Beslutning::Utfor);
+    assert_eq!(
+        vurder_avslutt_sak(&op, &facts, &sosken, &[]),
+        Beslutning::Utfor
+    );
+}
+
+#[test]
+fn avslutt_sak_blokkeres_av_kommando_uten_operasjoner() {
+    let facts = sak(SakTilstand::Opprettet, Some("2026/1"), vec![]);
+
+    assert_eq!(
+        vurder_avslutt_sak(
+            &sak_op_for(Operasjonstype::AvsluttSak),
+            &facts,
+            &[],
+            &[Uuid::from_u128(7)]
+        ),
+        Beslutning::Blokkert(BlockedReason::SoskenIkkeFerdige)
+    );
 }
 
 #[test]
@@ -1073,7 +1116,7 @@ fn avslutt_sak_uten_arkiv_id_er_blokkert() {
     let facts = sak(SakTilstand::IkkeOpprettet, None, vec![]);
 
     assert_eq!(
-        vurder_avslutt_sak(&sak_op_for(Operasjonstype::AvsluttSak), &facts, &[]),
+        vurder_avslutt_sak(&sak_op_for(Operasjonstype::AvsluttSak), &facts, &[], &[]),
         Beslutning::Blokkert(BlockedReason::SaksnummerMangler)
     );
 }
@@ -1083,7 +1126,7 @@ fn avslutt_sak_paa_avsluttet_sak_er_allerede_utfort() {
     let facts = sak(SakTilstand::Avsluttet, Some("2026/1"), vec![]);
 
     assert_eq!(
-        vurder_avslutt_sak(&sak_op_for(Operasjonstype::AvsluttSak), &facts, &[]),
+        vurder_avslutt_sak(&sak_op_for(Operasjonstype::AvsluttSak), &facts, &[], &[]),
         Beslutning::AlleredeUtfort
     );
 }

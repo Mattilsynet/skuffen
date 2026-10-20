@@ -286,6 +286,13 @@ impl OperasjonRepository for FakeOperasjonRepo {
         Ok(Vec::new())
     }
 
+    async fn hent_udekomponerte_kommandoer(
+        &self,
+        _sak_id: SkuffenSakId,
+    ) -> Result<Vec<Uuid>, anyhow::Error> {
+        Ok(Vec::new())
+    }
+
     async fn hent_command_metadata(
         &self,
         _operasjon_id: OperasjonId,

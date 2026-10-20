@@ -240,6 +240,26 @@ pub fn build_admin_retry_listener(
     )
 }
 
+pub fn build_admin_forkast_listener(
+    nats: NatsClient,
+    db_pool: lib_sql::database_config::DbPool,
+    helse: Helse,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> crate::admin::nats::forkast_listener::AdminForkastListener {
+    use crate::admin::adapter::postgres_admin_forkast_repository::PostgresAdminForkastRepository;
+    use application::admin::services::admin_forkast_service::AdminForkastService;
+
+    let service = AdminForkastService::new(std::sync::Arc::new(
+        PostgresAdminForkastRepository::new(db_pool),
+    ));
+    crate::admin::nats::forkast_listener::AdminForkastListener::new(
+        std::sync::Arc::new(NatsAdminTransport::new(nats)),
+        std::sync::Arc::new(service),
+        helse,
+        shutdown,
+    )
+}
+
 pub fn build_validator_listener(
     nats: NatsClient,
     db_pool: lib_sql::database_config::DbPool,

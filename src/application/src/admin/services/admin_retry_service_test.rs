@@ -304,6 +304,7 @@ fn avvist_grunnlag(command_id: Uuid, sak_id: Option<SkuffenSakId>) -> RetryGrunn
         command_type: CommandTypeCode::AvsluttSak,
         sak_id,
         dekomponert: false,
+        forkastet: false,
         operasjoner: Vec::new(),
     }
 }
@@ -430,6 +431,7 @@ async fn uavklart_utfall_paa_saken_avviser_hele_foresporselen_uten_revalidering(
             command_type: CommandTypeCode::SettSaksansvarlig,
             sak_id: Some(sak_id),
             dekomponert: true,
+            forkastet: false,
             operasjoner: vec![Operasjonsstatus::Feilet],
         },
     ]);
@@ -485,6 +487,30 @@ async fn ukjent_kommando_avviser_hele_foresporselen() {
 }
 
 #[tokio::test]
+async fn forkastet_kommando_avviser_hele_foresporselen() {
+    let kjent = Uuid::new_v4();
+    let forkastet = Uuid::new_v4();
+    let t = oppsett(
+        med_grunnlag(vec![
+            avvist_grunnlag(kjent, None),
+            RetryGrunnlag {
+                forkastet: true,
+                ..avvist_grunnlag(forkastet, None)
+            },
+        ]),
+        med_original(kjent),
+        FakeEntitetRepository::default(),
+        Arkivsvar::Aapen,
+    );
+
+    let feil = t.service.handle(vec![kjent, forkastet]).await.unwrap_err();
+
+    assert!(matches!(feil, AdminRetryError::Forkastet(ids) if ids == vec![forkastet]));
+    assert!(t.originaler.lest.lock().unwrap().is_empty());
+    assert!(t.repository.frigi_kall.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn fullfort_kommando_revalideres_ikke() {
     let command_id = Uuid::new_v4();
     let t = oppsett(
@@ -493,6 +519,7 @@ async fn fullfort_kommando_revalideres_ikke() {
             command_type: CommandTypeCode::AvsluttSak,
             sak_id: Some(SkuffenSakId(Uuid::new_v4())),
             dekomponert: true,
+            forkastet: false,
             operasjoner: vec![Operasjonsstatus::Ok],
         }]),
         med_original(command_id),
@@ -519,6 +546,7 @@ async fn feilede_operasjoner_frigis_til_executoren() {
         command_type: CommandTypeCode::OpprettInterntNotatJournalpost,
         sak_id: Some(sak_id),
         dekomponert: true,
+        forkastet: false,
         operasjoner: vec![Operasjonsstatus::Ok, Operasjonsstatus::Feilet],
     }]);
     let t = oppsett(
@@ -854,6 +882,7 @@ async fn saksnokler_viderefores_og_bare_valgt_sak_gaar_gjennom_ordinaer_flyt() {
                 command_type: CommandTypeCode::SettSaksansvarlig,
                 sak_id: Some(sak_id),
                 dekomponert: true,
+                forkastet: false,
                 operasjoner: vec![Operasjonsstatus::Feilet],
             },
         ]);

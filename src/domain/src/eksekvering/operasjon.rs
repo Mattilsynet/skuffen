@@ -4,6 +4,8 @@
 //! gang og er en ren funksjon av command payload (R2). Avhengigheter utledes
 //! fra fakta (R3).
 
+use uuid::Uuid;
+
 use crate::command::{Dekomponeringsinput, Dokumentkilde};
 use crate::eksekvering::html_template::{FeltVerdier, er_felter_klare};
 use crate::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
@@ -472,11 +474,15 @@ pub fn vurder(op: &Operasjon, facts: &SakMedBarn) -> Beslutning {
 
 /// `AvsluttSak` er eneste unntak fra facts-only-regelen (D4). Den krever at
 /// alle andre operasjoner på saken er terminalt ok — ikke bare at
-/// journalpostene er ferdige.
+/// journalpostene er ferdige — og at ingen mottatt kommando på saken står
+/// uten operasjoner, for eksempel fordi den ble avvist i validering
+/// (SKU-0024). Andre `AvsluttSak` teller også; en dobbel avslutning ryddes
+/// gjennom admin.
 pub fn vurder_avslutt_sak(
     op: &Operasjon,
     facts: &SakMedBarn,
     sosken: &[OperasjonSammendrag],
+    udekomponerte_kommandoer: &[Uuid],
 ) -> Beslutning {
     if op.entitet_id.entitet_type() != EntitetType::Sak {
         return Beslutning::Ugyldig(DomainViolation::EntitetTypeMismatch);
@@ -488,10 +494,11 @@ pub fn vurder_avslutt_sak(
         return Beslutning::Blokkert(BlockedReason::SaksnummerMangler);
     }
 
-    let alle_ferdige = sosken
-        .iter()
-        .filter(|annen| annen.operasjon_id != op.operasjon_id)
-        .all(|annen| annen.status == Operasjonsstatus::Ok);
+    let alle_ferdige = udekomponerte_kommandoer.is_empty()
+        && sosken
+            .iter()
+            .filter(|annen| annen.operasjon_id != op.operasjon_id)
+            .all(|annen| annen.status == Operasjonsstatus::Ok);
 
     if alle_ferdige {
         Beslutning::Utfor

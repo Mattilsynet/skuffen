@@ -220,9 +220,11 @@ impl OperasjonRepository for PostgresOperasjonRepository {
         // Radlåsen serialiserer dekomponeringer av samme kommando. En replay
         // etter fullført dekomponering skal ikke skrive planen på nytt: den
         // bærer payloaden fra da den ble sendt, og ville ellers kunnet
-        // overskrive ønsket saksansvarlig med en eldre verdi.
+        // overskrive ønsket saksansvarlig med en eldre verdi. En forkastet
+        // kommando dekomponeres ikke (SKU-0024).
         let allerede_dekomponert: Option<bool> = sqlx::query_scalar(
-            "SELECT dekomponert_at IS NOT NULL FROM command WHERE command_id = $1 FOR UPDATE",
+            r#"SELECT dekomponert_at IS NOT NULL OR forkastet_at IS NOT NULL
+               FROM command WHERE command_id = $1 FOR UPDATE"#,
         )
         .bind(plan.command_id)
         .fetch_optional(&mut *tx)
@@ -285,8 +287,10 @@ impl OperasjonRepository for PostgresOperasjonRepository {
             SELECT o.operasjon_id, o.operasjonstype, o.entitet_id, o.sak_id, e.entitet_type::text
             FROM operasjon o
             JOIN entitet e ON e.skuffen_id = o.entitet_id
+            JOIN command c ON c.command_id = o.command_id
             WHERE o.status IN ('klar', 'retry_venter', 'blokkert')
               AND o.neste_forsok_at <= now()
+              AND c.forkastet_at IS NULL
             ORDER BY o.neste_forsok_at, o.created_at
             LIMIT 1
             "#,
@@ -564,8 +568,10 @@ impl OperasjonRepository for PostgresOperasjonRepository {
         sak_id: SkuffenSakId,
     ) -> Result<Vec<OperasjonSammendrag>> {
         let rader: Vec<(Uuid, String, String)> = sqlx::query_as(
-            r#"SELECT operasjon_id, operasjonstype, status::text
-               FROM operasjon WHERE sak_id = $1"#,
+            r#"SELECT o.operasjon_id, o.operasjonstype, o.status::text
+               FROM operasjon o
+               JOIN command c ON c.command_id = o.command_id
+               WHERE o.sak_id = $1 AND c.forkastet_at IS NULL"#,
         )
         .bind(Uuid::from(sak_id))
         .fetch_all(&self.pool)
@@ -583,6 +589,20 @@ impl OperasjonRepository for PostgresOperasjonRepository {
                 })
             })
             .collect()
+    }
+
+    async fn hent_udekomponerte_kommandoer(&self, sak_id: SkuffenSakId) -> Result<Vec<Uuid>> {
+        sqlx::query_scalar(
+            r#"SELECT command_id FROM command
+               WHERE sak_id = $1
+                 AND dekomponert_at IS NULL
+                 AND forkastet_at IS NULL
+               ORDER BY mottatt_at"#,
+        )
+        .bind(Uuid::from(sak_id))
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to load undecomposed commands")
     }
 
     /// Statuskontekst joines fra `entitet` og state i stedet for å

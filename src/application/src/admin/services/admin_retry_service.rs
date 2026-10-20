@@ -27,6 +27,8 @@ pub enum AdminRetryError {
     ForMange,
     #[error("command not found")]
     CommandNotFound(Vec<Uuid>),
+    #[error("command is discarded")]
+    Forkastet(Vec<Uuid>),
     #[error("sak not found")]
     SakNotFound,
     #[error("original command not available")]
@@ -180,6 +182,16 @@ impl AdminRetryService {
             .collect();
         if !ukjente.is_empty() {
             return Err(AdminRetryError::CommandNotFound(ukjente));
+        }
+
+        // Forkasting er endelig (SKU-0024); klienten sender en ny kommando.
+        let forkastede: Vec<Uuid> = command_ids
+            .iter()
+            .filter(|id| grunnlag.iter().any(|g| g.command_id == **id && g.forkastet))
+            .copied()
+            .collect();
+        if !forkastede.is_empty() {
+            return Err(AdminRetryError::Forkastet(forkastede));
         }
 
         let mut grunnlag: HashMap<Uuid, RetryGrunnlag> =

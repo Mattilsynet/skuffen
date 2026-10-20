@@ -1,3 +1,4 @@
 pub mod nats_original_command_kilde;
+pub mod postgres_admin_forkast_repository;
 pub mod postgres_admin_read_repository;
 pub mod postgres_admin_retry_repository;

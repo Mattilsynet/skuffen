@@ -548,6 +548,12 @@ async fn admin_retry_request(nats_url: &str, subject: &str, payload: &str) -> Re
     }
 }
 
+pub async fn admin_forkast(nats_url: &str, command_ids: &[uuid::Uuid]) -> Result<Value> {
+    let payload =
+        serde_json::json!({ "utfort_av": "test-operator", "command_ids": command_ids }).to_string();
+    admin_retry_request(nats_url, "arkiv.admin.write.forkast.commands", &payload).await
+}
+
 /// Venter på en bestemt hendelse, også etter at kommandoen har vært terminal.
 pub async fn wait_for_command_event(
     nats_url: &str,

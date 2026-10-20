@@ -56,6 +56,7 @@ impl RetryAction {
     }
 }
 
+pub(crate) const COMMAND_DISCARDED: &str = "Command is discarded";
 pub(crate) const ORIGINAL_NOT_AVAILABLE: &str = "Original command not available";
 pub(crate) const UNRESOLVED_OUTCOME: &str = "Sak has operations with unresolved outcome";
 pub(crate) const BUSY: &str = "Saken har operasjoner som utføres. Prøv igjen senere";
@@ -275,6 +276,10 @@ fn feil_til_svar(err: &AdminRetryError) -> (Vec<u8>, &'static str) {
             warn!(command_ids = ?ids, "admin retry: ukjente kommandoer");
             (feilsvar(COMMAND_NOT_FOUND), "not_found")
         }
+        AdminRetryError::Forkastet(ids) => {
+            warn!(command_ids = ?ids, "admin retry: kommandoene er forkastet");
+            (feilsvar(COMMAND_DISCARDED), "discarded")
+        }
         AdminRetryError::SakNotFound => (feilsvar(SAK_NOT_FOUND), "not_found"),
         AdminRetryError::OriginalIkkeTilgjengelig(ids) => {
             warn!(command_ids = ?ids, "admin retry: originalen finnes ikke lenger");
@@ -429,6 +434,10 @@ mod tests {
         assert_eq!(
             melding(AdminRetryError::CommandNotFound(vec![])),
             COMMAND_NOT_FOUND
+        );
+        assert_eq!(
+            melding(AdminRetryError::Forkastet(vec![])),
+            COMMAND_DISCARDED
         );
         assert_eq!(
             melding(AdminRetryError::OriginalIkkeTilgjengelig(vec![])),

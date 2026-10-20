@@ -179,7 +179,19 @@ impl EksekverOperasjonService {
                 .operasjon_repo
                 .hent_sammendrag_for_sak(op.sak_id)
                 .await?;
-            Ok(vurder_avslutt_sak(op, facts, &sosken))
+            let udekomponerte = self
+                .operasjon_repo
+                .hent_udekomponerte_kommandoer(op.sak_id)
+                .await?;
+            if !udekomponerte.is_empty() {
+                // Står ikke i noen status; loggen viser hva som må retryes
+                // eller forkastes før saken kan avsluttes.
+                tracing::info!(
+                    udekomponerte_command_ids = ?udekomponerte,
+                    "avslutning venter på kommandoer uten operasjoner"
+                );
+            }
+            Ok(vurder_avslutt_sak(op, facts, &sosken, &udekomponerte))
         } else {
             Ok(vurder(op, facts))
         }

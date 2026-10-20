@@ -57,11 +57,12 @@ impl AdminRetryRepository for PostgresAdminRetryRepository {
                 r#"
                 SELECT c.command_id
                 FROM command c
-                WHERE c.sak_id = $1
+                WHERE (c.sak_id = $1
                    OR (c.sak_id IS NULL AND EXISTS (
                        SELECT 1 FROM operasjon o
                        WHERE o.command_id = c.command_id AND o.sak_id = $1
-                   ))
+                   )))
+                  AND c.forkastet_at IS NULL
                 ORDER BY c.mottatt_at, c.command_id
                 LIMIT $2
                 "#,
@@ -90,13 +91,14 @@ impl AdminRetryRepository for PostgresAdminRetryRepository {
     }
 
     async fn hent_grunnlag(&self, command_ids: &[Uuid]) -> anyhow::Result<Vec<RetryGrunnlag>> {
-        let rader: Vec<(Uuid, String, Option<Uuid>, bool, Vec<String>)> = sqlx::query_as(
+        let rader: Vec<(Uuid, String, Option<Uuid>, bool, bool, Vec<String>)> = sqlx::query_as(
             r#"
             SELECT c.command_id,
                    c.command_type,
                    COALESCE(c.sak_id, (SELECT o.sak_id FROM operasjon o
                                         WHERE o.command_id = c.command_id LIMIT 1)),
                    c.dekomponert_at IS NOT NULL,
+                   c.forkastet_at IS NOT NULL,
                    COALESCE((SELECT array_agg(o.status::text) FROM operasjon o
                               WHERE o.command_id = c.command_id),
                             ARRAY[]::text[])
@@ -112,13 +114,14 @@ impl AdminRetryRepository for PostgresAdminRetryRepository {
         rader
             .into_iter()
             .map(
-                |(command_id, command_type, sak_id, dekomponert, statuser)| {
+                |(command_id, command_type, sak_id, dekomponert, forkastet, statuser)| {
                     Ok(RetryGrunnlag {
                         command_id,
                         command_type: CommandTypeCode::from_code(&command_type)
                             .context("ukjent command_type")?,
                         sak_id: sak_id.map(SkuffenSakId::from),
                         dekomponert,
+                        forkastet,
                         operasjoner: statuser
                             .iter()
                             .map(|status| les_status(status))
