@@ -47,7 +47,7 @@ async fn hent_sak_e2e_henter_secrets_og_kaller_api() {
             .as_deref()
             .unwrap_or_default()
             .contains("2025/500961")
-            || resp.saksid > 0,
+            || resp.saksid.is_some_and(|id| id > 0),
         "Respons mangler forventet saksinfo"
     );
 }

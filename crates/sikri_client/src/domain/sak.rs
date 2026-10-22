@@ -22,7 +22,8 @@ pub struct SakRespons {
     pub tilgangshjemmel: Option<String>,
     #[serde(rename = "virksomhetsmappeId", skip_serializing_if = "Option::is_none")]
     pub virksomhetsmappe_id: Option<String>,
-    pub saksid: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saksid: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub saksnr: Option<String>,
     #[serde(rename = "saksUrl", skip_serializing_if = "Option::is_none")]
@@ -51,7 +52,7 @@ impl From<ElementsSakMedJournalposterResponse> for SakRespons {
             tilgangskode: src.tilgangskode,
             tilgangshjemmel: src.tilgangshjemmel,
             virksomhetsmappe_id: src.virksomhetsmappe_id,
-            saksid: src.saksid.unwrap_or_default(),
+            saksid: src.saksid,
             saksnr: src.saksnr,
             saks_url: src.saks_url,
             kildesystem: src.kildesystem,

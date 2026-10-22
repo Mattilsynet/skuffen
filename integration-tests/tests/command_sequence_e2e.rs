@@ -296,6 +296,12 @@ async fn query_hent_sak_via_nats_paa_client_reference() -> Result<()> {
             .and_then(|s| s.as_str()),
         Some(saksnummer.as_str())
     );
+    assert_eq!(
+        response
+            .pointer("/payload/arkiv_sak_id")
+            .and_then(|s| s.as_str()),
+        Some("1001")
+    );
 
     let med_journalposter = hent_sak_med_journalposter_via_nats(
         &env.nats_url,
@@ -307,6 +313,13 @@ async fn query_hent_sak_via_nats_paa_client_reference() -> Result<()> {
             .pointer("/payload/saksnummer")
             .and_then(|s| s.as_str()),
         Some(saksnummer.as_str()),
+        "{med_journalposter}"
+    );
+    assert_eq!(
+        med_journalposter
+            .pointer("/payload/arkiv_sak_id")
+            .and_then(|s| s.as_str()),
+        Some("1001"),
         "{med_journalposter}"
     );
 
@@ -337,6 +350,7 @@ async fn query_sak_paa_saksnummer_krever_ikke_lokal_sak_og_skriver_ingenting() -
 
     let uten = sak_payload(&hent_sak_via_nats_by_arkiv_id(&env.nats_url, &saksnummer).await?)?;
     assert_eq!(uten.saksnummer.as_str(), saksnummer);
+    assert_eq!(uten.arkiv_sak_id.as_str(), "1001");
     assert_eq!(uten.journalposter, Some(vec![]));
 
     let med = sak_payload(
@@ -347,6 +361,7 @@ async fn query_sak_paa_saksnummer_krever_ikke_lokal_sak_og_skriver_ingenting() -
         .await?,
     )?;
     assert_eq!(med.saksnummer.as_str(), saksnummer);
+    assert_eq!(med.arkiv_sak_id.as_str(), "1001");
     let journalposter = med.journalposter.expect("journalposter skal være med");
     assert_eq!(journalposter.len(), 1);
     let dokumenter = &journalposter[0].dokumenter;

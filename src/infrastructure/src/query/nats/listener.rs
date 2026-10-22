@@ -271,7 +271,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::model::sak::{Ordningsverdi, Sak, SakKey, Saksnummer, Saksstatus, Sakstittel};
+    use domain::model::sak::{
+        ArkivSakId, Ordningsverdi, Sak, SakKey, Saksnummer, Saksstatus, Sakstittel,
+    };
     use lib_schemas::skuffen::query::queries::SakKey as DtoSakKey;
     use std::sync::Mutex;
 
@@ -299,6 +301,7 @@ mod tests {
                 saksstatus: Saksstatus::UnderBehandling,
                 tilgang: None,
                 saksnummer: Saksnummer::new("2026/1")?,
+                arkiv_sak_id: ArkivSakId(1),
                 kildesystem: "SKUFFEN".to_string(),
                 lukket: false,
                 journalposter: None,

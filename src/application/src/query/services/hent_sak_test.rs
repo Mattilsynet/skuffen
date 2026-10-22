@@ -65,6 +65,7 @@ mod tests {
             saksstatus: Saksstatus::UnderBehandling,
             tilgang: None,
             saksnummer,
+            arkiv_sak_id: domain::model::sak::ArkivSakId(1_001),
             kildesystem: "SKUFFEN".to_string(),
             lukket: false,
             journalposter: Some(vec![]),

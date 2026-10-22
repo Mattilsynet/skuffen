@@ -6,6 +6,10 @@ use uuid::Uuid;
 
 use crate::model::{journalpost::Journalpost, tilgang::Tilgang};
 
+/// Arkivets interne identitet for en sak (Sikri/Elements `saksid`).
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub struct ArkivSakId(pub i32);
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Sak {
     pub client_reference: Option<Uuid>,
@@ -15,6 +19,7 @@ pub struct Sak {
     pub saksstatus: Saksstatus,
     pub tilgang: Option<Tilgang>,
     pub saksnummer: Saksnummer,
+    pub arkiv_sak_id: ArkivSakId,
     pub kildesystem: String,
     pub lukket: bool,
     pub journalposter: Option<Vec<Journalpost>>,

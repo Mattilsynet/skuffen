@@ -29,7 +29,7 @@ mod tests {
         let sak = SakRespons::from(response);
 
         assert_eq!(sak.sakstittel, "Tittel");
-        assert_eq!(sak.saksid, 10);
+        assert_eq!(sak.saksid, Some(10));
         assert_eq!(sak.ordningsverdi, "123");
         assert!(!sak.lukket);
     }
@@ -59,7 +59,7 @@ mod tests {
 
         let sak = SakRespons::from(response);
         assert_eq!(sak.ordningsverdi, "");
-        assert_eq!(sak.saksid, 0);
+        assert_eq!(sak.saksid, None);
         assert!(!sak.lukket);
     }
 }

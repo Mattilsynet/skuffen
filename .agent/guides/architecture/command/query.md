@@ -2,7 +2,7 @@
 
 | Kommando | Beskrivelse | Notater |
 | :--- | :--- | :--- |
-| Hent sak | Henter en sak uten journalposter. | Subject: `arkiv.request.sak.hent`. Implemented by `HentSakService` implementing `HentSakUseCase`. |
+| Hent sak | Henter en sak uten journalposter. | Subject: `arkiv.request.sak.hent`. Implemented by `HentSakService` implementing `HentSakUseCase`. `SakResponse` inneholder både `saksnummer` og arkivets `arkiv_sak_id` (`saksid` fra Sikri/Elements). |
 | Hent sak med journalposter | Henter en sak med journalposter og dokumentmetadata i ett arkivkall. | Subject: `arkiv.request.sak.med_journalposter`. Samme `HentSakService`, med inkludering alltid på. Hoveddokumentet er første dokument; hvert dokument har arkivets `dokument_id`. `dokument_dato` er sonefri `NaiveDateTime`. Dokumentinnhold (filer) kommer senere ved endring i sikri api. |
 | Hent Journalpost | Henter en journalpost. | Subject: `arkiv.request.journalpost.hent`. Backing repository er foreløpig fake/testdata. Henter kun metadata intil videre. Dokumenter og vedlegg kommer senere ved endring i sikri api |
 | Hent bruker/MT-enheter | Henter brukerens MT-enheter. | Subject: `arkiv.request.bruker.mt_enheter`. Live stub som returnerer `NatsResponse::Error { message: "Not implemented" }` inntil kontrakt og implementation er avklart. |

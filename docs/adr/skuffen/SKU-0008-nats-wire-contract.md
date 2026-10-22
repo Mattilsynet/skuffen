@@ -1,7 +1,7 @@
 # SKU-0008. NATS wire contract for arkivering og queries
 
 Date: 2026-05-22
-Last-reviewed: 2026-09-28
+Last-reviewed: 2026-10-22
 Tier: B
 Status: Accepted
 Crates: skuffen, infrastructure, application, skuffen-integration-tests
@@ -70,16 +70,16 @@ Inkluderingen er bundet til subjectet, ikke til et request-felt, slik at en eldr
 instans under utrullingsoverlapp aldri stille kan ignorere ønsket.
 
 Svaret bærer dokumentmetadata, ikke filinnhold. Første dokument er hoveddokumentet.
+`SakResponse` fikk arkivets `arkiv_sak_id` (`saksid` fra Sikri/Elements),
 `DokumentResponse` fikk arkivets `dokument_id`, og `JournalpostResponse.dokument_dato`
 er `NaiveDateTime` i stedet for `String`: arkivet oppgir dato og klokkeslett uten
-tidssone, og Skuffen dikter ikke opp en. Begge er breaking for typed Rust-klienter
+tidssone, og Skuffen dikter ikke opp en. Alle tre er breaking for typed Rust-klienter
 av de delte responstypene.
 
 Saksoppslag på `arkivId` går direkte til arkivet uten krav om lokal identitet.
 
-Midlertidig unntak fra R8: `lib-schemas` følger `branch = "master"` inntil eier
-tagger en release med disse typene. `Cargo.lock` er fortsatt resolved boundary;
-`lib-nats` og `lib-sql` blir på tag `1.7.2`.
+`lib-schemas` er pinnet til tag `1.7.5`, mens `lib-nats` og `lib-sql` blir på
+tag `1.7.2`; `Cargo.lock` er resolved boundary.
 
 ### Statusstrømmen (SKU-0020)
 

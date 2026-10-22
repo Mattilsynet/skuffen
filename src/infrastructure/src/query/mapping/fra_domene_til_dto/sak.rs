@@ -1,8 +1,8 @@
 use anyhow::Result;
 use lib_schemas::skuffen::query::responses::SakResponse as DtoSak;
 use lib_schemas::skuffen::sak::{
-    Ordningsverdi as DtoOrdningsverdi, Saksnummer as DtoSaksnummer, Saksstatus as DtoSaksstaus,
-    Sakstittel as DtoSakstittel,
+    ArkivSakId as DtoArkivSakId, Ordningsverdi as DtoOrdningsverdi, Saksnummer as DtoSaksnummer,
+    Saksstatus as DtoSaksstaus, Sakstittel as DtoSakstittel,
 };
 
 use crate::query::mapping::fra_domene_til_dto::journalpost::from_domain_journalpost_to_dto;
@@ -17,6 +17,7 @@ pub fn from_domain_sak_to_dto(sak: domain::model::sak::Sak) -> Result<DtoSak> {
         tilgjengelighet: from_domain_tilgang_to_tilgjengelighet(sak.tilgang),
         ordningsverdi: from_domain_ordningsverdi_to_dto(sak.ordningsverdi)?,
         saksnummer: from_domain_saksnummer_to_dto(sak.saksnummer)?,
+        arkiv_sak_id: DtoArkivSakId(sak.arkiv_sak_id.0.to_string()),
         kildesystem: sak.kildesystem,
         lukket: sak.lukket,
         journalposter: sak

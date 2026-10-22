@@ -10,6 +10,11 @@ pub fn from_sikri_sak_to_domain_sak(sikri_sak: SikriSak) -> Result<domain::model
             .clone()
             .ok_or_else(|| anyhow!("Sikri sak har ikke saksnummer."))?,
     )?;
+    let arkiv_sak_id = domain::model::sak::ArkivSakId(
+        sikri_sak
+            .saksid
+            .ok_or_else(|| anyhow!("Sikri sak har ikke saksid."))?,
+    );
     let tilgang = from_sikri_sak_to_domain_tilgang(&sikri_sak)?;
 
     let journalposter = sikri_sak
@@ -40,6 +45,7 @@ pub fn from_sikri_sak_to_domain_sak(sikri_sak: SikriSak) -> Result<domain::model
         )?,
         tilgang,
         saksnummer,
+        arkiv_sak_id,
         lukket: sikri_sak.lukket,
         kildesystem: "SKUFFEN".to_string(),
         journalposter,
@@ -108,6 +114,7 @@ mod tests {
 
     fn sikri_sak(journalposter: Option<Value>) -> Value {
         let mut sak = json!({
+            "saksid": 123,
             "saksnr": "2026/000123",
             "sakstittel": "Syntetisk sak",
             "saksbehandler": "Z00001",
@@ -133,6 +140,7 @@ mod tests {
         let respons = til_respons(sikri_sak(Some(json!([sikri_journalpost(11)])))).unwrap();
 
         assert_eq!(respons["saksnummer"], "2026/000123");
+        assert_eq!(respons["arkiv_sak_id"], "123");
         assert_eq!(respons["saksbehandler_enhet"], "M00001");
         let journalpost = &respons["journalposter"][0];
         assert_eq!(journalpost["saksbehandler_enhet"], "M00002");
@@ -196,5 +204,13 @@ mod tests {
         journalpost["tilgangskode"] = json!("UO");
 
         assert!(til_respons(sikri_sak(Some(json!([journalpost])))).is_err());
+    }
+
+    #[test]
+    fn manglende_saksid_gir_kontrollert_feil() {
+        let mut sak = sikri_sak(None);
+        sak["saksid"] = Value::Null;
+
+        assert!(til_respons(sak).is_err());
     }
 }

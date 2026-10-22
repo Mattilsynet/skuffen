@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use chrono::NaiveDate;
 use domain::model::dokument::{ArkivDokumentId, Dokument};
 use domain::model::journalpost::{Journalpost, JournalpostType, Journalpoststatus};
-use domain::model::sak::{Ordningsverdi, Sak, Saksbehandler, Saksnummer, Saksstatus, Sakstittel};
+use domain::model::sak::{
+    ArkivSakId, Ordningsverdi, Sak, Saksbehandler, Saksnummer, Saksstatus, Sakstittel,
+};
 
 use application::query::services::hent_sak::SakRepository;
 
@@ -31,6 +33,7 @@ impl SakRepository for FakeSakRepository {
             saksstatus: Saksstatus::UnderBehandling,
             tilgang: None,
             saksnummer,
+            arkiv_sak_id: ArkivSakId(1_001),
             kildesystem: "SKUFFEN".to_string(),
             lukket: false,
             journalposter: Some(if inkluder_journalposter {

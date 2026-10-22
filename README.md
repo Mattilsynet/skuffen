@@ -309,7 +309,7 @@ Stabile feilsvar fra admin read:
 bevisst gjennom admin read: de er nødvendige for å adressere riktig mål i en reparasjon.
 
 Request-reply (les / queries):
-- `arkiv.request.sak.hent` — hent sak uten journalposter. Request: `HentSakQuery` med `SakKey::ClientReference(uuid)` eller `SakKey::ArkivId(Saksnummer)`. Reply: `NatsResponse<SakResponse>` med `journalposter: []`.
+- `arkiv.request.sak.hent` — hent sak uten journalposter. Request: `HentSakQuery` med `SakKey::ClientReference(uuid)` eller `SakKey::ArkivId(Saksnummer)`. Reply: `NatsResponse<SakResponse>` med `arkiv_sak_id` (Sikri/Elements sin `saksid`) og `journalposter: []`.
 - `arkiv.request.sak.med_journalposter` — hent sak med journalposter og dokumentmetadata, uten dokumentinnhold. Request: `HentSakMedJournalposterQuery` med samme `key` som `HentSakQuery`. Reply: `NatsResponse<SakResponse>`. Første dokument i hver journalposts `dokumenter` er hoveddokumentet; resten er vedlegg. Hvert dokument har arkivets `dokument_id`. `dokument_dato` er dato og klokkeslett uten tidssone, slik arkivet oppgir den (`2025-10-14T00:00:00`). Utelatt `journalposter` betyr at arkivet ikke oppga listen, ikke at saken er tom.
 
 Saksoppslag med `arkivId` går direkte til arkivet og krever ikke at Skuffen kjenner saken. Oppslag med `clientReference` slås opp i Skuffens entitetsregister og krever at referansen tilhører en sak med saksnummer. Lesing oppretter aldri lokal identitet eller state. Query-svar over 8 MB gir `Response too large`.
