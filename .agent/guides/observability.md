@@ -22,9 +22,14 @@ Durability and availability:
 - `arkiv_command_inbox`, `arkiv_command_ready`, `arkiv_command_done`, `arkiv_status` and `arkiv_media` are configured with `num_replicas = 3`.
 - Durable consumers `validator` and `executor` use explicit ack and `num_replicas = 3`.
 - `validation_listener` and `eksekvering_listener` run in restart loops that recreate stream/consumer state after NATS disruptions.
-- `admin_listener` is degradable. It queue-subscribes to the two exact admin subjects with the stable queue groups `skuffen-admin-read-command-hent-v1` and `skuffen-admin-read-sak-hent-v1`, so only one instance answers during deploy overlap. Both subscriptions run under one `TaskSupervisor::background`; a subscription that ends returns `Err` so the supervisor restarts both.
-- `admin_retry_listener` is separate from admin read. It queue-subscribes to `arkiv.admin.write.retry.commands` and `arkiv.admin.write.retry.sak` with the stable queue groups `skuffen-admin-write-retry-commands-v1` and `skuffen-admin-write-retry-sak-v1`, respectively. The subscriptions are supervised together; either stream ending restarts both. Write access is granted per subject in NATS.
-- `admin_forkast_listener` queue-subscribes to `arkiv.admin.write.forkast.commands` with the stable queue group `skuffen-admin-write-forkast-commands-v1`. Write access is granted per subject in NATS.
+- `admin_listener` is degradable and owns the whole admin surface: admin read, admin retry and admin forkast. It queue-subscribes to each exact subject with a stable queue group, so only one instance answers during deploy overlap:
+  - `arkiv.admin.read.command.hent` → `skuffen-admin-read-command-hent-v1`
+  - `arkiv.admin.read.sak.hent` → `skuffen-admin-read-sak-hent-v1`
+  - `arkiv.admin.write.retry.commands` → `skuffen-admin-write-retry-commands-v1`
+  - `arkiv.admin.write.retry.sak` → `skuffen-admin-write-retry-sak-v1`
+  - `arkiv.admin.write.forkast.commands` → `skuffen-admin-write-forkast-commands-v1`
+
+  The routing table is `AdminRute` in `src/infrastructure/src/admin/nats/rute.rs`. Each subject has its own loop, so a slow write does not hold back admin read. All loops run under one `TaskSupervisor`; a subscription that ends returns `Err` and the supervisor restarts all of them. Read and write access is still granted per subject in NATS.
 - Shutdown is cancellation-aware end to end: supervisor backoff waits on the shutdown token, and the root runtime gives tasks eight seconds to finish before aborting the rest. That keeps us inside Cloud Run's ten seconds.
 - `command_listener` and `media_listener` are intake-critical. The command listener has a bounded restart budget; the session-based media server remains critical without an outer restart loop, so a stopped server crashes the process and Cloud Run can replace the instance. During shutdown it stops begin intake and keeps receiver sessions available for a five-second grace period.
 
@@ -152,8 +157,7 @@ Handlers using this pattern:
 - `command_listener` (`nats.command_batch`)
 - `validation_listener` (`nats.validate`)
 - `dekomponering_listener` (`nats.dekomponer`)
-- `admin_listener` (`admin.read`)
-- `admin_retry_listener` (`admin.write`)
+- `admin_listener` (`admin.read` for read subjects, `admin.write` for retry and forkast)
 - `NatsReplier` (`query.handle`)
 
 ## Admin read attribution logging

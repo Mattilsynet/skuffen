@@ -172,6 +172,7 @@ async fn to_admin_listenere_i_samme_queue_group_gir_noyaktig_ett_svar() -> Resul
     let andre_listener = infrastructure::bootstrap::build_admin_listener(
         infrastructure::nats::setup::setup_nats(helse.clone()).await?,
         infrastructure::database::setup::setup_database().await?,
+        true,
         helse,
         shutdown.clone(),
     );

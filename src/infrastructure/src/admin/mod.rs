@@ -1,4 +1,4 @@
-//! Admin read-vertikalen: PostgreSQL-projection, wire-mapping og listener.
+//! Admin-vertikalen: PostgreSQL-adaptere, wire-mapping og én NATS-listener for read, retry og forkast.
 
 pub mod adapter;
 pub mod mapping;

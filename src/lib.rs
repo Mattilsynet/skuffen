@@ -72,19 +72,7 @@ pub async fn run() -> anyhow::Result<()> {
     let admin_listener = infrastructure::bootstrap::build_admin_listener(
         runtime.nats.clone(),
         runtime.db_pool.clone(),
-        helse.clone(),
-        shutdown.clone(),
-    );
-    let admin_retry_listener = infrastructure::bootstrap::build_admin_retry_listener(
-        runtime.nats.clone(),
-        runtime.db_pool.clone(),
         runtime.use_fake_sikri,
-        helse.clone(),
-        shutdown.clone(),
-    );
-    let admin_forkast_listener = infrastructure::bootstrap::build_admin_forkast_listener(
-        runtime.nats.clone(),
-        runtime.db_pool.clone(),
         helse.clone(),
         shutdown.clone(),
     );
@@ -186,28 +174,6 @@ pub async fn run() -> anyhow::Result<()> {
         "admin_listener",
         TaskCriticality::Degraded,
         async move { admin_listener.run().await.context("admin listener failed") },
-    );
-    spawn_named_task(
-        &mut tasks,
-        "admin_retry_listener",
-        TaskCriticality::Degraded,
-        async move {
-            admin_retry_listener
-                .run()
-                .await
-                .context("admin retry listener failed")
-        },
-    );
-    spawn_named_task(
-        &mut tasks,
-        "admin_forkast_listener",
-        TaskCriticality::Degraded,
-        async move {
-            admin_forkast_listener
-                .run()
-                .await
-                .context("admin forkast listener failed")
-        },
     );
     spawn_named_task(
         &mut tasks,

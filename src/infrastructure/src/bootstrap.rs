@@ -1,5 +1,7 @@
 use anyhow::{Context, ensure};
+use application::admin::services::admin_forkast_service::AdminForkastService;
 use application::admin::services::admin_read_service::AdminReadService;
+use application::admin::services::admin_retry_service::AdminRetryService;
 use application::command::ports::command_state_port::ArkivSakTilstandRepository;
 use application::command::ports::dokument_renderer_port::{
     DokumentRenderer, IkkeKonfigurertDokumentRenderer,
@@ -13,10 +15,11 @@ use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::admin::adapter::nats_original_command_kilde::NatsOriginalCommandKilde;
+use crate::admin::adapter::postgres_admin_forkast_repository::PostgresAdminForkastRepository;
 use crate::admin::adapter::postgres_admin_read_repository::PostgresAdminReadRepository;
 use crate::admin::adapter::postgres_admin_retry_repository::PostgresAdminRetryRepository;
-use crate::admin::nats::listener::{AdminListener, NatsAdminTransport};
-use crate::admin::nats::retry_listener::AdminRetryListener;
+use crate::admin::nats::listener::{AdminListener, AdminServices};
+use crate::admin::nats::transport::NatsAdminTransport;
 use crate::command::adapter::fake_arkiv_gateway::FakeArkivGateway;
 use crate::command::adapter::fake_command_state_repo::FakeArkivSakTilstandRepository;
 use crate::command::adapter::html2pdf_renderer_adapter::{
@@ -185,36 +188,22 @@ pub fn build_command_listener(
     CommandListener::new(nats, command_service, media_store, helse, shutdown)
 }
 
-/// Admin read deler ett repository mellom de to use casene.
+/// Admin read, retry og forkast deler én listener. Revalidering ved retry går
+/// gjennom den ordinære validatoren; eneste forskjell er meldings-id-en på
+/// ready-publiseringen, så en tidligere levering av samme kommando ikke
+/// dedupliserer bort det nye forsøket.
 pub fn build_admin_listener(
-    nats: NatsClient,
-    db_pool: lib_sql::database_config::DbPool,
-    helse: Helse,
-    shutdown: tokio_util::sync::CancellationToken,
-) -> AdminListener {
-    let repository = std::sync::Arc::new(PostgresAdminReadRepository::new(db_pool));
-    let service = std::sync::Arc::new(AdminReadService::new(repository));
-
-    AdminListener::new(
-        std::sync::Arc::new(NatsAdminTransport::new(nats)),
-        service,
-        helse,
-        shutdown,
-    )
-}
-
-/// Revalidering går gjennom den ordinære validatoren. Eneste forskjell er
-/// meldings-id-en på ready-publiseringen, så en tidligere levering av samme
-/// kommando ikke dedupliserer bort det nye forsøket.
-pub fn build_admin_retry_listener(
     nats: NatsClient,
     db_pool: lib_sql::database_config::DbPool,
     use_fake_sikri: bool,
     helse: Helse,
     shutdown: tokio_util::sync::CancellationToken,
-) -> AdminRetryListener {
-    use application::admin::services::admin_retry_service::AdminRetryService;
+) -> AdminListener {
     use application::command::services::validate_command::ValidateCommandService;
+
+    let read = AdminReadService::new(std::sync::Arc::new(PostgresAdminReadRepository::new(
+        db_pool.clone(),
+    )));
 
     let validator = ValidateCommandService::new(
         command_state_repository(use_fake_sikri),
@@ -224,37 +213,25 @@ pub fn build_admin_retry_listener(
         )),
         Box::new(NatsStatusPublisher::new(nats.clone())),
     );
-    let service = AdminRetryService::new(
+    let retry = AdminRetryService::new(
         std::sync::Arc::new(PostgresAdminRetryRepository::new(db_pool.clone())),
         std::sync::Arc::new(NatsOriginalCommandKilde::new(nats.clone())),
         std::sync::Arc::new(PostgresCommandRepository::new(db_pool.clone())),
-        std::sync::Arc::new(PostgresEntitetRepository::new(db_pool)),
+        std::sync::Arc::new(PostgresEntitetRepository::new(db_pool.clone())),
         validator,
     );
 
-    AdminRetryListener::new(
-        std::sync::Arc::new(NatsAdminTransport::new(nats)),
-        std::sync::Arc::new(service),
-        helse,
-        shutdown,
-    )
-}
-
-pub fn build_admin_forkast_listener(
-    nats: NatsClient,
-    db_pool: lib_sql::database_config::DbPool,
-    helse: Helse,
-    shutdown: tokio_util::sync::CancellationToken,
-) -> crate::admin::nats::forkast_listener::AdminForkastListener {
-    use crate::admin::adapter::postgres_admin_forkast_repository::PostgresAdminForkastRepository;
-    use application::admin::services::admin_forkast_service::AdminForkastService;
-
-    let service = AdminForkastService::new(std::sync::Arc::new(
+    let forkast = AdminForkastService::new(std::sync::Arc::new(
         PostgresAdminForkastRepository::new(db_pool),
     ));
-    crate::admin::nats::forkast_listener::AdminForkastListener::new(
+
+    AdminListener::new(
         std::sync::Arc::new(NatsAdminTransport::new(nats)),
-        std::sync::Arc::new(service),
+        AdminServices {
+            read: std::sync::Arc::new(read),
+            retry: std::sync::Arc::new(retry),
+            forkast: std::sync::Arc::new(forkast),
+        },
         helse,
         shutdown,
     )
