@@ -10,7 +10,7 @@ i Mattilsynet; integrasjon krever tilgang til NATS i det aktuelle miljøet.
 1. **Last opp filene først.** Klienten oppretter en UUID for hver opplasting og
    laster opp filen over NATS med chunked upload-protokollen under
    `arkiv.arkiver.media`. Fullfør opplastingen før du bruker UUID-en som
-   `dokument_referanse` i en kommando.
+   `dokument_referanse` (ferdig fil) eller `mal_referanse` (HTML-mal) i en kommando.
 2. **Send kommandoene i riktig rekkefølge.** for eksempel opprett sak → opprett
    journalpost → avslutt sak. Hver kommando har sin egen `command_id`.
 3. **Ta vare på `command_id`.** `Ok` betyr at hele listen er mottatt for videre
@@ -29,6 +29,7 @@ Da kan begge sendes i samme liste, også når arkivet er utilgjengelig.
 | `command_id` | UUID for én kommando; brukes til idempotens og til å følge status. Behold ID-en for å følge status. |
 | `client_reference` | Klientens UUID for en sak, journalpost eller et dokument, uavhengig av arkivets ID. |
 | `dokument_referanse` | UUID-en til en ferdig opplastet fil; er ikke det samme som dokumentets `client_reference`. |
+| `mal_referanse` | UUID-en til en opplastet HTML-mal som Skuffen skal fylle ut og rendre til PDF. |
 | `correlation_id` | Valgfri UUID som knytter flere kommandoer sammen for sporbarhet. |
 
 ## Kontrakter og filopplasting
@@ -150,6 +151,55 @@ rekkefølge:
 Feilsvar har formatet `{"Error":{"message":"..."}}`. Ved timeout eller teknisk
 feil må du ikke anta at ingen kommandoer er mottatt; behold de opprinnelige
 kommando-ID-ene ved nytt forsøk.
+
+### Saksnummer i HTML-dokumenter
+
+Du kan få sakens saksnummer satt inn i et dokument uten å kjenne nummeret når du
+sender kommandoene. Bruk `HtmlTemplate` i stedet for `Bytes` på hoveddokumentet:
+
+1. Lag en HTML-mal i UTF-8 med plassholderen `{{saksnummer}}`, for eksempel:
+
+   ```html
+   <!doctype html>
+   <html lang="nb">
+   <head><meta charset="utf-8"><title>Internt fagnotat</title></head>
+   <body>
+     <h1>Internt fagnotat</h1>
+     <p>Saksnummer: {{saksnummer}}</p>
+   </body>
+   </html>
+   ```
+
+2. Last opp HTML-filen via samme opplastingsprotokoll som andre filer, og vent
+   på vellykket lagring. Bruk filens `upload_id` som `mal_referanse`.
+3. Bytt ut hoveddokumentet — første element i `dokumenter` i eksemplet over — med:
+
+   ```json
+   {
+     "client_reference": "<UUID>",
+     "tittel": "Fagnotat",
+     "form": {
+       "HtmlTemplate": {
+         "mal_referanse": "<UUID>",
+         "felter": ["Saksnummer"]
+       }
+     }
+   }
+   ```
+
+4. Send samme sekvens: opprett sak → opprett internt notat → avslutt sak.
+   Skuffen venter til saken har fått et saksnummer, erstatter `{{saksnummer}}`,
+   rendrer HTML-en til PDF og arkiverer PDF-en som hoveddokument. Nummeret hentes
+   fra saken journalpostens `sak_key` peker på. Du trenger ikke laste opp en PDF
+   eller sende en ny kommando når saksnummeret blir tilgjengelig.
+
+Foreløpig støttes bare feltet `Saksnummer`. Skriv `{{saksnummer}}` nøyaktig slik,
+uten mellomrom, og bruk det én gang i malen. `felter` må samsvare med malens
+plassholdere; en statisk HTML-mal uten plassholdere bruker `"felter": []`.
+HTML-maler støttes bare som hoveddokument, ikke som vedlegg.
+
+Miljøet må ha HTML-til-PDF-rendereren konfigurert;
+se [oppsett i utviklingsguiden](.agent/guides/commands.md#runtime-configuration).
 
 ## Følg status og håndter feil
 
