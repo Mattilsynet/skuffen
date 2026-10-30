@@ -248,26 +248,10 @@ const ERROR_RULES: &[ErrorRule] = &[
         body_contains_all: &["ny journalpost har dokument-filer som mangler innhold"],
         recoverability: Recoverability::Irrecoverable,
     },
-    ErrorRule {
-        status: Some(StatusCode::BAD_REQUEST),
-        body_contains_all: &["tilgangskode"],
-        recoverability: Recoverability::Irrecoverable,
-    },
-    ErrorRule {
-        status: Some(StatusCode::INTERNAL_SERVER_ERROR),
-        body_contains_all: &["tilgangskode"],
-        recoverability: Recoverability::Irrecoverable,
-    },
-    ErrorRule {
-        status: Some(StatusCode::BAD_REQUEST),
-        body_contains_all: &["tilgangshjemmel"],
-        recoverability: Recoverability::Irrecoverable,
-    },
-    ErrorRule {
-        status: Some(StatusCode::INTERNAL_SERVER_ERROR),
-        body_contains_all: &["tilgangshjemmel"],
-        recoverability: Recoverability::Irrecoverable,
-    },
+    // `tilgangskode` og `tilgangshjemmel` alene er ikke regler: Sikri ekkoer
+    // input-parametrene i feilsvaret, og der står `Tilgangskode = UO` på hver
+    // journalpost. Ordene ville gjort enhver 500 fra `OpprettJournalpost`
+    // terminal, også forbigående opplastingsfeil.
     ErrorRule {
         status: Some(StatusCode::BAD_REQUEST),
         body_contains_all: &["mangler tilgang"],
@@ -444,10 +428,7 @@ fn contains_attachment_missing_content_pattern(body: &str) -> bool {
 
 fn contains_access_control_pattern(body: &str) -> bool {
     let normalized = body.to_lowercase();
-    normalized.contains("tilgangskode")
-        || normalized.contains("tilgangshjemmel")
-        || normalized.contains("mangler tilgang")
-        || normalized.contains("ikke har rettighet")
+    normalized.contains("mangler tilgang") || normalized.contains("ikke har rettighet")
 }
 
 fn access_control_failure_is_irrecoverable(status: StatusCode) -> bool {
@@ -555,15 +536,21 @@ mod tests {
 
     #[test]
     fn body_regler_gaar_foran_statusregler() {
-        // 400 er recoverable som bunn, men et positivt treff på tilgangskode
-        // skal fortsatt terminere. Rekkefølgen i ERROR_RULES er det som
-        // holder dette oppe.
+        // 400 er recoverable som bunn, men et positivt treff på en
+        // tilgangsavvisning skal fortsatt terminere. Rekkefølgen i ERROR_RULES
+        // er det som holder dette oppe.
         assert_eq!(
-            classify_http_error(StatusCode::BAD_REQUEST, Some("Ugyldig tilgangskode UO")),
+            classify_http_error(
+                StatusCode::BAD_REQUEST,
+                Some("Mangler tilgang til skjermet sak")
+            ),
             Recoverability::Irrecoverable
         );
         assert_eq!(
-            classify_http_error(StatusCode::BAD_REQUEST, Some("tilgangshjemmel mangler")),
+            classify_http_error(
+                StatusCode::BAD_REQUEST,
+                Some("Brukeren ikke har rettighet til saken")
+            ),
             Recoverability::Irrecoverable
         );
     }
@@ -609,7 +596,7 @@ mod tests {
         for (status, body) in [
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Tilgangskode UO er ugyldig for denne saken og bruker Z12345",
+                "Mangler tilgang til tilgangskode UO for bruker Z12345",
             ),
             (
                 StatusCode::BAD_REQUEST,
@@ -708,16 +695,31 @@ mod tests {
     }
 
     #[test]
-    fn maps_tilgangskode_errors_to_safe_access_code() {
-        let body = "Tilgangskode UO er ugyldig for denne saken og bruker Z12345";
-        let result = classify_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
-        let detail = safe_detail_for_http_error(StatusCode::INTERNAL_SERVER_ERROR, Some(body));
+    fn ekkoet_tilgangskode_gjoer_ikke_serverfeil_terminal() {
+        // Formen på svaret er ikke kontrakt. Uansett om ekkoet input kommer
+        // som JSON-felt eller fritekst, skal det ikke avgjøre utfallet.
+        let opplastingsfeil = "Feil ved opplasting av dokument: Cannot find in cache UploadContext";
+        let ekko = "\n\t saksnr = 2026/000123\
+            \n\t nyJournalpost.Journalposttype = I\
+            \n\t nyJournalpost.Tilgangskode = UO\
+            \n\t nyJournalpost.Tilgangshjemmel = Offl. § 24 andre ledd";
+        let bodyer = [
+            serde_json::json!({
+                "errorMessage": opplastingsfeil,
+                "inputParameters": ekko,
+                "stackTrace": format!("System.Exception: {opplastingsfeil}")
+            })
+            .to_string(),
+            format!("Feil i OpprettJournalpost:{ekko}\n{opplastingsfeil}"),
+            "Ugyldig tilgangskode UO".to_string(),
+        ];
 
-        assert_eq!(result, Recoverability::Irrecoverable);
-        assert_eq!(detail, "sikri_access_control_rejected");
-        assert!(!detail.contains("UO"));
-        assert!(!detail.contains("Z12345"));
-        assert!(!detail.contains("Tilgangskode"));
+        for body in bodyer {
+            let feil = SikriFeil::fra_http(StatusCode::INTERNAL_SERVER_ERROR, Some(&body));
+
+            assert_eq!(feil.recoverability, Recoverability::Recoverable, "{body}");
+            assert_eq!(feil.kode, "sikri_upstream_error", "{body}");
+        }
     }
 
     #[test]

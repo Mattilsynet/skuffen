@@ -418,7 +418,7 @@ Terminal failure requires a positive match (SKU-0017): the classifier's floor is
 | Code | Meaning | Recoverability |
 |---|---|---|
 | `sikri_unknown_user` | Saksbehandler/systembruker not found in ePhorte | Irrecoverable |
-| `sikri_access_control_rejected` | Tilgangskode/tilgangshjemmel rejected | Irrecoverable |
+| `sikri_access_control_rejected` | Sikri reports missing access (`mangler tilgang`, `ikke har rettighet`) | Irrecoverable |
 | `sikri_validation_failed` | Sikri rejected the content as invalid | Irrecoverable |
 | `sikri_missing_document_content` | Journalpost or vedlegg document files have no content | Irrecoverable |
 | `sikri_unresolved_journalposter` | Sak has journalposter that are not avskrevet (restanser), so it cannot be closed | Irrecoverable |
@@ -431,6 +431,13 @@ Terminal failure requires a positive match (SKU-0017): the classifier's floor is
 | `sikri_secret_unavailable` | Credentials could not be read from Secret Manager | Recoverable |
 | `sikri_response_unparsable` | 2xx in a shape we do not recognise | Recoverable |
 | `sikri_unknown_error` | Unclassified error | Recoverable |
+
+The access-control rule matches only `mangler tilgang` and `ikke har rettighet`. The bare
+words `tilgangskode` and `tilgangshjemmel` are not rules: Sikri echoes the input parameters
+in its error response, so every failed `OpprettJournalpost` contains `Tilgangskode = UO`.
+As rules they made any 500 from `OpprettJournalpost` terminal — including a transient
+document-upload failure (`Cannot find in cache …UploadContext`) — and the response format is
+not a contract we can parse around.
 
 Two rules read the `errorMessage` field of Sikri's JSON envelope rather than the whole
 body, because the same response echoes the input parameters and a stack trace, and a copy

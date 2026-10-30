@@ -415,16 +415,35 @@ pub async fn opprett_journalpost(
     kildesystem: Option<&str>,
 ) -> Result<ElementsJournalpostRespons, SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
-    let url = format!("{}/api/Archive/OpprettJournalpost", base_url());
+    send_opprett_journalpost(
+        arkiv_client(),
+        &base_url(),
+        &username,
+        &password,
+        journalpost,
+        saksnummer,
+        kildesystem,
+    )
+    .await
+}
+
+async fn send_opprett_journalpost(
+    client: &Client,
+    base_url: &str,
+    username: &str,
+    password: &str,
+    journalpost: ElementsJournalpost,
+    saksnummer: &str,
+    kildesystem: Option<&str>,
+) -> Result<ElementsJournalpostRespons, SikriFeil> {
+    let url = format!("{base_url}/api/Archive/OpprettJournalpost");
     info!(
         target: "sikri.http",
         method = "POST",
         endpoint = safe_endpoint_label(&url),
         "Sending OpprettJournalpost request to Sikri"
     );
-    let mut request = arkiv_client()
-        .post(&url)
-        .basic_auth(username, Some(password));
+    let mut request = client.post(&url).basic_auth(username, Some(password));
     if let Some(kildesystem) = kildesystem {
         request = request.query(&[("kildesystem", kildesystem)]);
     }
@@ -928,5 +947,53 @@ mod tests {
             feil.melding,
             "Sikri/Elements avviste forespørselen fordi dokumentet mangler innhold."
         );
+    }
+
+    #[tokio::test]
+    async fn opprett_journalpost_retryer_opplastingsfeil_selv_om_tilgangskode_ekkoes() {
+        let body = serde_json::json!({
+            "errorMessage": "Feil ved opplasting av dokument: Cannot find in cache UploadContext",
+            "inputParameters": "\n\t kildesystem = SKUFFEN\n\t saksnr = 2026/000123\n\t nyJournalpost.Tilgangskode = UO\n\t nyJournalpost.Tilgangshjemmel = Offl. § 24 andre ledd",
+            "stackTrace": "at Sikri.Archive.OpprettJournalpost()"
+        })
+        .to_string();
+        let (base_url, received_request) =
+            start_mock_sikri_med_body("500 Internal Server Error", &body).await;
+
+        let feil = send_opprett_journalpost(
+            &Client::new(),
+            &base_url,
+            "bruker",
+            "passord",
+            ElementsJournalpost {
+                tittel: Some("Syntetisk journalpost".to_string()),
+                journalposttype: Some("I".to_string()),
+                journalstatus: None,
+                avskriv_direkte: None,
+                avskrivningsmaate: None,
+                tilgangskode: Some("UO".to_string()),
+                tilgangshjemmel: Some("Offl. § 24 andre ledd".to_string()),
+                saksbehandler: None,
+                saksbehandler_enhet: None,
+                avsendere_mottakere: None,
+                dokumenter: None,
+                dokument_dato: None,
+            },
+            "2026/000123",
+            Some("SKUFFEN"),
+        )
+        .await
+        .unwrap_err();
+
+        let request = received_request.await.unwrap();
+        assert!(
+            request
+                .lines()
+                .next()
+                .unwrap()
+                .starts_with("POST /api/Archive/OpprettJournalpost?")
+        );
+        assert_eq!(feil.kode, "sikri_upstream_error");
+        assert_eq!(feil.recoverability, crate::Recoverability::Recoverable);
     }
 }
