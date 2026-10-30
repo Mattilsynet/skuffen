@@ -65,7 +65,7 @@ tempfile = "3"
 testcontainers = "0.27.3"
 testcontainers-modules = "0.15.0"
 thiserror = "2.0.21"
-tokio = "1.53.1"
+tokio = "1.53.3"
 tokio-util = "0.7.19"
 toml = "1"
 tower = { version = "0.5.3", default-features = false }
