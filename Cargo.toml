@@ -31,10 +31,10 @@ enum_glob_use = "deny"
 anyhow = "1.0.104"
 application = { path = "src/application" }
 assert_cmd = "2"
-async-nats = "0.50.0"
+async-nats = "0.52.0"
 async-trait = "0.1.92"
-aws-lc-rs = "1.18.1"
-aws-lc-sys = "0.45.0"
+aws-lc-rs = "1.19.0"
+aws-lc-sys = "0.47.0"
 axum = "0.8.9"
 base64 = "0.23.1"
 bytes = "1.12.1"
@@ -46,18 +46,18 @@ futures = "0.3.34"
 gcp_auth = "0.12.7"
 http = "1.5.0"
 infrastructure = { path = "src/infrastructure" }
-lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats", tag = "1.7.2" }
-lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas", tag = "1.7.5" }
-lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.7.2" }
-opentelemetry = "0.33.0"
-opentelemetry-otlp = "0.33.0"
-opentelemetry_sdk = "0.33.0"
+lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats", tag = "1.7.6" }
+lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas", tag = "1.7.6" }
+lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.7.6" }
+opentelemetry = "0.33.1"
+opentelemetry-otlp = "0.33.1"
+opentelemetry_sdk = "0.33.1"
 predicates = "3"
 regex = "1"
 reqwest = "0.13.5"
-rustls = "0.23.45"
+rustls = "0.23.46"
 serde = "1.0.229"
-serde_json = "1.0.151"
+serde_json = "1.0.154"
 sikri_client = { path = "crates/sikri_client" }
 skuffen = { path = "." }
 sqlx = { version = "0.9.0", default-features = false }
@@ -65,8 +65,8 @@ tempfile = "3"
 testcontainers = "0.27.3"
 testcontainers-modules = "0.15.0"
 thiserror = "2.0.21"
-tokio = "1.53.3"
-tokio-util = "0.7.19"
+tokio = "1.54.1"
+tokio-util = "0.7.20"
 toml = "1"
 tower = { version = "0.5.3", default-features = false }
 tracing = "0.1.44"
@@ -74,7 +74,7 @@ tracing-log = "0.2.0"
 tracing-opentelemetry = "0.34.0"
 tracing-subscriber = "0.3.23"
 url = "2.5.8"
-uuid = "1.26.1"
+uuid = "1.29.0"
 
 [dependencies]
 anyhow = { workspace = true }
