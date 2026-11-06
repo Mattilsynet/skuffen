@@ -260,7 +260,7 @@ known, and only once.
 | `admin retry: forsøker <command_type>` | `AdminRetryService`, with `command_id`, `command_type` and `sak_id`, before release and validation |
 | `kommando validert: <command_type>` / `avvist` / `venter på ny levering` | `ValidateCommandService`, with `error_code` and `arsak` |
 | `kommando dekomponert: <command_type> til <n> operasjoner` | `DekomponerCommandService`, with `nye_operasjoner` |
-| `operasjon blokkert: <operasjonstype>` / `allerede utført` / `er ugyldig` | `EksekverOperasjonService`, with `grunn` |
+| `operasjon allerede utført: <operasjonstype>` / `er ugyldig` | `EksekverOperasjonService`, with `grunn` |
 | `operasjon utført: <operasjonstype> (forsøk <n>)` / `venter, poller igjen` / `feilet terminalt` | `EksekverOperasjonService`, with `attempt_no` and `kode` |
 | `executor overtok lederskapet` | `OperasjonWorker`, with the recovery counts |
 | `kommandostatus publisert: <command_type> <hendelse>` / `operasjonstatus publisert: <operasjonstype> <hendelse>` | `NatsStatusPublisher`, mirroring the status stream |
@@ -270,8 +270,14 @@ against the bare label still matches by `contains` — but an exact-equality or
 anchored-regex filter does not.
 
 
-The blocked and polling paths matter most: they write to the database without
-publishing status, so the log is the only place their reason becomes visible.
+The polling path matters most: it writes to the database without publishing
+status, so the log is the only place the wait becomes visible.
+
+`operasjon blokkert: <operasjonstype>` is logged at `debug!`, not as a
+milestone. A blocked operation is re-evaluated every 30 seconds for as long as
+it stays blocked (SKU-0020 R3), so at `info!` every stuck row emitted a line
+per half minute indefinitely. The reason is in `operasjon.siste_detalj`,
+available through admin read.
 
 ## Archive identifiers always belong in the log
 

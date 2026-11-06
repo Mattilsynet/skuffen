@@ -127,10 +127,11 @@ impl EksekverOperasjonService {
 
         match self.beslutt(&op, &facts).await? {
             Beslutning::Blokkert(grunn) => {
-                // Blokkeringsårsak er spørrbar tilstand (D33), så vi
-                // publiserer ikke ved `blokkert ↔ klar`-flakking. Loggen er
-                // det eneste stedet årsaken blir synlig i øyeblikket.
-                tracing::info!(
+                // Blokkeringsårsak er spørrbar tilstand (D33) i
+                // `siste_detalj`, så vi publiserer ikke ved
+                // `blokkert ↔ klar`-flakking. Debug fordi en blokkert
+                // operasjon vurderes hvert 30. sekund (SKU-0020 R3).
+                tracing::debug!(
                     grunn = grunn.safe_detail(),
                     "operasjon blokkert: {}",
                     op.operasjonstype.as_code()
