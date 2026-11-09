@@ -182,10 +182,6 @@ Admin-reparasjonens handlinger, autorisasjon, tilstandsoverganger og
 statuspublisering planlegges separat. Det hevdes ikke at funksjonaliteten
 finnes i dag, og den er ikke en forutsetning for utrulling av denne rettingen.
 
-Planen [ferdigbehandling av journalpost](ferdigbehandle-journalpost.md) §11.3
-foreslår et unntak fra søskenkravet og ny innsending som reparasjon. Det
-forslaget skal ikke tas inn i denne leveransen; ved samordning av planene må
-det erstattes med operatørens beslutning om senere admin-reparasjon.
 Ingen revisjon av domenets søskenkrav eller tilhørende ADR er nødvendig her.
 
 ## 6. Tester og akseptansekriterier
