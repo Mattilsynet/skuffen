@@ -2,16 +2,17 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use domain::command::batch::Batchfeil;
 use domain::eksekvering::id::SkuffenSakId;
 use domain::eksekvering::operasjon::EntitetType;
-use domain::eksekvering::typer::{CommandEvent, CommandStatus, Operasjonstatus};
+use domain::eksekvering::typer::{CommandEvent, CommandStatus, CommandTypeCode, Operasjonstatus};
 use uuid::Uuid;
 
 use crate::command::ports::command_dispatcher_port::CommandDispatcher;
 use crate::command::ports::command_port::{CommandRepository, Mottaksresultat};
 use crate::command::ports::entitet_port::{Entitet, EntitetRepository, NyEntitet};
 use crate::command::ports::status_publisher_port::StatusPublisher;
-use crate::command::services::ingest_command::IngestCommandService;
+use crate::command::services::ingest_command::{IngestCommandService, IngestFeil, command_type};
 use crate::command::{Command, CommandEnvelope, SakKey, test_fixtures};
 
 // ---------------------------------------------------------------------------
@@ -22,7 +23,8 @@ use crate::command::{Command, CommandEnvelope, SakKey, test_fixtures};
 /// eksistens (SKU-0016 R11), så fake-en må skille de to eksplisitt.
 #[derive(Clone, Default)]
 struct FakeCommandRepository {
-    mottatt: Arc<Mutex<HashMap<Uuid, bool>>>,
+    /// command_id -> (type, dispatchet)
+    mottatt: Arc<Mutex<HashMap<Uuid, (CommandTypeCode, bool)>>>,
     saker: Arc<Mutex<HashMap<Uuid, SkuffenSakId>>>,
 }
 
@@ -34,18 +36,38 @@ impl CommandRepository for FakeCommandRepository {
     ) -> Result<Mottaksresultat, anyhow::Error> {
         let mut mottatt = self.mottatt.lock().unwrap();
         match mottatt.get(&envelope.command_id) {
-            Some(true) => Ok(Mottaksresultat::AlleredeDispatchet),
-            Some(false) => Ok(Mottaksresultat::MottattIkkeDispatchet),
+            Some((_, true)) => Ok(Mottaksresultat::AlleredeDispatchet),
+            Some((_, false)) => Ok(Mottaksresultat::MottattIkkeDispatchet),
             None => {
-                mottatt.insert(envelope.command_id, false);
+                mottatt.insert(
+                    envelope.command_id,
+                    (command_type(&envelope.payload), false),
+                );
                 Ok(Mottaksresultat::Ny)
             }
         }
     }
 
     async fn marker_dispatchet(&self, command_id: Uuid) -> Result<(), anyhow::Error> {
-        self.mottatt.lock().unwrap().insert(command_id, true);
+        if let Some((_, dispatchet)) = self.mottatt.lock().unwrap().get_mut(&command_id) {
+            *dispatchet = true;
+        }
         Ok(())
+    }
+
+    async fn hent_kommandotyper(
+        &self,
+        command_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, CommandTypeCode>, anyhow::Error> {
+        let mottatt = self.mottatt.lock().unwrap();
+        Ok(command_ids
+            .iter()
+            .filter_map(|id| {
+                mottatt
+                    .get(id)
+                    .map(|(command_type, _)| (*id, *command_type))
+            })
+            .collect())
     }
 
     async fn knytt_sak(&self, command_id: Uuid, sak_id: SkuffenSakId) -> Result<(), anyhow::Error> {
@@ -431,7 +453,7 @@ async fn mottak_kobler_kommandoen_til_saken_for_validering() {
 }
 
 #[tokio::test]
-async fn ukjent_sak_gir_ingen_kobling_og_stopper_ikke_mottaket() {
+async fn ukjent_sak_avviser_batchen_foer_noe_skrives() {
     let command = FakeCommandRepository::default();
     let dispatcher = FakeCommandDispatcher::default();
     let service = build_service(
@@ -441,12 +463,92 @@ async fn ukjent_sak_gir_ingen_kobling_og_stopper_ikke_mottaket() {
         FakeStatusPublisher::default(),
     );
 
-    let avslutt = test_fixtures::envelope(test_fixtures::avslutt_sak(SakKey::ClientReference(
-        Uuid::new_v4(),
-    )));
-    let command_id = avslutt.command_id;
-    service.handle(vec![avslutt]).await.unwrap();
+    let sak = Uuid::new_v4();
+    let avslutt = test_fixtures::envelope(test_fixtures::avslutt_sak(SakKey::ClientReference(sak)));
 
-    assert!(command.saker.lock().unwrap().get(&command_id).is_none());
-    assert_eq!(*dispatcher.dispatched.lock().unwrap(), vec![command_id]);
+    let feil = service.handle(vec![avslutt]).await.unwrap_err();
+
+    let IngestFeil::UgyldigBatch(feil) = feil else {
+        panic!("forventet ugyldig batch, fikk {feil:?}");
+    };
+    assert_eq!(
+        feil,
+        vec![Batchfeil::SakReferanseUkjent {
+            posisjon: 0,
+            client_reference: sak,
+        }]
+    );
+    assert!(command.mottatt.lock().unwrap().is_empty());
+    assert!(dispatcher.dispatched.lock().unwrap().is_empty());
+}
+
+/// Batchen som slapp gjennom i test: samme UUID som command_id for alle
+/// kommandoene. Før ble kommando 2 og 3 stille godtatt som duplikater av 1.
+#[tokio::test]
+async fn gjenbrukt_command_id_i_batchen_avvises_foer_noe_skrives() {
+    let command = FakeCommandRepository::default();
+    let entitet = FakeEntitetRepository::default();
+    let dispatcher = FakeCommandDispatcher::default();
+    let service = build_service(
+        command.clone(),
+        entitet.clone(),
+        dispatcher.clone(),
+        FakeStatusPublisher::default(),
+    );
+
+    let id = Uuid::new_v4();
+    let batch = vec![
+        CommandEnvelope::new(id, test_fixtures::opprett_sak(id)),
+        CommandEnvelope::new(
+            id,
+            test_fixtures::internt_notat(SakKey::ClientReference(id)),
+        ),
+        CommandEnvelope::new(id, test_fixtures::avslutt_sak(SakKey::ClientReference(id))),
+    ];
+
+    let feil = service.handle(batch).await.unwrap_err();
+
+    let IngestFeil::UgyldigBatch(feil) = feil else {
+        panic!("forventet ugyldig batch, fikk {feil:?}");
+    };
+    assert_eq!(
+        feil,
+        vec![Batchfeil::CommandIdGjentatt {
+            command_id: id,
+            posisjoner: vec![0, 1, 2],
+        }]
+    );
+    assert!(command.mottatt.lock().unwrap().is_empty());
+    assert!(entitet.entiteter.lock().unwrap().is_empty());
+    assert!(dispatcher.dispatched.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn ny_kommando_kan_ikke_opprette_en_sak_som_finnes() {
+    let entitet = FakeEntitetRepository::default();
+    let sak = Uuid::new_v4();
+    let service = build_service(
+        FakeCommandRepository::default(),
+        entitet.clone(),
+        FakeCommandDispatcher::default(),
+        FakeStatusPublisher::default(),
+    );
+    service
+        .handle(opprett_sak_batch(Uuid::new_v4(), sak))
+        .await
+        .unwrap();
+
+    let feil = service
+        .handle(opprett_sak_batch(Uuid::new_v4(), sak))
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            &feil,
+            IngestFeil::UgyldigBatch(feil)
+                if matches!(feil.as_slice(), [Batchfeil::ClientReferenceFinnesFraFoer { .. }])
+        ),
+        "{feil:?}"
+    );
 }

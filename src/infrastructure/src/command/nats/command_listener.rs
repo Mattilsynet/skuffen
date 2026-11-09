@@ -1,9 +1,10 @@
 use crate::command::media::MediaStore;
+use crate::command::nats::kvittering::{self, Mediafeil, MediafeilArt};
 use crate::command::wire_mapper::map_wire_envelope;
 use crate::http::helse::Helse;
 use crate::nats::client::NatsClient;
 use crate::nats::supervisor::{RESTARTBUDSJETT, TaskSupervisor, tasknavn};
-use application::command::services::ingest_command::IngestCommandService;
+use application::command::services::ingest_command::{IngestCommandService, IngestFeil};
 use async_nats::Message;
 use futures::StreamExt;
 use lib_schemas::skuffen::command::commands::{
@@ -86,47 +87,50 @@ impl CommandListener {
     async fn handle_message(&self, msg: Message) {
         info!("mottok kommandobatch");
 
-        let reply_subject = match msg.reply.clone() {
-            Some(r) => r,
-            None => {
-                error!("Command batch has no reply subject. Ignoring.");
-                return;
-            }
+        let Some(reply_subject) = msg.reply.clone() else {
+            error!("Command batch has no reply subject. Ignoring.");
+            return;
         };
 
-        let commands: Vec<CommandEnvelope<Command>> = match serde_json::from_slice(&msg.payload) {
-            Ok(c) => c,
+        let kvittering = self.motta_batch(&msg.payload).await;
+        let payload = serde_json::to_vec(&kvittering).unwrap_or_default();
+        let _ = self
+            .client
+            .inner()
+            .publish(reply_subject, payload.into())
+            .await;
+    }
+
+    async fn motta_batch(&self, payload: &[u8]) -> ArkiveringKvittering {
+        let avvist = |message: String| ArkiveringKvittering::Error { message };
+
+        let commands: Vec<CommandEnvelope<Command>> = match serde_json::from_slice(payload) {
+            Ok(commands) => commands,
             Err(e) => {
                 error!(
                     error_type = "deserialization",
-                    payload_size = msg.payload.len(),
+                    payload_size = payload.len(),
                     "Failed to deserialize commands: {e}"
                 );
-                let response = ArkiveringKvittering::Error {
-                    message: "invalid payload format".to_string(),
-                };
-                let payload = serde_json::to_vec(&response).unwrap_or_default();
-                let _ = self
-                    .client
-                    .inner()
-                    .publish(reply_subject, payload.into())
-                    .await;
-                return;
+                return avvist(kvittering::ugyldig_payload(&e));
             }
         };
 
-        if let Err(err) = self.validate_media(&commands).await {
-            error!("Media validation failed: {err}");
-            let response = ArkiveringKvittering::Error {
-                message: "media validation failed".to_string(),
-            };
-            let payload = serde_json::to_vec(&response).unwrap_or_default();
-            let _ = self
-                .client
-                .inner()
-                .publish(reply_subject, payload.into())
-                .await;
-            return;
+        let navn: Vec<&'static str> = commands
+            .iter()
+            .map(|envelope| kvittering::kommandonavn(&envelope.payload))
+            .collect();
+
+        match self.validate_media(&commands).await {
+            Ok(feil) if feil.is_empty() => {}
+            Ok(feil) => {
+                error!(antall_feil = feil.len(), "Media validation failed");
+                return avvist(kvittering::manglende_media(&feil, &navn));
+            }
+            Err(err) => {
+                error!(error = %format!("{err:#}"), "media lookup failed");
+                return avvist(kvittering::INTERN_FEIL.to_string());
+            }
         }
 
         let command_count = commands.len();
@@ -134,16 +138,7 @@ impl CommandListener {
             Ok(seq) => seq,
             Err(e) => {
                 error!("Invalid command sequence: {e}");
-                let response = ArkiveringKvittering::Error {
-                    message: "invalid command sequence".to_string(),
-                };
-                let payload = serde_json::to_vec(&response).unwrap_or_default();
-                let _ = self
-                    .client
-                    .inner()
-                    .publish(reply_subject, payload.into())
-                    .await;
-                return;
+                return avvist(kvittering::TOM_BATCH.to_string());
             }
         };
 
@@ -158,109 +153,92 @@ impl CommandListener {
                     command_count,
                     "kommandobatch mottatt og videresendt: {command_count} kommandoer"
                 );
-                let response = ArkiveringKvittering::Ok { command_ids };
-                let payload = serde_json::to_vec(&response).unwrap_or_default();
-                let _ = self
-                    .client
-                    .inner()
-                    .publish(reply_subject, payload.into())
-                    .await;
+                ArkiveringKvittering::Ok { command_ids }
             }
-            Err(e) => {
-                error!(command_count, error = %e, "kunne ikke ta imot kommandobatch");
-                let response = ArkiveringKvittering::Error {
-                    message: "internal error".to_string(),
-                };
-                let payload = serde_json::to_vec(&response).unwrap_or_default();
-                let _ = self
-                    .client
-                    .inner()
-                    .publish(reply_subject, payload.into())
-                    .await;
+            Err(IngestFeil::UgyldigBatch(feil)) => avvist(kvittering::ugyldig_batch(&feil, &navn)),
+            Err(IngestFeil::Intern(e)) => {
+                error!(command_count, error = %format!("{e:#}"), "kunne ikke ta imot kommandobatch");
+                avvist(kvittering::INTERN_FEIL.to_string())
             }
         }
     }
 
-    async fn ingest_sequence(&self, sequence: CommandSequence) -> anyhow::Result<Vec<uuid::Uuid>> {
+    async fn ingest_sequence(
+        &self,
+        sequence: CommandSequence,
+    ) -> Result<Vec<uuid::Uuid>, IngestFeil> {
         let commands: Vec<_> = sequence.into_iter().map(map_wire_envelope).collect();
         self.service.handle(commands).await
     }
 
-    async fn validate_media(&self, commands: &[CommandEnvelope<Command>]) -> Result<(), String> {
-        let mut missing: Vec<String> = Vec::new();
-
-        for envelope in commands {
-            match &envelope.payload {
-                Command::OpprettInngåendeJournalpost(command) => {
-                    self.validate_media_references(&command.felles.dokumenter, &mut missing)
-                        .await?;
-                }
-                Command::OpprettUtgåendeJournalpost(command) => {
-                    self.validate_media_references(&command.felles.dokumenter, &mut missing)
-                        .await?;
-                }
-                Command::OpprettUtgåendeJournalpostMedUtsending(command) => {
-                    self.validate_media_references(&command.felles.dokumenter, &mut missing)
-                        .await?;
-                }
-                Command::OpprettInterntNotatJournalpost(command) => {
-                    self.validate_media_references(&command.felles.dokumenter, &mut missing)
-                        .await?;
-                }
-                Command::OpprettSak(_) | Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => {
-                }
-            }
-        }
-
-        if missing.is_empty() {
-            return Ok(());
-        }
-
-        let list = missing.join(", ");
-        Err(format!("Missing media: {list}"))
-    }
-
-    async fn validate_media_references(
+    /// Feil i oppslaget mot lageret er Skuffens feil, ikke klientens, og
+    /// returneres som `Err`.
+    async fn validate_media(
         &self,
-        dokumenter: &[Dokument],
-        missing: &mut Vec<String>,
-    ) -> Result<(), String> {
-        for dokument in dokumenter {
-            let id = match &dokument.form {
-                Dokumentform::Bytes {
-                    dokument_referanse,
-                    filtype: _,
-                } => *dokument_referanse,
-                Dokumentform::HtmlTemplate {
-                    mal_referanse,
-                    felter,
-                } => {
-                    validate_html_template_felter(felter)?;
-                    *mal_referanse
+        commands: &[CommandEnvelope<Command>],
+    ) -> anyhow::Result<Vec<Mediafeil>> {
+        let mut feil = Vec::new();
+
+        for (posisjon, envelope) in commands.iter().enumerate() {
+            let dokumenter = match &envelope.payload {
+                Command::OpprettInngåendeJournalpost(command) => &command.felles.dokumenter,
+                Command::OpprettUtgåendeJournalpost(command) => &command.felles.dokumenter,
+                Command::OpprettUtgåendeJournalpostMedUtsending(command) => {
+                    &command.felles.dokumenter
+                }
+                Command::OpprettInterntNotatJournalpost(command) => &command.felles.dokumenter,
+                Command::OpprettSak(_) | Command::AvsluttSak(_) | Command::SettSaksansvarlig(_) => {
+                    continue;
                 }
             };
-            let exists = self
-                .media_store
-                .exists(id)
-                .await
-                .map_err(|err| err.to_string())?;
-            if !exists {
-                missing.push(id.to_string());
+            for (dokument, innhold) in dokumenter.iter().enumerate() {
+                if let Some(art) = self.valider_dokument(innhold).await? {
+                    feil.push(Mediafeil {
+                        posisjon,
+                        dokument,
+                        art,
+                    });
+                }
             }
         }
-        Ok(())
+
+        Ok(feil)
+    }
+
+    async fn valider_dokument(&self, dokument: &Dokument) -> anyhow::Result<Option<MediafeilArt>> {
+        let (referanse, mangler) = match &dokument.form {
+            Dokumentform::Bytes {
+                dokument_referanse,
+                filtype: _,
+            } => (
+                *dokument_referanse,
+                MediafeilArt::DokumentIkkeLastetOpp {
+                    dokument_referanse: *dokument_referanse,
+                },
+            ),
+            Dokumentform::HtmlTemplate {
+                mal_referanse,
+                felter,
+            } => {
+                if !har_unike_felter(felter) {
+                    return Ok(Some(MediafeilArt::DuplikateMalfelter));
+                }
+                (
+                    *mal_referanse,
+                    MediafeilArt::MalIkkeLastetOpp {
+                        mal_referanse: *mal_referanse,
+                    },
+                )
+            }
+        };
+        let finnes = self.media_store.exists(referanse).await?;
+        Ok((!finnes).then_some(mangler))
     }
 }
 
-fn validate_html_template_felter(felter: &[Felt]) -> Result<(), String> {
+fn har_unike_felter(felter: &[Felt]) -> bool {
     let mut sett = HashSet::with_capacity(felter.len());
-    for felt in felter {
-        if !sett.insert(*felt) {
-            return Err("HtmlTemplate har duplikate felter".to_string());
-        }
-    }
-
-    Ok(())
+    felter.iter().all(|felt| sett.insert(*felt))
 }
 
 #[cfg(test)]
@@ -268,20 +246,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn validate_html_template_felter_tillater_tomme_felter() {
-        assert!(validate_html_template_felter(&[]).is_ok());
+    fn tomme_malfelter_er_unike() {
+        assert!(har_unike_felter(&[]));
     }
 
     #[test]
-    fn validate_html_template_felter_tillater_unike_felter() {
-        assert!(validate_html_template_felter(&[Felt::Saksnummer]).is_ok());
+    fn ett_malfelt_er_unikt() {
+        assert!(har_unike_felter(&[Felt::Saksnummer]));
     }
 
     #[test]
-    fn validate_html_template_felter_avviser_duplikate_felter() {
-        let err = validate_html_template_felter(&[Felt::Saksnummer, Felt::Saksnummer])
-            .expect_err("duplicate felter should be rejected");
-
-        assert_eq!(err, "HtmlTemplate har duplikate felter");
+    fn samme_malfelt_to_ganger_er_ikke_unikt() {
+        assert!(!har_unike_felter(&[Felt::Saksnummer, Felt::Saksnummer]));
     }
 }

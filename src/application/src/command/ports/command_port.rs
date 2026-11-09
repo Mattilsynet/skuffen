@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use domain::eksekvering::id::SkuffenSakId;
+use domain::eksekvering::typer::CommandTypeCode;
 use uuid::Uuid;
 
 use crate::command::{Command, CommandEnvelope};
@@ -31,6 +34,13 @@ pub trait CommandRepository: Send + Sync {
     ) -> Result<Mottaksresultat, anyhow::Error>;
 
     async fn marker_dispatchet(&self, command_id: Uuid) -> Result<(), anyhow::Error>;
+
+    /// Typen hver allerede mottatte kommando ble mottatt som. Ukjente id-er
+    /// er utelatt.
+    async fn hent_kommandotyper(
+        &self,
+        command_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, CommandTypeCode>, anyhow::Error>;
 
     /// Kobler kommandoen til saken den gjelder. Første kobling vinner, så en
     /// replay ikke kan flytte kommandoen til en annen sak.

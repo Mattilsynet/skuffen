@@ -144,6 +144,13 @@ impl CommandRepository for FakeCommandRepository {
         unreachable!("admin retry nullstiller ikke mottaksjournalen")
     }
 
+    async fn hent_kommandotyper(
+        &self,
+        _command_ids: &[Uuid],
+    ) -> anyhow::Result<HashMap<Uuid, CommandTypeCode>> {
+        unreachable!("admin retry går ikke gjennom mottak")
+    }
+
     async fn knytt_sak(&self, command_id: Uuid, sak_id: SkuffenSakId) -> anyhow::Result<()> {
         self.saker.lock().unwrap().insert(command_id, sak_id);
         Ok(())

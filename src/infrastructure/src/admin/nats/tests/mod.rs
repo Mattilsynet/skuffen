@@ -259,6 +259,13 @@ impl CommandRepository for UventetKall {
         panic!("uventet dispatch")
     }
 
+    async fn hent_kommandotyper(
+        &self,
+        _command_ids: &[Uuid],
+    ) -> anyhow::Result<HashMap<Uuid, CommandTypeCode>> {
+        panic!("uventet oppslag av kommandotyper")
+    }
+
     async fn knytt_sak(&self, _command_id: Uuid, _sak_id: SkuffenSakId) -> anyhow::Result<()> {
         panic!("uventet sakskobling")
     }

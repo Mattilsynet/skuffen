@@ -109,7 +109,7 @@ fn hent_sak_service(use_fake_sikri: bool) -> HentSakService {
 
 pub fn build_query_listener(nats: NatsClient, use_fake_sikri: bool) -> QueryListener {
     // Fake journalpost-data skal aldri nå ekte klienter. Inntil ekte backing
-    // finnes returnerer produksjonsadapteren en tydelig feil (SKU-0008 R7).
+    // finnes returnerer produksjonsadapteren en tydelig feil (SKU-0008 R6).
     let hent_journalpost_uc = if use_fake_sikri {
         HentJournalpostService::new(Box::new(FakeJournalpostRepository::new()))
     } else {

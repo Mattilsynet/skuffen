@@ -3,6 +3,8 @@
 //!
 //! Domain importerer aldri wire-typer (SKU-0013).
 
+pub mod batch;
+
 use crate::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId, SkuffenSakId};
 use crate::eksekvering::tilstand::JournalpostType;
 

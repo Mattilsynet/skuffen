@@ -148,9 +148,22 @@ rekkefølge:
 }
 ```
 
-Feilsvar har formatet `{"Error":{"message":"..."}}`. Ved timeout eller teknisk
-feil må du ikke anta at ingen kommandoer er mottatt; behold de opprinnelige
-kommando-ID-ene ved nytt forsøk.
+Feilsvar har formatet `{"Error":{"message":"..."}}`. Meldingen er skrevet for
+mennesker og forklarer hva som må rettes, med én linje per feil og hvilken
+kommando feilen gjelder. Teksten kan endres og skal ikke tolkes maskinelt.
+
+Skuffen kontrollerer hele listen før noe tas imot, og avviser den hvis:
+
+- to kommandoer har samme `command_id`, eller en `command_id` allerede er brukt
+  for en annen kommandotype;
+- samme `client_reference` brukes for flere saker, journalposter eller dokumenter;
+- en ny kommando oppretter en `client_reference` som allerede finnes i Skuffen;
+- en `sak_key` med `clientReference` viser til en `client_reference` som verken
+  opprettes tidligere i listen eller finnes i Skuffen.
+
+Ved timeout eller teknisk feil må du ikke anta at ingen kommandoer er mottatt;
+send samme liste på nytt med de opprinnelige kommando-ID-ene. En kommando som
+allerede er tatt imot, kjennes igjen på `command_id` og behandles ikke to ganger.
 
 ### Saksnummer i HTML-dokumenter
 

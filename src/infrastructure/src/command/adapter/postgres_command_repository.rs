@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use application::command::ports::command_port::{CommandRepository, Mottaksresultat};
 use application::command::services::ingest_command::command_type;
 use application::command::{Command, CommandEnvelope};
 use async_trait::async_trait;
 use domain::eksekvering::id::SkuffenSakId;
+use domain::eksekvering::typer::CommandTypeCode;
 use lib_sql::database_config::DbPool;
 use uuid::Uuid;
 
@@ -69,6 +72,28 @@ impl CommandRepository for PostgresCommandRepository {
         .await
         .context("failed to mark command dispatched")?;
         Ok(())
+    }
+
+    async fn hent_kommandotyper(
+        &self,
+        command_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, CommandTypeCode>> {
+        let rader: Vec<(Uuid, String)> = sqlx::query_as(
+            "SELECT command_id, command_type FROM command WHERE command_id = ANY($1)",
+        )
+        .bind(command_ids)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to look up known commands")?;
+
+        rader
+            .into_iter()
+            .map(|(command_id, kode)| {
+                CommandTypeCode::from_code(&kode)
+                    .map(|command_type| (command_id, command_type))
+                    .with_context(|| format!("ukjent command_type: {kode}"))
+            })
+            .collect()
     }
 
     async fn knytt_sak(&self, command_id: Uuid, sak_id: SkuffenSakId) -> Result<()> {

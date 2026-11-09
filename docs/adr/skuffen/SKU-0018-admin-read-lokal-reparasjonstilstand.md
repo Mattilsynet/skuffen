@@ -29,7 +29,7 @@ reparasjoner, kommer senere og er ikke dekket her.
 
 R1 [5]: Admin read er to eksakte NATS core request-reply-subjects,
 `arkiv.admin.read.command.hent` og `arkiv.admin.read.sak.hent`, med
-`NatsResponse<T>` som svarramme (jf SKU-0008 R6). Ingen wildcard-subscription.
+`NatsResponse<T>` som svarramme (jf SKU-0008 R5). Ingen wildcard-subscription.
 
 R2 [5]: Admin read viser autoritativ nåværende PostgreSQL-tilstand. Den leser
 ikke status-streamen, kaller ikke arkivet eller object store, og skriver aldri.
