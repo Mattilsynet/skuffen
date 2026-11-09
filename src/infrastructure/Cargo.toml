@@ -22,6 +22,7 @@ sqlx = { workspace = true, features = [
 ] }
 
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+async-nats = { workspace = true }
 futures = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }

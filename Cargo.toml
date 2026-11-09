@@ -31,6 +31,7 @@ enum_glob_use = "deny"
 anyhow = "1.0.104"
 application = { path = "src/application" }
 assert_cmd = "2"
+async-nats = "=0.52.0"
 async-trait = "0.1.92"
 aws-lc-rs = "1.19.0"
 aws-lc-sys = "0.47.0"
@@ -45,9 +46,9 @@ futures = "0.3.34"
 gcp_auth = "0.12.7"
 http = "1.5.0"
 infrastructure = { path = "src/infrastructure" }
-lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats", tag = "1.7.6" }
-lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas", tag = "1.7.6" }
-lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.7.6" }
+lib-nats = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-nats", tag = "1.7.7" }
+lib-schemas = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-schemas", tag = "1.7.7" }
+lib-sql = { git = "https://github.com/Mattilsynet/landdyrtilsyn-libs.git", package = "lib-sql", tag = "1.7.7" }
 opentelemetry = "0.33.1"
 opentelemetry-otlp = "0.33.1"
 opentelemetry_sdk = "0.33.1"
@@ -73,7 +74,7 @@ tracing-log = "0.2.0"
 tracing-opentelemetry = "0.34.0"
 tracing-subscriber = "0.3.23"
 url = "2.5.8"
-uuid = "1.29.0"
+uuid = "1.29.2"
 
 [dependencies]
 anyhow = { workspace = true }
