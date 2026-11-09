@@ -4,6 +4,7 @@
 
 # Avhengighetscache (Cargo)
 /.cargo-ok
+/crates/sikri_client/Cargo.lock
 
 # Debug / profiling
 *.profraw
