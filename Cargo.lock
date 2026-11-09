@@ -178,42 +178,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-nats"
-version = "0.52.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "015f0a7a3b0b29701b78c76a4d4a122624c97c71fa30363381664eb729d619c7"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "futures-util",
- "memchr",
- "nkeys",
- "nuid",
- "pin-project",
- "portable-atomic",
- "rand 0.10.1",
- "regex",
- "ring",
- "rustls-native-certs",
- "rustls-pki-types",
- "rustls-webpki",
- "serde",
- "serde_json",
- "serde_nanos",
- "serde_repr",
- "thiserror 2.0.21",
- "time",
- "tokio",
- "tokio-rustls",
- "tokio-stream",
- "tokio-util",
- "tokio-websockets",
- "tracing",
- "tryhard",
- "url",
-]
-
-[[package]]
 name = "async-stream"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1734,7 +1698,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "application",
- "async-nats 0.52.0",
  "async-trait",
  "aws-lc-rs",
  "axum",
@@ -1943,7 +1906,7 @@ name = "lib-nats"
 version = "0.1.0"
 source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git?tag=1.7.6#50bc7074e9c9963a0206ce00c3880140f045a064"
 dependencies = [
- "async-nats 0.51.0",
+ "async-nats",
  "async-trait",
  "bytes",
  "futures",
@@ -3293,7 +3256,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "application",
- "async-nats 0.52.0",
  "aws-lc-rs",
  "aws-lc-sys",
  "bytes",

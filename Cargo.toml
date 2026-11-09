@@ -31,7 +31,6 @@ enum_glob_use = "deny"
 anyhow = "1.0.104"
 application = { path = "src/application" }
 assert_cmd = "2"
-async-nats = "0.52.0"
 async-trait = "0.1.92"
 aws-lc-rs = "1.19.0"
 aws-lc-sys = "0.47.0"
