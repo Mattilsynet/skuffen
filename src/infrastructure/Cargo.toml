@@ -61,7 +61,6 @@ chrono = { workspace = true, features = ["serde"] }
 tokio-util = { workspace = true }
 
 [dev-dependencies]
-testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true, features = ["postgres"] }
+test-docker = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["trace", "metrics", "testing"] }
 tower = { workspace = true, features = ["util"] }

@@ -49,7 +49,7 @@ Treat `.agent/` as the deeper source of truth for repo rules, technical guidance
 - Run formatting and linting for the touched scope.
 - Run at least one targeted crate test.
 - Run integration tests when touching command flow or infrastructure:
-  - `cargo test -p skuffen-integration-tests` (requires local NATS + Postgres).
+  - `cargo test -p skuffen-integration-tests` (requires a running Docker; the tests start NATS and Postgres themselves).
   - See `.agent/guides/commands.md` for full setup.
 - Update relevant documentation (decision docs, guides, AGENTS.md, domain skill resources) when changes affect behavior, contracts, architecture, or conventions. Documentation is part of done, not follow-up polish.
 

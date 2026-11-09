@@ -18,8 +18,6 @@ use infrastructure::command::adapter::postgres_operasjon_repository::{
 };
 use lib_sql::database_config::DbPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
 const COMMAND_ID: Uuid = Uuid::from_u128(0x11);
@@ -31,12 +29,12 @@ const OPERASJON_ID: Uuid = Uuid::from_u128(0x55);
 const OPPTATT_SAKSNUMMER: &str = "2026/1";
 
 struct Fixture {
-    _container: testcontainers::ContainerAsync<Postgres>,
+    _container: test_docker::Container,
     pool: DbPool,
     connect_options: PgConnectOptions,
 }
 
-/// Bygges fra deler, ikke som URL-streng — testcontainers-URL-er ser ut som
+/// Bygges fra deler, ikke som URL-streng — test-URL-er med passord ser ut som
 /// hardkodede credentials for hemmelighetsskanneren.
 fn connect_options(port: u16) -> PgConnectOptions {
     PgConnectOptions::new()
@@ -48,11 +46,7 @@ fn connect_options(port: u16) -> PgConnectOptions {
 }
 
 async fn start() -> Fixture {
-    let container = Postgres::default().start().await.expect("postgres startet");
-    let port = container
-        .get_host_port_ipv4(5432)
-        .await
-        .expect("postgres port");
+    let (container, port) = test_docker::postgres().expect("postgres startet");
     let connect_options = connect_options(port);
 
     let pool = PgPoolOptions::new()

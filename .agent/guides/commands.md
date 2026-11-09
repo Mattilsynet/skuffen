@@ -95,6 +95,10 @@ Denne guiden beskriver trygge, vanlige bygg-, test- og kvalitetssjekker for `sku
   `cargo test --workspace --exclude skuffen-integration-tests`
 - Integration package only:
   `cargo test -p skuffen-integration-tests -- --nocapture`
+- The integration tests and the Postgres tests in `src/infrastructure/tests`
+  need a running Docker. They start short-lived NATS and Postgres containers
+  through the `docker` CLI (`crates/test-docker`), and remove them when the
+  test finishes.
 
 ## Single-test commands
 

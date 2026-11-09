@@ -2,17 +2,12 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Result;
-use testcontainers::{
-    ContainerAsync, ContainerRequest, GenericImage, ImageExt, core::ContainerPort,
-    runners::AsyncRunner,
-};
-use testcontainers_modules::postgres::Postgres;
+use test_docker::{Container, ContainerSpec};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use crate::support::nats::{wait_for_admin_responders, wait_for_nats_ready, wait_for_ready};
 
-const NATS_IMAGE: &str = "nats";
-const NATS_TAG: &str = "2.10.7";
+const NATS_IMAGE: &str = "nats:2.10.7";
 const NATS_PORT: u16 = 4222;
 const NATS_MONITOR_PORT: u16 = 8222;
 
@@ -27,8 +22,8 @@ struct DbConnectOptions {
 pub struct TestEnv {
     pub nats_url: String,
     pub nats_monitor_url: String,
-    _postgres: ContainerAsync<Postgres>,
-    _nats: ContainerAsync<GenericImage>,
+    _postgres: Container,
+    _nats: Container,
     _skuffen: tokio::task::JoinHandle<anyhow::Result<()>>,
     _guard: OwnedMutexGuard<()>,
 }
@@ -63,20 +58,19 @@ fn default_nats_args() -> Vec<String> {
 /// kommandoer uten mediareferanser.
 const DEFAULT_MAX_PAYLOAD: usize = 8_000_000;
 
-fn nats_image(max_payload: usize) -> ContainerRequest<GenericImage> {
-    GenericImage::new(NATS_IMAGE, NATS_TAG)
-        .with_exposed_port(ContainerPort::Tcp(NATS_PORT))
-        .with_exposed_port(ContainerPort::Tcp(NATS_MONITOR_PORT))
-        .with_cmd(default_nats_args())
-        .with_copy_to(
+fn nats_image(max_payload: usize) -> ContainerSpec {
+    ContainerSpec::new(NATS_IMAGE)
+        .port(NATS_PORT)
+        .port(NATS_MONITOR_PORT)
+        .args(default_nats_args())
+        .fil(
             "/etc/nats-test.conf",
-            format!("max_payload: {max_payload}\n").into_bytes(),
+            format!("max_payload: {max_payload}\n"),
         )
 }
 
-async fn setup_postgres() -> Result<(ContainerAsync<Postgres>, DbConnectOptions)> {
-    let container = Postgres::default().start().await?;
-    let port = container.get_host_port_ipv4(5432).await?;
+async fn setup_postgres() -> Result<(Container, DbConnectOptions)> {
+    let (container, port) = test_docker::postgres()?;
     let options = DbConnectOptions {
         host: "127.0.0.1".to_string(),
         port,
@@ -87,10 +81,10 @@ async fn setup_postgres() -> Result<(ContainerAsync<Postgres>, DbConnectOptions)
     Ok((container, options))
 }
 
-async fn setup_nats(max_payload: usize) -> Result<(ContainerAsync<GenericImage>, String, String)> {
-    let container = nats_image(max_payload).start().await?;
-    let port = container.get_host_port_ipv4(NATS_PORT).await?;
-    let monitor_port = container.get_host_port_ipv4(NATS_MONITOR_PORT).await?;
+async fn setup_nats(max_payload: usize) -> Result<(Container, String, String)> {
+    let container = nats_image(max_payload).start()?;
+    let port = container.host_port(NATS_PORT)?;
+    let monitor_port = container.host_port(NATS_MONITOR_PORT)?;
     let nats_url = format!("nats://127.0.0.1:{port}");
     let monitor_url = format!("http://127.0.0.1:{monitor_port}");
     Ok((container, nats_url, monitor_url))

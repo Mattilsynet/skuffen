@@ -25,8 +25,7 @@ uuid = { workspace = true, features = ["serde", "v4", "v7"] }
 rustls = { workspace = true, features = ["aws_lc_rs"] }
 dotenvy = { workspace = true }
 
-testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true, features = ["postgres"] }
+test-docker = { workspace = true }
 
 [dev-dependencies]
 tracing = { workspace = true }

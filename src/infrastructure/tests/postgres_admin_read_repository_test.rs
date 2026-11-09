@@ -13,20 +13,18 @@ use infrastructure::admin::adapter::postgres_admin_read_repository::PostgresAdmi
 use lib_sql::database_config::DbPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::time::Duration;
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
 /// Speiler `SNAPSHOT_BEGIN` i adapteren.
 const SNAPSHOT_BEGIN: &str = "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY";
 
 struct Fixture {
-    _container: testcontainers::ContainerAsync<Postgres>,
+    _container: test_docker::Container,
     pool: DbPool,
     connect_options: PgConnectOptions,
 }
 
-/// Bygges fra deler, ikke som URL-streng — testcontainers-URL-er ser ut som
+/// Bygges fra deler, ikke som URL-streng — test-URL-er med passord ser ut som
 /// hardkodede credentials for hemmelighetsskanneren.
 fn connect_options(port: u16) -> PgConnectOptions {
     PgConnectOptions::new()
@@ -38,11 +36,7 @@ fn connect_options(port: u16) -> PgConnectOptions {
 }
 
 async fn start() -> Fixture {
-    let container = Postgres::default().start().await.expect("postgres startet");
-    let port = container
-        .get_host_port_ipv4(5432)
-        .await
-        .expect("postgres port");
+    let (container, port) = test_docker::postgres().expect("postgres startet");
     let connect_options = connect_options(port);
 
     let pool = PgPoolOptions::new()

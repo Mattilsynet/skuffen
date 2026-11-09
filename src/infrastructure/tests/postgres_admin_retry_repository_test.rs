@@ -12,8 +12,6 @@ use infrastructure::admin::adapter::postgres_admin_retry_repository::PostgresAdm
 use infrastructure::command::adapter::postgres_operasjon_repository::PostgresOperasjonRepository;
 use lib_sql::database_config::DbPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
 const SAK: Uuid = Uuid::from_u128(0x5a);
@@ -23,7 +21,7 @@ const ANNEN_COMMAND: Uuid = Uuid::from_u128(0xc2);
 const AVVIST: Uuid = Uuid::from_u128(0xc3);
 
 struct Fixture {
-    _container: testcontainers::ContainerAsync<Postgres>,
+    _container: test_docker::Container,
     pool: DbPool,
 }
 
@@ -37,11 +35,7 @@ fn connect_options(port: u16) -> PgConnectOptions {
 }
 
 async fn start() -> Fixture {
-    let container = Postgres::default().start().await.expect("postgres startet");
-    let port = container
-        .get_host_port_ipv4(5432)
-        .await
-        .expect("postgres port");
+    let (container, port) = test_docker::postgres().expect("postgres startet");
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect_with(connect_options(port))

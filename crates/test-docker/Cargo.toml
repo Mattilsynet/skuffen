@@ -1,0 +1,13 @@
+[package]
+name = "test-docker"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Kortlivede Docker-containere for tester, styrt gjennom docker-CLI-et."
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+tempfile = { workspace = true }
