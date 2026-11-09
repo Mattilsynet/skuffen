@@ -1,0 +1,42 @@
+title = "Skuffen"
+
+# gitleaks' innebygde regler gjelder i tillegg til reglene under.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "internal-project-id"
+description = "Block internal project IDs"
+regex = "(?i)(arkiv|skuffen|mattilsynet)[-_]?(test|dev|prod)?[-_]?\\d{3,}[a-z0-9-]*"
+tags = ["internal", "id"]
+
+[[rules]]
+id = "internal-service-account-email"
+description = "Service account emails"
+regex = "\\b[a-z0-9-]+@[a-z0-9-]+\\.iam\\.gserviceaccount\\.com\\b"
+tags = ["gcp", "email"]
+
+[[rules]]
+id = "database-url"
+description = "Database connection URL"
+regex = "(?i)\\b(postgres|postgresql|mysql|mariadb|mongodb|redis)://[^$\\s][^\\s]*\\b"
+tags = ["database", "url"]
+
+[[rules]]
+id = "service-account-json"
+description = "GCP service account private key"
+regex = "(?i)\\\"private_key\\\"\\s*:\\s*\\\"-----BEGIN PRIVATE KEY-----"
+tags = ["gcp", "key"]
+
+[[rules]]
+id = "nats-credentials"
+description = "NATS credentials file content"
+regex = "-----BEGIN (NATS USER JWT|USER NKEY SEED)-----"
+tags = ["nats", "credentials"]
+
+[allowlist]
+# Den tidligere mønsterlisten for pre-push-hooken inneholder selve mønstrene.
+paths = [
+  '''^\.gitleaks\.toml$''',
+  '''^scripts/git-hooks/forbidden-patterns\.txt$''',
+]

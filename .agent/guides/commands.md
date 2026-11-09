@@ -211,14 +211,15 @@ nats request arkiv.admin.write.forkast.commands \
 - Test one crate: `cargo test -p application`
 - Build one crate: `cargo build -p sikri_client`
 
-## Git hooks and safety checks
+## Safety checks before commit and push
 
-- Install hook: `scripts/git-hooks/install.sh`
-- Pre-push hook can run:
-  - `gitleaks` scan (if installed)
-  - forbidden pattern scan (`scripts/git-hooks/forbidden-patterns.txt`)
-  - `cargo fmt --check`
-  - `cargo check`
-  - `cargo clippy --all-targets --all-features -- -D warnings`
-  - `cargo test`
-  - `cargo test -p skuffen-integration-tests`
+The repository installs no git hooks. Run the checks before committing or
+pushing:
+
+- Secrets in the staged change: `gitleaks git --staged --redact`
+- Secrets in unpublished commits: `gitleaks git --redact --log-opts="HEAD --not --remotes"`
+  (`.gitleaks.toml` adds Skuffen's own rules to gitleaks' built-in rules)
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --workspace`
+- `cargo deny check advisories sources` and `cargo audit`
