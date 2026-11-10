@@ -1,5 +1,7 @@
 # Skuffen
 
+Enklere og mer robust arkivering. Bare legg det i skuffen!
+
 Grensesnittet er meldingsbasert over **NATS**, og arkivering skjer **asynkront**.
 Skuffen tar hånd om validering, avhengigheter mellom arkivoperasjoner og nye forsøk
 ved midlertidige feil. Repoet er offentlig, men tjenesten er laget for intern bruk
