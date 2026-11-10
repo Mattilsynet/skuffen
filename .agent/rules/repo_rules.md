@@ -38,7 +38,7 @@ Normative regler for hvordan kode, dokumentasjon og agentarbeid skal se ut i Sku
    - **Secrets:** Behandle tokens/keys som sensitive. Bruk `secrecy::Secret` for streng kontroll av debug og memory.
 5. **Observability og safe logging:**
     - **Traceability:** Logging på tvers av lag (HTTP -> Domain -> DB). Bruk strukturert logging (f.eks. `tracing`) med correlation IDs/spans.
-    - **Sanitization:** Ingen PII eller secrets i logs. Logg flyt og outcome, ikke sensitive payloads.
+    - **Sanitization:** Ingen PII, secrets eller dokumentpayload i logs. Logg flyt og outcome. Sikris tekstfelter `errorMessage` og `stackTrace` er et eksplisitt unntak for intern feildiagnostikk på `error!`, også ved ukjent feil (SKU-0015 R9). Input-ekko og øvrige response-felter utelates; mulig sensitivitet i selve feilteksten er akseptert restrisiko, ikke en anonymiseringsgaranti.
     - **Unntak, `utfort_av` i admin read, admin retry og admin forkast:** Admin-listeneren logger den selvdeklarerte operatøridentifikatoren `utfort_av` på `info!` — admin read én linje per request, admin retry og admin forkast ved start og ved svar. Dette er det eneste menneskeidentifiserende feltet som er tillatt på `info!`. Verdien trimmes, avvises ved blankhet, control characters eller mer enn 128 UTF-8 bytes, og lagres aldri. Unntaket gjelder ikke andre request- eller response-felt; rå `ArkivId` logges ikke. Se ADR `SKU-0018`, `SKU-0023` og `SKU-0024`.
 6. **Type safety:** Utnytt type system ("Parse, don't validate").
 7. **DRY:** Gjenbruk kode der det gir mening. Hold kodebasen minimal.

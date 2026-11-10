@@ -550,6 +550,25 @@ mod tests {
     }
 
     #[test]
+    fn saksbehandlers_tilgangsavvisning_blir_terminal_invalid_request() {
+        for melding in [
+            "Bruker TESTBRUKER mangler rolle mot enhet TESTENHET",
+            "Saksbehandler er ikke autorisert for registert tilgangskode ( 'Test Bruker' )",
+        ] {
+            let body = serde_json::json!({"errorMessage": melding}).to_string();
+            let feil = klassifiser(reqwest::StatusCode::INTERNAL_SERVER_ERROR, &body);
+
+            assert!(!feil.er_recoverable());
+            assert_eq!(feil.kode, "sikri_access_control_rejected");
+            assert_eq!(feil.error_code, StatusErrorCode::InvalidRequest);
+            for identitet in ["TESTBRUKER", "TESTENHET", "Test Bruker"] {
+                assert!(!feil.melding.contains(identitet));
+                assert!(!feil.siste_detalj().contains(identitet));
+            }
+        }
+    }
+
+    #[test]
     fn uavskrevne_restanser_blir_terminal_prerequisite_pending() {
         let feil = klassifiser(
             reqwest::StatusCode::INTERNAL_SERVER_ERROR,

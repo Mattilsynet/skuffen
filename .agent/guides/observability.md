@@ -66,11 +66,11 @@ Log level rules:
 - `warn!`: retryable failures, blocked commands awaiting redelivery
 - `error!`: irrecoverable failures, terminal command drops, infrastructure errors
 - `debug!`: detailed diagnostics (Sikri response parsing, query replies)
-- Raw Sikri error-body logges KUN på `debug!`-nivå, aldri på `info!`/`error!`; ellers brukes safe code (`sikri_unknown_error` fallback fra `safe_detail_for_http_error`)
+- Sikris JSON-tekstfelter `errorMessage` og `stackTrace` logges fullstendig på `error!`, også ved ukjent klassifisering. Input-ekko, dokumentpayload og øvrige response-felter utelates (SKU-0015 R9).
 - Rå Sikri error-body skal aldri til NATS replies, public status events, `operasjon.siste_detalj`
 - Bounded safe error messages (koder + Norwegian user messages) er greit i internal logs for debugging og monitoring
 - Never log request payloads sent to external systems at `info!`/`error!`, because they may contain client-submitted sensitive data
-- PII in structured domain/command types may be rendered via `Debug` at `debug!` level only. `debug!` is off by default in prod, so this is acceptable; the hard rule is that raw external response text and request payloads must never appear at `info!`/`error!`
+- Request payloads must not be logged. Full Sikri diagnostic text is an explicit internal exception with accepted sensitivity risk, not a guarantee of upstream masking.
 
 ## Error taxonomy
 
@@ -353,14 +353,14 @@ Never logged:
 - HTML/PDF document contents or generated payloads
 - Authorization headers, tokens, or secrets
 - Request payloads sent to external systems
-- Secrets, credentials, or PII
+- Secrets or credentials; sensitive values in the selected Sikri diagnostic text are an explicit risk acceptance (SKU-0015 R9)
 
 Acceptable and encouraged in internal logs:
 - Safe error codes and bounded status details from external responses when useful for debugging and monitoring
-- Raw Sikri error-body only at `debug!` level; never at `info!`/`error!`, and never echoed to NATS replies, public status events, `operasjon.siste_detalj`
+- Full Sikri `errorMessage`/`stackTrace` at `error!`, never echoed to NATS replies, public status events or `operasjon.siste_detalj`; no raw-body fallback for unknown envelopes
 - `command_id` and `correlation_id` wherever command context is available
 
-The public outward status is safe but no longer static: it carries the mapped, sanitised message for the failure, so the client learns what went wrong. Internal detail — sqlx errors, raw Sikri bodies — stays in logs and `operasjon.siste_detalj`, which are for operators only.
+The public outward status carries the mapped, sanitised message. Sikri diagnostic text stays in internal logs only; `operasjon.siste_detalj` holds its safe code, or internal detail for failures originating inside Skuffen.
 
 ## Error reply sanitization
 
@@ -368,10 +368,9 @@ NATS error replies to callers must not echo internal details:
 - Deserialization failures: reply with "Invalid payload format" / "Invalid request format"
 - Use case errors: reply with "Internal error"
 - Sikri HTTP errors: the `ensure_success` function logs response metadata but does
-  not echo response bodies to callers. Raw Sikri error-body is logged only at `debug!`
-  level; safe codes (`safe_detail_for_http_error`, `sikri_unknown_error` fallback) are
-  used everywhere else and are the only Sikri error detail allowed on NATS replies,
-  public status events, `operasjon.siste_detalj`
+  not echo response bodies to callers. Selected diagnostic fields are logged at
+  `error!`; safe codes and pre-mapped messages are the only Sikri error information
+  allowed on NATS replies, public status events and `operasjon.siste_detalj`.
 
 This section governs what is echoed back to callers over NATS. Internal logs may include useful external response error messages as long as request payloads, HTML/PDF contents, secrets, and auth material are not logged.
 
@@ -401,7 +400,7 @@ Never logged:
 - PDF bytes or generated content
 - Secrets, credentials, or PII
 
-The public outward status is safe but no longer static: it carries the mapped, sanitised message for the failure, so the client learns what went wrong. Internal detail — sqlx errors, raw Sikri bodies — stays in logs and `operasjon.siste_detalj`, which are for operators only.
+The public outward status carries the mapped, sanitised message. Sikri diagnostic text stays in internal logs only; `operasjon.siste_detalj` holds its safe code, or internal detail for failures originating inside Skuffen.
 
 ## Test logging
 
@@ -424,7 +423,7 @@ Terminal failure requires a positive match (SKU-0017): the classifier's floor is
 | Code | Meaning | Recoverability |
 |---|---|---|
 | `sikri_unknown_user` | Saksbehandler/systembruker not found in ePhorte | Irrecoverable |
-| `sikri_access_control_rejected` | Sikri reports missing access (`mangler tilgang`, `ikke har rettighet`) | Irrecoverable |
+| `sikri_access_control_rejected` | Sikri reports missing access, missing role for a unit, or case handler not authorized for the access code | Irrecoverable |
 | `sikri_validation_failed` | Sikri rejected the content as invalid | Irrecoverable |
 | `sikri_missing_document_content` | Journalpost or vedlegg document files have no content | Irrecoverable |
 | `sikri_unresolved_journalposter` | Sak has journalposter that are not avskrevet (restanser), so it cannot be closed | Irrecoverable |
@@ -438,14 +437,22 @@ Terminal failure requires a positive match (SKU-0017): the classifier's floor is
 | `sikri_response_unparsable` | 2xx in a shape we do not recognise | Recoverable |
 | `sikri_unknown_error` | Unclassified error | Recoverable |
 
-The access-control rule matches only `mangler tilgang` and `ikke har rettighet`. The bare
+The access-control rule matches `mangler tilgang`, `ikke har rettighet` and
+`Bruker … mangler rolle mot enhet …` and
+`Saksbehandler er ikke autorisert for registert tilgangskode` (Sikri's spelling)
+at HTTP 400/500. The case-handler role/access-code rules read
+only `errorMessage` for JSON responses, or the response text for plain-text
+responses; echoed input and stack traces in JSON do not trigger it. A missing
+role or access-code authorization requires correcting the case-handler/unit
+assignment or archive permissions,
+not waiting for an outage to end. The bare
 words `tilgangskode` and `tilgangshjemmel` are not rules: Sikri echoes the input parameters
 in its error response, so every failed `OpprettJournalpost` contains `Tilgangskode = UO`.
 As rules they made any 500 from `OpprettJournalpost` terminal — including a transient
 document-upload failure (`Cannot find in cache …UploadContext`) — and the response format is
 not a contract we can parse around.
 
-Two rules read the `errorMessage` field of Sikri's JSON envelope rather than the whole
+Two further rules read the `errorMessage` field of Sikri's JSON envelope rather than the whole
 body, because the same response echoes the input parameters and a stack trace, and a copy
 of the text there is not Sikri's rejection:
 
@@ -471,7 +478,36 @@ if a code has no client-facing error code.
 
 The companion `user_message_for_http_error` function returns a Norwegian human-readable message that is forwarded to the client on the status stream. It shares the same classification logic. Neither function echoes raw Sikri response bodies or user identifiers.
 
-Logging policy: raw Sikri error-body is logged only at `debug!` level (never `error!`/`info!`). The same split applies to transport and parse failures, whose `reqwest::Error` renders the full URL including query parameters; the `error!` line carries `sikri_transport_arsak` instead. Everywhere else the safe code applies, with `sikri_unknown_error` as fallback. Raw bodies must never reach NATS replies, public status events, or `operasjon.siste_detalj`. Raw error bodies may contain sensitive archive details; the previous risk acceptance permitting full 4xx/5xx body logging on `error!`/`info!` is withdrawn.
+### Diagnosing unknown Sikri failures
+
+Classification and diagnostics are independent. An unclassified HTTP 500 stays
+recoverable, but its client message says that the server error is unclassified,
+not that an outage has been established. A safe code alone is not a diagnosis.
+
+The HTTP error summary carries method, endpoint, status, response length,
+classification, `response_body_read` and `sikri_diagnostics_available`. Full JSON
+string fields `errorMessage` and `stackTrace` are selected case-insensitively and
+logged at `error!`. They are serialized as a diagnostic JSON object and split
+into UTF-8-safe 16,000-byte chunks, without truncation. Reassemble
+`sikri_error_response_chunk` in `_index` order (zero-based), using `_count` and
+the request span to distinguish calls. Correlation/command/operation IDs come
+from enclosing spans as for other HTTP logs.
+
+Input echoes and other fields are never included, even at debug. Empty, malformed,
+non-JSON or unrecognized bodies have no raw fallback; the summary explicitly
+reports unavailable diagnostics. This prevents logging an HTML/PDF response as
+an error. Supporting a new envelope requires checking its payload boundary.
+
+Body-read failures log status and the underlying cause, with
+`response_body_read=false`; they no longer become a fabricated response string.
+Transport and read-error details remove the request URL before logging.
+JSON parse errors log category and line/column rather than a serde error string,
+which can echo entire response values. No successful response body is logged.
+
+The operator accepts sensitivity risk in the selected diagnostic text (SKU-0015
+R9). Masking in Sikri's own logs is not proof of masking in HTTP responses.
+Request/document payload and credentials remain forbidden; raw diagnostics never
+reach NATS replies, public status events or `operasjon.siste_detalj`.
 
 ## URL redaction
 

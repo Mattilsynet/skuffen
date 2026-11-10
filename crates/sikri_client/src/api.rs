@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-const SIKRI_ERROR_RESPONSE_LOG_CHUNK_BYTES: usize = 60_000;
+const SIKRI_ERROR_RESPONSE_LOG_CHUNK_BYTES: usize = 16_000;
 
 /// Hvor lenge vi venter på TCP-oppkobling mot arkivet.
 const ARKIV_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -53,10 +53,7 @@ fn safe_endpoint_label(url: &str) -> &str {
 
 /// Hvorfor kallet feilet, uten URL.
 ///
-/// `reqwest::Error` sitt `Display` inneholder full URL med query-parametre, og
-/// der ligger saksnummer. Etiketten her bærer årsaken — timeout, connect, DNS
-/// — som er det man faktisk trenger for å skille en nede-Sikri fra en treg
-/// Sikri fra en feilkonfigurert URL.
+/// URL-en kan inneholde credentials; kategorien kan logges uten den.
 fn transport_arsak(err: &reqwest::Error) -> &'static str {
     if err.is_timeout() {
         "timeout"
@@ -86,11 +83,9 @@ fn transportfeil(method: &str, url: &str, err: reqwest::Error) -> SikriFeil {
         sikri_error_code = feil.kode,
         sikri_recoverability = feil.recoverability.as_str(),
         sikri_transport_arsak = transport_arsak(&err),
-        "Sikri request failed before a response was received"
+        error = ?err.without_url(),
+        "Sikri request failed before a response was received: {method} {endpoint}"
     );
-    // Rå feiltekst bærer URL med query-parametre og logges derfor kun på
-    // debug, som den rå error-bodyen ellers i denne filen.
-    debug!(target: "sikri.http", method, endpoint, error = %err, "Sikri transport error detail");
     feil
 }
 
@@ -98,16 +93,33 @@ fn transportfeil(method: &str, url: &str, err: reqwest::Error) -> SikriFeil {
 fn parsefeil(method: &str, url: &str, err: reqwest::Error) -> SikriFeil {
     let feil = SikriFeil::uparsbart_svar();
     let endpoint = safe_endpoint_label(url);
+    let arsak = transport_arsak(&err);
+    // Serde-feil kan gjengi hele strengverdier fra svaret, også dokumentinnhold.
+    let json_error = std::error::Error::source(&err)
+        .and_then(|source| source.downcast_ref::<serde_json::Error>())
+        .map(|source| {
+            (
+                source.line(),
+                source.column(),
+                format!("{:?}", source.classify()),
+            )
+        });
+    let error = json_error
+        .is_none()
+        .then(|| format!("{:?}", err.without_url()));
     error!(
         target: "sikri.http",
         method,
         endpoint,
         sikri_error_code = feil.kode,
         sikri_recoverability = feil.recoverability.as_str(),
-        sikri_transport_arsak = transport_arsak(&err),
-        "Sikri response could not be parsed"
+        sikri_transport_arsak = arsak,
+        json_error_line = json_error.as_ref().map(|error| error.0 as u64),
+        json_error_column = json_error.as_ref().map(|error| error.1 as u64),
+        json_error_category = json_error.as_ref().map(|error| error.2.as_str()),
+        error = error.as_deref(),
+        "Sikri response could not be parsed: {method} {endpoint}"
     );
-    debug!(target: "sikri.http", method, endpoint, error = %err, "Sikri parse error detail");
     feil
 }
 
@@ -123,12 +135,27 @@ async fn ensure_success(
         return Ok(response);
     }
 
-    let body = response
-        .text()
-        .await
-        .unwrap_or_else(|_| "<klarte ikke lese respons-body>".to_string());
-    let body = body.trim();
-    let feil = SikriFeil::fra_http(status, Some(body));
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(err) => {
+            let feil = SikriFeil::fra_http(status, None);
+            error!(
+                target: "sikri.http",
+                method,
+                endpoint,
+                status = %status,
+                sikri_error_code = feil.kode,
+                sikri_recoverability = feil.recoverability.as_str(),
+                sikri_transport_arsak = transport_arsak(&err),
+                error = ?err.without_url(),
+                response_body_read = false,
+                "Sikri error response body could not be read: {method} {endpoint} {status}"
+            );
+            return Err(feil);
+        }
+    };
+    let feil = SikriFeil::fra_http(status, Some(&body));
+    let diagnostics = error_response_diagnostics(&body);
 
     error!(
         target: "sikri.http",
@@ -136,20 +163,40 @@ async fn ensure_success(
         endpoint,
         status = %status,
         response_length = body.len(),
+        response_body_read = true,
+        sikri_diagnostics_available = diagnostics.is_some(),
         sikri_error_code = feil.kode,
         sikri_recoverability = feil.recoverability.as_str(),
-        "Sikri response returned error status"
+        "Sikri response returned error status: {method} {endpoint} {status}"
     );
-    log_sikri_error_response_chunks(
-        method,
-        endpoint,
-        status,
-        body,
-        feil.kode,
-        feil.recoverability.as_str(),
-    );
+    if let Some(diagnostics) = diagnostics {
+        log_sikri_error_response_chunks(
+            method,
+            endpoint,
+            status,
+            &diagnostics,
+            feil.kode,
+            feil.recoverability.as_str(),
+        );
+    }
 
     Err(feil)
+}
+
+// Feil-envelopen ekkoer også input, inkludert dokumentinnhold. Bare disse
+// diagnostikkfeltene kan logges; ukjent format skal ikke falle tilbake til rå body.
+fn error_response_diagnostics(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let diagnostics: serde_json::Map<String, serde_json::Value> = value
+        .as_object()?
+        .iter()
+        .filter(|(key, value)| {
+            (key.eq_ignore_ascii_case("errorMessage") || key.eq_ignore_ascii_case("stackTrace"))
+                && value.as_str().is_some_and(|text| !text.is_empty())
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    (!diagnostics.is_empty()).then(|| serde_json::Value::Object(diagnostics).to_string())
 }
 
 fn log_sikri_error_response_chunks(
@@ -168,21 +215,18 @@ fn log_sikri_error_response_chunks(
     let chunk_count = chunks.len();
 
     for (chunk_index, chunk) in chunks.into_iter().enumerate() {
-        // Rå Sikri error-body kan inneholde uforutsigbart mye data og logges
-        // derfor KUN på debug!-nivå (av i prod). Den trygge error!-linjen over
-        // bærer bare safe code, status og lengde.
-        debug!(
+        error!(
             target: "sikri.http",
             method,
             endpoint,
             status = %status,
-            response_length = body.len(),
+            sikri_diagnostics_length = body.len(),
             sikri_error_code = safe_detail,
             sikri_recoverability = recoverability,
             sikri_error_response_chunk_index = chunk_index,
             sikri_error_response_chunk_count = chunk_count,
             sikri_error_response_chunk = chunk,
-            "Sikri error response body chunk"
+            "Sikri error response diagnostics: {method} {endpoint} {status} (chunk {chunk_index}/{chunk_count})"
         );
     }
 }
@@ -667,8 +711,25 @@ pub async fn sett_saksansvarlig(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tracing::instrument::WithSubscriber;
+
+    #[derive(Clone, Default)]
+    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for LogBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     async fn start_mock_sikri(status: &str) -> (String, tokio::task::JoinHandle<String>) {
         start_mock_sikri_med_body(status, "").await
@@ -861,6 +922,206 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ukjent_http_feil_logges_fullstendig_uten_input_ved_info_filter() {
+        let melding = format!("Ukjent arkivfeil: {}", "æøå\n\"".repeat(10_000));
+        let body = serde_json::json!({
+            "errorMessage": melding,
+            "stackTrace": "at Sikri.Archive.OpprettArkivsak()",
+            "inputParameters": "dokumentBase64=HEMMELIG_DOKUMENT",
+            "dokumenter": [{"innhold": "HEMMELIG_DOKUMENT"}],
+            "nySak": {"tittel": "HEMMELIG_TITTEL"},
+            "authorization": "HEMMELIG_CREDENTIAL"
+        })
+        .to_string();
+        let (base_url, request) =
+            start_mock_sikri_med_body("500 Internal Server Error", &body).await;
+        let url = format!("{base_url}/api/Archive/OpprettArkivsak?token=HEMMELIG_TOKEN");
+        let response = Client::new().post(&url).send().await.unwrap();
+        let buffer = LogBuffer::default();
+        let writer = buffer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || writer.clone())
+            .finish();
+
+        let feil = ensure_success(response, "POST", &url)
+            .with_subscriber(subscriber)
+            .await
+            .unwrap_err();
+        request.await.unwrap();
+
+        assert!(feil.er_recoverable());
+        assert_eq!(feil.kode, "sikri_upstream_error");
+        assert!(!feil.melding.contains(&melding));
+        let logs = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+        assert!(!logs.contains("HEMMELIG_"));
+        let posts: Vec<serde_json::Value> = logs
+            .lines()
+            .map(|line| {
+                assert!(line.len() < 128_000);
+                serde_json::from_str(line).unwrap()
+            })
+            .collect();
+        assert!(posts.iter().all(|post| post["level"] == "ERROR"));
+        assert_eq!(posts[0]["fields"]["sikri_diagnostics_available"], true);
+        let chunks: Vec<_> = posts.iter().skip(1).map(|post| &post["fields"]).collect();
+        assert!(chunks.len() > 1);
+        let mut diagnostics = String::new();
+        for (index, chunk) in chunks.iter().enumerate() {
+            assert_eq!(chunk["sikri_error_response_chunk_index"], index);
+            assert_eq!(chunk["sikri_error_response_chunk_count"], chunks.len());
+            diagnostics.push_str(chunk["sikri_error_response_chunk"].as_str().unwrap());
+        }
+        let diagnostics: serde_json::Value = serde_json::from_str(&diagnostics).unwrap();
+        assert_eq!(
+            diagnostics,
+            serde_json::json!({
+                "errorMessage": melding,
+                "stackTrace": "at Sikri.Archive.OpprettArkivsak()"
+            })
+        );
+    }
+
+    #[test]
+    fn feildiagnostikk_tillater_bare_tekstfelter_i_kjent_envelope() {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &error_response_diagnostics(
+                    r#"{"ErrorMessage":"Feil","StackTrace":"at Archive()"}"#
+                )
+                .unwrap()
+            )
+            .unwrap(),
+            serde_json::json!({"ErrorMessage": "Feil", "StackTrace": "at Archive()"})
+        );
+        for body in [
+            "",
+            "<html>HEMMELIG_DOKUMENT</html>",
+            "%PDF-HEMMELIG_DOKUMENT",
+            "ukjent ustrukturert svar med HEMMELIG_DOKUMENT",
+            r#"{"inputParameters":"HEMMELIG_DOKUMENT"}"#,
+            r#"{"errorMessage":{"dokumentBase64":"HEMMELIG_DOKUMENT"}}"#,
+            r#"{"errorMessage":null,"stackTrace":""}"#,
+        ] {
+            assert_eq!(error_response_diagnostics(body), None);
+        }
+    }
+
+    #[tokio::test]
+    async fn uleselig_feilbody_logges_som_lesefeil_med_http_status() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/api/Archive/OpprettArkivsak",
+            listener.local_addr().unwrap()
+        );
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.ends_with(b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 1000\r\nConnection: close\r\n\r\npartial").await.unwrap();
+        });
+        let response = Client::new().post(&url).send().await.unwrap();
+        let buffer = LogBuffer::default();
+        let writer = buffer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || writer.clone())
+            .finish();
+
+        let feil = ensure_success(response, "POST", &url)
+            .with_subscriber(subscriber)
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+
+        assert!(feil.er_recoverable());
+        let logs = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+        let post: serde_json::Value = serde_json::from_str(logs.trim()).unwrap();
+        assert_eq!(post["fields"]["response_body_read"], false);
+        assert_eq!(post["fields"]["status"], "500 Internal Server Error");
+        assert!(post["fields"]["sikri_transport_arsak"].is_string());
+        assert!(post["fields"]["error"].is_string());
+        assert!(!logs.contains("partial"));
+    }
+
+    #[tokio::test]
+    async fn transportfeil_logger_underliggende_arsak_uten_request_url() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://HEMMELIG_BRUKER:HEMMELIG_PASSORD@{}/api/Archive/HentArkivsak?token=HEMMELIG_TOKEN",
+            listener.local_addr().unwrap()
+        );
+        drop(listener);
+        let err = Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(&url)
+            .send()
+            .await
+            .unwrap_err();
+        let buffer = LogBuffer::default();
+        let writer = buffer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || writer.clone())
+            .finish();
+
+        let feil =
+            tracing::subscriber::with_default(subscriber, || transportfeil("GET", &url, err));
+
+        assert_eq!(feil.kode, "sikri_upstream_unavailable");
+        let logs = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+        assert!(!logs.contains("HEMMELIG_"));
+        let post: serde_json::Value = serde_json::from_str(logs.trim()).unwrap();
+        assert_eq!(post["level"], "ERROR");
+        assert_eq!(post["fields"]["sikri_transport_arsak"], "connect");
+        assert!(post["fields"]["error"].as_str().unwrap().contains("source"));
+    }
+
+    #[tokio::test]
+    async fn parsefeil_logger_posisjon_og_kategori_uten_responseverdi_eller_url() {
+        let (base_url, request) =
+            start_mock_sikri_med_body("200 OK", r#""HEMMELIG_DOKUMENT""#).await;
+        let url = format!("{base_url}/api/Archive/HentArkivsak?token=HEMMELIG_TOKEN");
+        let err = Client::new()
+            .get(&url)
+            .send()
+            .await
+            .unwrap()
+            .json::<u64>()
+            .await
+            .unwrap_err();
+        let buffer = LogBuffer::default();
+        let writer = buffer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(move || writer.clone())
+            .finish();
+
+        let feil = tracing::subscriber::with_default(subscriber, || parsefeil("GET", &url, err));
+        request.await.unwrap();
+
+        assert_eq!(feil.kode, "sikri_response_unparsable");
+        let logs = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+        assert!(!logs.contains("HEMMELIG_"));
+        let post: serde_json::Value = serde_json::from_str(logs.trim()).unwrap();
+        assert_eq!(post["level"], "ERROR");
+        assert_eq!(post["fields"]["json_error_category"], "Data");
+        assert_eq!(post["fields"]["json_error_line"], 1);
+        assert!(post["fields"]["json_error_column"].as_u64().unwrap() > 0);
+    }
+
+    #[tokio::test]
     async fn avslutt_sak_klassifiserer_uavskrevne_restanser_terminalt() {
         let (base_url, received_request) = start_mock_sikri_med_body(
             "500 Internal Server Error",
@@ -910,6 +1171,37 @@ mod tests {
 
         assert_eq!(feil.kode, "sikri_upstream_error");
         assert_eq!(feil.recoverability, crate::Recoverability::Recoverable);
+    }
+
+    #[tokio::test]
+    async fn opprett_arkivsak_http_svar_med_tilgangsavvisning_er_terminalt() {
+        for melding in [
+            "Bruker TESTBRUKER mangler rolle mot enhet TESTENHET",
+            "Saksbehandler er ikke autorisert for registert tilgangskode ( 'Test Bruker' )",
+        ] {
+            let body = serde_json::json!({
+                "errorMessage": melding,
+                "inputParameters": "nySak.saksbehandler = TESTBRUKER"
+            })
+            .to_string();
+            let (base_url, received_request) =
+                start_mock_sikri_med_body("500 Internal Server Error", &body).await;
+            let url = format!("{base_url}/api/Archive/OpprettArkivsak");
+            let response = Client::new().post(&url).send().await.unwrap();
+
+            let feil = ensure_success(response, "POST", &url).await.unwrap_err();
+
+            assert_eq!(
+                received_request.await.unwrap().lines().next().unwrap(),
+                "POST /api/Archive/OpprettArkivsak HTTP/1.1"
+            );
+            assert_eq!(feil.recoverability, crate::Recoverability::Irrecoverable);
+            assert_eq!(feil.kode, "sikri_access_control_rejected");
+            assert_eq!(
+                feil.melding,
+                crate::error_mapping::user_message_for_sikri_kode("sikri_access_control_rejected")
+            );
+        }
     }
 
     #[tokio::test]

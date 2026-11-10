@@ -1,7 +1,7 @@
 # SKU-0015. Skjerming og merking trygg by construction
 
 Date: 2026-08-05
-Last-reviewed: 2026-09-02
+Last-reviewed: 2026-11-10
 Tier: A
 Status: Accepted
 Crates: skuffen, domain, application, infrastructure, sikri_client, skuffen-integration-tests
@@ -43,7 +43,7 @@ R7 [5]: Query-svar bruker EGNE permissive respons-typer som kun rapporterer tils
 
 R8 [4]: SKU-0013 R1-R4 er absolutt: wire-typer skal ALDRI importeres i `domain`/`application`; infrastructure oversetter ved laggrensen. Den nye shapen tar ingen snarveier rundt denne boundaryen.
 
-R9 [4]: Rå HTTP-response-tekst fra Sikri (og lignende eksterne response-bodies med uforutsigbart innhold) logges KUN på `debug!`-nivå, aldri på `info!`/`error!`; på høyere nivåer brukes saniterte error-koder. Debug er av i prod som default. PII i strukturerte kommando-/wire-typer kan vises via `Debug` fordi det bare treffer `debug!`-nivå; det som ikke skal blø ut på `info!`/`error!` er rå ekstern response-tekst.
+R9 [4]: Sikris JSON-feilfelter `errorMessage` og `stackTrace` logges fullstendig på `error!`, også ved ukjent klassifisering. Input-ekko, dokumentpayload, credentials og vellykkede response-bodies logges aldri. Ukjent body-format logges ikke rått. URL fjernes fra transportfeil; JSON-parsefeil logger kategori og posisjon uten responseverdier. Rå diagnostikk forblir intern og går aldri til klientstatus eller `operasjon.siste_detalj`.
 
 R10 [5]: Den interne materialiseringstypen for tilgang er paret på samme måte som wire-typen: `Offentlig | Skjermet { tilgangskode, tilgangshjemmel }`. Halv skjerming skal være urepresenterbar også på veien gjennom Postgres, ikke bare på wire-grensen. Databasens CHECK er backstop, ikke primærvakt.
 
@@ -66,7 +66,14 @@ R11 [5]: Arkividentifikatorer skal alltid logges som strukturerte felter: `saksn
 - R10 flytter skjermingsinvarianten fra en databaseconstraint til typen. Så lenge
   den bare var en CHECK, kunne `opprett_sak` skrive `_ => None` og gjøre halv
   skjerming til en stilltiende offentlig sak — i strid med R4.
-- R11 avklarer en spenning i R9: forbudet gjelder rå ekstern response-tekst og
-  personopplysninger, ikke arkividentifikatorer. Saksnummer skal stå i loggen.
+- R11 avklarer at arkividentifikatorer ikke er dokumentpayload. Saksnummer skal stå i loggen.
   Alle seks feltene er enten Skuffen-interne UUID-er eller arkivets egne
   referanser; ingen av dem bærer fritekst fra klienten.
+- R9 ble endret etter at en rollemangel falt gjennom mapperen til generisk
+  serverfeil. Debug-only diagnostikk gjorde egne ordinære logger utilstrekkelige.
+  Operatøren aksepterer full feiltekst internt, men ikke dokumentpayload. Sikris
+  maskering i leverandørloggen er ikke verifisert for HTTP-svaret: sensitive
+  verdier i selve `errorMessage`/`stackTrace` er en akseptert restrisiko, ikke en
+  garanti om anonymisering. Bare tekstfeltene velges ut; input-ekko og øvrige
+  response-felter utelates. Ukjent envelope krever kontraktavklaring før mer
+  innhold kan logges; loggen markerer at diagnostikk mangler.

@@ -49,26 +49,31 @@ Denne guiden beskriver trygge, vanlige bygg-, test- og kvalitetssjekker for `sku
 ## Sikri error diagnostics
 
 - Skuffen does not log Sikri response bodies for successful 2xx responses.
-- For Sikri 4xx/5xx responses, the raw Sikri error-body is logged ONLY at `debug!`
-  level, never at `error!`/`info!`. Everywhere else Skuffen uses safe codes
-  (`safe_detail_for_http_error`, with `sikri_unknown_error` as fallback) so operators
-  can still classify upstream validation and code-set failures without exposing raw
-  bodies at default log levels.
-- Transport and parse failures follow the same split. `reqwest::Error` renders the
-  full URL including query parameters — which carry saksnummer — so the raw error
-  goes to `debug!` only. The `error!` line carries `sikri_transport_arsak`
-  (`timeout`, `connect`, `decode`, …), which is the part you actually need to tell a
-  dead Sikri from a slow one.
+- Sikri HTTP errors log status, endpoint, classification and whether diagnostics
+  are available at `error!`. The JSON string fields `errorMessage` and `stackTrace`
+  are logged in full at `error!`, independent of classification and without
+  enabling debug. Input echoes, other response fields and document payload are
+  excluded. Unknown/non-JSON bodies are not logged raw;
+  `sikri_diagnostics_available=false` makes this gap explicit.
+- Diagnostics use `sikri_error_response_chunk` with zero-based `_index` and
+  `_count`. Reassemble in index order within the same request span. The result
+  is JSON containing only the selected diagnostic fields, not the original body.
+- Transport/body-read errors log their underlying cause after removing the
+  request URL. `sikri_transport_arsak` retains the bounded category. Body-read
+  failures preserve HTTP status and set `response_body_read=false`.
+- JSON parse errors log category, line and column, not the raw serde message:
+  that message can echo document values. Successful bodies are never logged.
 - Raw Sikri error-body must never reach NATS replies, public status events or
   `operasjon.siste_detalj`. `SikriFeil` enforces this by construction: `kode` is a
   static safe code and `melding` is a pre-mapped user-facing text.
 - `operasjon.siste_detalj` holds the stable code, optionally followed by an internal
   detail for errors that originate inside Skuffen (sqlx and similar) where nothing
   else logs them. Archive errors carry no such detail — `sikri_client` has already
-  logged status, endpoint and body.
+  logged status, endpoint and the available diagnostic fields.
 - Skuffen still does not log request payloads, authorization headers, or secrets.
-- Note: the previous risk acceptance permitting full 4xx/5xx error-body logging at
-  `error!`/`info!` is withdrawn in favor of the `debug!`-only + safe-code policy above.
+- Full diagnostic text is operator-approved (SKU-0015 R9). It may contain
+  sensitive values; masking in Sikri's own logs does not prove HTTP masking.
+  This does not authorize logging request bodies or arbitrary response bodies.
 
 ## Deployed test/dev workflow
 

@@ -10,6 +10,11 @@ ignore = [
     # skiller på kilde og fanger fortsatt en ekte avhengighet. Fjernes hvis
     # workspace-craten får nytt navn.
     "RUSTSEC-2026-0310",
+    # Godkjent 2026-11-10: libsqlite3-sys er bare en inaktiv, valgfri SQLx-driver
+    # i lockfilen, også med alle workspace-features/targets. SQLx 0.9.0 krever
+    # <0.38.0; rettelsen krever >=0.39.0. Fjern når SQLx tillater oppgradering
+    # eller SQLite aktiveres. cargo-deny har intet unntak og sjekker aktiv graf.
+    "RUSTSEC-2026-0459",
 ]
 informational_warnings = ["unmaintained"] # warn for categories of informational advisories
 severity_threshold = "low" # CVSS severity ("none", "low", "medium", "high", "critical")

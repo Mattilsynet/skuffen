@@ -118,7 +118,10 @@ pub fn user_message_for_sikri_kode(kode: &str) -> &'static str {
         "sikri_rate_limited" => {
             "Sikri/Elements avviser midlertidig for mange forespørsler. Prøv igjen senere."
         }
-        "sikri_upstream_unavailable" | "sikri_upstream_error" | "sikri_secret_unavailable" => {
+        "sikri_upstream_error" => {
+            "Sikri/Elements returnerte en serverfeil som ikke er klassifisert. Skuffen forsøker igjen."
+        }
+        "sikri_upstream_unavailable" | "sikri_secret_unavailable" => {
             "Sikri/Elements er midlertidig utilgjengelig. Prøv igjen senere."
         }
         "sikri_response_unparsable" => "Uventet svar fra Sikri/Elements. Prøv igjen senere.",
@@ -333,6 +336,14 @@ fn rule_matches(rule: &ErrorRule, status: StatusCode, normalized_body: Option<&s
 /// `feilet` er monotont og publiseres til klienten uten vei tilbake (SKU-0016
 /// R8). Kodene i `siste_detalj` gjør de ukartlagte tilfellene synlige.
 pub fn classify_http_error(status: StatusCode, body: Option<&str>) -> Recoverability {
+    if let Some(body_text) = body
+        && access_control_failure_is_irrecoverable(status)
+        && contains_case_handler_access_rejection(body_text)
+        && !contains_upstream_bad_gateway_pattern(body_text)
+    {
+        return Recoverability::Irrecoverable;
+    }
+
     // errorMessage-reglene leser JSON-envelopen og lar seg ikke uttrykke som
     // substringtreff i ERROR_RULES.
     if let Some(body_text) = body
@@ -428,7 +439,21 @@ fn contains_attachment_missing_content_pattern(body: &str) -> bool {
 
 fn contains_access_control_pattern(body: &str) -> bool {
     let normalized = body.to_lowercase();
-    normalized.contains("mangler tilgang") || normalized.contains("ikke har rettighet")
+    normalized.contains("mangler tilgang")
+        || normalized.contains("ikke har rettighet")
+        || contains_case_handler_access_rejection(body)
+}
+
+fn contains_case_handler_access_rejection(body: &str) -> bool {
+    let melding = match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(_) => error_message_field(body),
+        Err(_) if body.trim_start().starts_with(['{', '[']) => None,
+        Err(_) => Some(body.to_lowercase()),
+    };
+    melding.is_some_and(|melding| {
+        (melding.contains("bruker ") && melding.contains(" mangler rolle mot enhet "))
+            || melding.contains("saksbehandler er ikke autorisert for registert tilgangskode")
+    })
 }
 
 fn access_control_failure_is_irrecoverable(status: StatusCode) -> bool {
@@ -821,6 +846,110 @@ mod tests {
     fn exposes_recoverability_as_safe_label() {
         assert_eq!(Recoverability::Recoverable.as_str(), "recoverable");
         assert_eq!(Recoverability::Irrecoverable.as_str(), "irrecoverable");
+    }
+
+    #[test]
+    fn manglende_rolle_er_terminal_tilgangsfeil() {
+        let melding = "Bruker TESTBRUKER mangler rolle mot enhet TESTENHET";
+        for body in [
+            melding.to_string(),
+            serde_json::json!({"errorMessage": melding}).to_string(),
+            serde_json::json!({"ErrorMessage": melding.to_uppercase()}).to_string(),
+        ] {
+            for status in [StatusCode::BAD_REQUEST, StatusCode::INTERNAL_SERVER_ERROR] {
+                let feil = SikriFeil::fra_http(status, Some(&body));
+                assert_eq!(feil.recoverability, Recoverability::Irrecoverable);
+                assert_eq!(feil.kode, "sikri_access_control_rejected");
+                assert_eq!(
+                    feil.melding,
+                    user_message_for_sikri_kode("sikri_access_control_rejected")
+                );
+                assert!(!feil.melding.contains("TESTBRUKER"));
+                assert!(!feil.melding.contains("TESTENHET"));
+            }
+            for status in [
+                StatusCode::UNAUTHORIZED,
+                StatusCode::FORBIDDEN,
+                StatusCode::TOO_MANY_REQUESTS,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ] {
+                assert!(SikriFeil::fra_http(status, Some(&body)).er_recoverable());
+            }
+        }
+    }
+
+    #[test]
+    fn rollemangel_i_ekko_eller_stacktrace_gir_ikke_terminal_feil() {
+        for error_message in [serde_json::json!("Ukjent feil"), serde_json::Value::Null] {
+            let body = serde_json::json!({
+                "errorMessage": error_message,
+                "inputParameters": "nySak.Sakstittel = Bruker TESTBRUKER mangler rolle mot enhet TESTENHET",
+                "stackTrace": "Bruker TESTBRUKER mangler rolle mot enhet TESTENHET"
+            }).to_string();
+            let feil = SikriFeil::fra_http(StatusCode::INTERNAL_SERVER_ERROR, Some(&body));
+            assert!(feil.er_recoverable());
+            assert_eq!(feil.kode, "sikri_upstream_error");
+        }
+        let ufullstendig_json =
+            r#"{"inputParameters":"Bruker TESTBRUKER mangler rolle mot enhet TESTENHET""#;
+        assert!(
+            SikriFeil::fra_http(StatusCode::INTERNAL_SERVER_ERROR, Some(ufullstendig_json))
+                .er_recoverable()
+        );
+    }
+
+    #[test]
+    fn uautorisert_tilgangskode_er_terminal_bare_ved_eksplisitt_avvisning() {
+        let melding =
+            "Saksbehandler er ikke autorisert for registert tilgangskode ( 'Test Bruker' )";
+        for body in [
+            melding.to_string(),
+            serde_json::json!({"errorMessage": melding}).to_string(),
+            serde_json::json!({"ErrorMessage": melding.to_uppercase()}).to_string(),
+        ] {
+            for status in [StatusCode::BAD_REQUEST, StatusCode::INTERNAL_SERVER_ERROR] {
+                let feil = SikriFeil::fra_http(status, Some(&body));
+                assert_eq!(feil.recoverability, Recoverability::Irrecoverable);
+                assert_eq!(feil.kode, "sikri_access_control_rejected");
+                assert!(!feil.melding.contains("Test Bruker"));
+            }
+            for status in [StatusCode::FORBIDDEN, StatusCode::SERVICE_UNAVAILABLE] {
+                assert!(SikriFeil::fra_http(status, Some(&body)).er_recoverable());
+            }
+        }
+        for body in [
+            serde_json::json!({
+                "errorMessage": "Ukjent feil",
+                "inputParameters": melding,
+                "stackTrace": melding
+            })
+            .to_string(),
+            serde_json::json!({"errorMessage": null, "inputParameters": melding}).to_string(),
+            format!(r#"{{"inputParameters":"{melding}""#),
+        ] {
+            let feil = SikriFeil::fra_http(StatusCode::INTERNAL_SERVER_ERROR, Some(&body));
+            assert!(feil.er_recoverable());
+            assert_eq!(feil.kode, "sikri_upstream_error");
+        }
+    }
+
+    #[test]
+    fn upstream_bad_gateway_beholder_prioritet_over_saksbehandlers_tilgangsavvisning() {
+        for avvisning in [
+            "Bruker TESTBRUKER mangler rolle mot enhet TESTENHET",
+            "Saksbehandler er ikke autorisert for registert tilgangskode ( 'Test Bruker' )",
+        ] {
+            let body = serde_json::json!({
+                "errorMessage": avvisning,
+                "stackTrace": "Feil ved identifisering av bruker. (502) Bad Gateway"
+            })
+            .to_string();
+            for status in [StatusCode::BAD_REQUEST, StatusCode::INTERNAL_SERVER_ERROR] {
+                let feil = SikriFeil::fra_http(status, Some(&body));
+                assert!(feil.er_recoverable());
+                assert_eq!(feil.kode, "sikri_upstream_unavailable");
+            }
+        }
     }
 
     #[test]

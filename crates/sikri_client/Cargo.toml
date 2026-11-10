@@ -25,3 +25,6 @@ tracing = { workspace = true }
 # CVC
 aws-lc-sys = { workspace = true }
 aws-lc-rs = { workspace = true }
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true, features = ["fmt", "json"] }
