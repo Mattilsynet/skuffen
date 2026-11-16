@@ -404,6 +404,13 @@ The public outward status carries the mapped, sanitised message. Sikri diagnosti
 
 ## Test logging
 
+Admin-testene beholder en ekstra, uinstallert tracing-dispatcher mens de bruker
+testlokale subscribers. Dette omgår `tracing-core 0.1.36` sin `has_just_one`-feil:
+en tråd uten subscriber kan ellers registrere et delt callsite med global
+`Interest::never`, slik at en annen tests subscriber mister både logger og spans.
+Se [tracing #3611](https://github.com/tokio-rs/tracing/issues/3611).
+Loggfangsten er synkron; sleeps og exporter-flush løser ikke denne feilen.
+
 Suggested environment:
 - `RUST_LOG=info` for baseline logging
 - Include `RUST_LOG=debug` only for local diagnostics

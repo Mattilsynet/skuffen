@@ -5,7 +5,7 @@ mod read;
 mod retry;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use application::admin::model::{AdminCommand, AdminSak, AdminSakNokkel};
@@ -397,6 +397,13 @@ async fn kjor_til_svar(listener: &AdminListener, transport: &FakeTransport, anta
 // Logging
 // ---------------------------------------------------------------------------
 
+fn behold_ekstra_tracing_dispatcher() {
+    // Omgår tracing-core #3611: subscriber-løse tråder må ikke cache `never`
+    // for callsites som testlokale subscribers trenger. Installeres aldri.
+    static DISPATCH: OnceLock<tracing::Dispatch> = OnceLock::new();
+    DISPATCH.get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::new()));
+}
+
 #[derive(Default, Clone)]
 struct LoggFangst {
     linjer: Arc<Mutex<Vec<HashMap<String, String>>>>,
@@ -404,6 +411,7 @@ struct LoggFangst {
 
 impl LoggFangst {
     fn installer(&self) -> tracing::subscriber::DefaultGuard {
+        behold_ekstra_tracing_dispatcher();
         tracing::subscriber::set_default(tracing_subscriber::registry().with(LoggLag {
             fangst: self.clone(),
         }))
@@ -447,6 +455,22 @@ impl tracing::field::Visit for FeltSamler<'_> {
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
         self.0.insert(field.name().to_string(), value.to_string());
     }
+}
+
+#[test]
+fn loggfangst_bevares_nar_en_annen_trad_registrerer_callsite_forst() {
+    fn logg() {
+        tracing::info!("delt callsite");
+    }
+
+    let fangst = LoggFangst::default();
+    let _guard = fangst.installer();
+
+    std::thread::spawn(logg).join().unwrap();
+    assert!(fangst.med_melding("delt callsite").is_empty());
+
+    logg();
+    assert_eq!(fangst.med_melding("delt callsite").len(), 1);
 }
 
 // ---------------------------------------------------------------------------

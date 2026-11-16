@@ -386,6 +386,7 @@ async fn arkiv_id_key_logges_uten_raa_verdi() {
 
 #[tokio::test]
 async fn traceparent_blir_parent_paa_request_spanet() {
+    behold_ekstra_tracing_dispatcher();
     global::set_text_map_propagator(TraceContextPropagator::new());
     let exporter = InMemorySpanExporter::default();
     let provider = SdkTracerProvider::builder()
