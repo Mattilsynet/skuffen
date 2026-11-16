@@ -89,6 +89,11 @@ fn liste(linjer: impl Iterator<Item = String>) -> String {
 
 fn beskriv_batchfeil(feil: &Batchfeil, navn: &[&str]) -> String {
     match feil {
+        Batchfeil::UgyldigSakstildeling { posisjon, melding } => format!(
+            "Ugyldig tildeling i {}: {melding}. Oppgi saksbehandler_id, saksbehandler_enhet eller begge. \
+             Oppgitte verdier må ikke være tomme eller bare whitespace; utelat felt som ikke skal settes.",
+            kommando(*posisjon, navn)
+        ),
         Batchfeil::CommandIdGjentatt {
             command_id,
             posisjoner,

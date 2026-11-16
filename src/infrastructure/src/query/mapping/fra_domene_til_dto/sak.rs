@@ -11,7 +11,7 @@ use crate::query::mapping::fra_domene_til_dto::tilgang::from_domain_tilgang_to_t
 pub fn from_domain_sak_to_dto(sak: domain::model::sak::Sak) -> Result<DtoSak> {
     Ok(DtoSak {
         sakstittel: DtoSakstittel::try_from(sak.sakstittel.0.as_str())?,
-        saksbehandler: Some(sak.saksbehandler),
+        saksbehandler: sak.saksbehandler,
         saksbehandler_enhet: sak.saksbehandler_enhet,
         saksstatus: from_domain_saksstatus_to_dto(sak.saksstatus),
         tilgjengelighet: from_domain_tilgang_to_tilgjengelighet(sak.tilgang),

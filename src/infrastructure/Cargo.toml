@@ -19,6 +19,7 @@ sqlx = { workspace = true, features = [
   "uuid",
   "chrono",
   "migrate",
+  "macros",
 ] }
 
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

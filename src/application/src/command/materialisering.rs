@@ -75,8 +75,8 @@ pub struct SakAttributter {
     pub sakstittel: String,
     pub arkivdel: Arkivdel,
     pub ordningsverdi: String,
-    pub saksbehandler_id: String,
-    pub saksbehandler_enhet: String,
+    pub saksbehandler_id: Option<String>,
+    pub saksbehandler_enhet: Option<String>,
     pub tilgang: Tilgang,
 }
 

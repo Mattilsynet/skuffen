@@ -72,6 +72,87 @@ async fn media_upload_is_chunked_idempotent_and_immutable() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn opprett_sak_stotter_gamle_klienter_og_valgfri_tildeling() -> Result<()> {
+    let env = support::start_runtime().await?;
+
+    for (id, enhet, gyldig) in [
+        (Some("Z12345"), Some("42"), true),
+        (Some("Z12345"), None, true),
+        (None, Some("42"), true),
+        (None, None, false),
+        (Some(""), Some("42"), false),
+        (Some("Z12345"), Some(" \t"), false),
+    ] {
+        let command_id = Uuid::new_v4();
+        let client_reference = Uuid::new_v4();
+        let mut sak = serde_json::json!({
+            "client_reference": client_reference,
+            "sakstittel": "Syntetisk tildelingstest",
+            "arkivdel": "Tilsynsdivisjonene",
+            "ordningsverdi": "123",
+            "tilgjengelighet": "Offentlig"
+        });
+        if let Some(id) = id {
+            sak["saksbehandler_id"] = serde_json::json!(id);
+        }
+        if let Some(enhet) = enhet {
+            sak["saksbehandler_enhet"] = serde_json::json!(enhet);
+        }
+        let payload = serde_json::json!([{
+            "command_id": command_id,
+            "correlation_id": null,
+            "payload": { "OpprettSak": sak }
+        }]);
+
+        let kvittering = send_raw_command_payload(&env.nats_url, &payload.to_string()).await?;
+        if gyldig {
+            assert_eq!(
+                kvittering["Ok"]["command_ids"],
+                serde_json::json!([command_id])
+            );
+            let events =
+                wait_for_status_events(&env.nats_url, [command_id], Duration::from_secs(30))
+                    .await?;
+            assert_happy_path_stages(&events, [command_id]);
+            assert!(extract_saksnummer(&events, command_id).is_some());
+        } else {
+            assert!(kvittering.get("Error").is_some(), "{kvittering}");
+            let melding = kvittering["Error"]["message"]
+                .as_str()
+                .expect("feilmelding");
+            assert!(
+                melding.contains("Ugyldig tildeling i kommando 1 (OpprettSak)"),
+                "{melding}"
+            );
+            assert!(
+                melding.contains("Oppgi saksbehandler_id, saksbehandler_enhet eller begge"),
+                "{melding}"
+            );
+            assert!(!melding.contains("Innholdet kunne ikke leses"), "{melding}");
+        }
+
+        let lokal = admin_hent_sak(
+            &env.nats_url,
+            serde_json::json!({ "type": "clientReference", "value": client_reference }),
+        )
+        .await?;
+        if gyldig {
+            assert_eq!(lokal["status"], "Ok");
+            let fakta = &lokal["payload"]["fakta"];
+            assert_eq!(fakta["opprettelse_saksbehandler_id"], serde_json::json!(id));
+            assert_eq!(
+                fakta["opprettelse_saksbehandler_enhet"],
+                serde_json::json!(enhet)
+            );
+        } else {
+            assert_eq!(lokal["status"], "Error");
+            assert_eq!(lokal["payload"]["message"], "Sak not found");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn command_sequence_opprett_internt_notat_avslutt_sak() -> Result<()> {
     let env = support::start_runtime().await?;
 
@@ -122,8 +203,8 @@ async fn command_sequence_inngaende_journalpost_flow() -> Result<()> {
             ))
             .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
-            saksbehandler_id: "Z99999".to_string(),
-            saksbehandler_enhet: "42".to_string(),
+            saksbehandler_id: Some("Z99999".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
             tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
@@ -176,8 +257,8 @@ async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
             ))
             .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
-            saksbehandler_id: "Z99999".to_string(),
-            saksbehandler_enhet: "42".to_string(),
+            saksbehandler_id: Some("Z99999".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
             tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
@@ -229,8 +310,8 @@ async fn query_hent_sak_via_nats_slaar_opp_entitet() -> Result<()> {
             ))
             .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
-            saksbehandler_id: "Z12345".to_string(),
-            saksbehandler_enhet: "42".to_string(),
+            saksbehandler_id: Some("Z12345".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
             tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
@@ -267,8 +348,8 @@ async fn query_hent_sak_via_nats_paa_client_reference() -> Result<()> {
             ))
             .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
-            saksbehandler_id: "Z12345".to_string(),
-            saksbehandler_enhet: "42".to_string(),
+            saksbehandler_id: Some("Z12345".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
             tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
@@ -431,8 +512,8 @@ async fn avslutt_sak_uten_journalposter_er_tillatt() -> Result<()> {
                 ))
                 .unwrap(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
-                saksbehandler_id: "Z12345".to_string(),
-                saksbehandler_enhet: "42".to_string(),
+                saksbehandler_id: Some("Z12345".to_string()),
+                saksbehandler_enhet: Some("42".to_string()),
                 ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
                 tilgjengelighet: Tilgjengelighet::Offentlig,
             }),
@@ -475,8 +556,8 @@ async fn avslutt_sak_med_arkiv_id_fullfoerer_gjennom_hele_flyten() -> Result<()>
             ))
             .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
-            saksbehandler_id: "Z12345".to_string(),
-            saksbehandler_enhet: "42".to_string(),
+            saksbehandler_id: Some("Z12345".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
             tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
@@ -806,8 +887,8 @@ fn opprett_sak_for(client_reference: Uuid, tittel: &str) -> CommandEnvelope<Comm
             ))
             .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
-            saksbehandler_id: "Z12345".to_string(),
-            saksbehandler_enhet: "42".to_string(),
+            saksbehandler_id: Some("Z12345".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())
                 .unwrap(),
             tilgjengelighet: Tilgjengelighet::Offentlig,

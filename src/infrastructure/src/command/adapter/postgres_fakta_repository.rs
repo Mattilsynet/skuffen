@@ -404,8 +404,8 @@ impl FaktaRepository for PostgresFaktaRepository {
             sakstittel,
             arkivdel: arkivdel(&arkivdel_kode)?,
             ordningsverdi,
-            saksbehandler_id: saksbehandler_id.unwrap_or_default(),
-            saksbehandler_enhet: saksbehandler_enhet.unwrap_or_default(),
+            saksbehandler_id,
+            saksbehandler_enhet,
             tilgang: Tilgang::try_from((tilgangskode, tilgangshjemmel))?,
         }))
     }

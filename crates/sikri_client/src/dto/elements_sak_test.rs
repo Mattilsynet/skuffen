@@ -10,8 +10,8 @@ mod tests {
             ordningsverdi: "2020".to_string(),
             arkivdel: Arkivdel::Hovedkontoret.to_string(),
             journalenhet: JOURNALENHET.to_string(),
-            saksbehandler: "saksbehandler".to_string(),
-            saksbehandler_enhet: "saksbehandler_enhet".to_string(),
+            saksbehandler: Some("saksbehandler".to_string()),
+            saksbehandler_enhet: Some("saksbehandler_enhet".to_string()),
             saksstatus: DEFAULT_SAKSSTATUS.to_string(),
             tilgangskode: None,
             tilgangshjemmel: None,
@@ -27,8 +27,8 @@ mod tests {
             ordningsverdi: "2020".to_string(),
             arkivdel: Arkivdel::Hovedkontoret.to_string(),
             journalenhet: JOURNALENHET.to_string(),
-            saksbehandler: "saksbehandler".to_string(),
-            saksbehandler_enhet: "saksbehandler_enhet".to_string(),
+            saksbehandler: Some("saksbehandler".to_string()),
+            saksbehandler_enhet: Some("saksbehandler_enhet".to_string()),
             saksstatus: DEFAULT_SAKSSTATUS.to_string(),
             tilgangskode: None,
             tilgangshjemmel: None,
@@ -45,8 +45,8 @@ mod tests {
             ordningsverdi: "2020".to_string(),
             arkivdel: Arkivdel::Hovedkontoret.to_string(),
             journalenhet: JOURNALENHET.to_string(),
-            saksbehandler: "saksbehandler".to_string(),
-            saksbehandler_enhet: "saksbehandler_enhet".to_string(),
+            saksbehandler: Some("saksbehandler".to_string()),
+            saksbehandler_enhet: Some("saksbehandler_enhet".to_string()),
             saksstatus: DEFAULT_SAKSSTATUS.to_string(),
             tilgangskode: None,
             tilgangshjemmel: None,
@@ -62,8 +62,8 @@ mod tests {
             ordningsverdi: "".to_string(),
             arkivdel: Arkivdel::Hovedkontoret.to_string(),
             journalenhet: JOURNALENHET.to_string(),
-            saksbehandler: "saksbehandler".to_string(),
-            saksbehandler_enhet: "saksbehandler_enhet".to_string(),
+            saksbehandler: Some("saksbehandler".to_string()),
+            saksbehandler_enhet: Some("saksbehandler_enhet".to_string()),
             saksstatus: DEFAULT_SAKSSTATUS.to_string(),
             tilgangskode: None,
             tilgangshjemmel: None,
@@ -73,12 +73,46 @@ mod tests {
     }
 
     #[test]
+    fn tildeling_bevares_og_fravaerende_felt_utelates_i_sikri_payload() {
+        for (id, enhet) in [
+            (Some("Z12345"), Some("42")),
+            (Some("Z12345"), None),
+            (None, Some("42")),
+        ] {
+            let sak = sak_med_tildeling(id, enhet);
+
+            assert!(sak.validate().is_ok());
+            let json = serde_json::to_value(sak).unwrap();
+            assert_eq!(
+                json.get("saksbehandler"),
+                id.map(serde_json::Value::from).as_ref()
+            );
+            assert_eq!(
+                json.get("saksbehandlerEnhet"),
+                enhet.map(serde_json::Value::from).as_ref()
+            );
+        }
+    }
+
+    fn sak_med_tildeling(id: Option<&str>, enhet: Option<&str>) -> ElementsSak {
+        ElementsSak::from(NySak {
+            sakstittel: "Testsak".to_string(),
+            arkivdel: Arkivdel::Hovedkontoret,
+            saksbehandler_id: id.map(str::to_string),
+            saksbehandler_enhet: enhet.map(str::to_string),
+            ordningsverdi: "123".to_string(),
+            tilgang: None,
+            virksomhetsmappe_id: None,
+        })
+    }
+
+    #[test]
     fn serializes_tilgang_as_top_level_sikri_fields() {
         let sak = ElementsSak::from(NySak {
             sakstittel: "[|Ola Norrmann|] - Testsak".to_string(),
             arkivdel: Arkivdel::Hovedkontoret,
-            saksbehandler_id: "17804".to_string(),
-            saksbehandler_enhet: "DOK".to_string(),
+            saksbehandler_id: Some("17804".to_string()),
+            saksbehandler_enhet: Some("DOK".to_string()),
             ordningsverdi: "123".to_string(),
             tilgang: Some(Tilgang {
                 tilgangskode: "UO".to_string(),

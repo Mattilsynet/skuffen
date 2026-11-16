@@ -1571,7 +1571,7 @@ dependencies = [
 [[package]]
 name = "lib-schemas"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git?tag=1.7.7#cb09fcf34a64c58c1c36c50a613cf11d3ae75c10"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git?tag=1.8.1#8f444c7a0a190125ad1802765b03191a674d234c"
 dependencies = [
  "chrono",
  "serde",
@@ -1582,10 +1582,11 @@ dependencies = [
 [[package]]
 name = "lib-sql"
 version = "0.1.0"
-source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git?tag=1.7.7#cb09fcf34a64c58c1c36c50a613cf11d3ae75c10"
+source = "git+https://github.com/Mattilsynet/landdyrtilsyn-libs.git?tag=1.8.1#8f444c7a0a190125ad1802765b03191a674d234c"
 dependencies = [
  "secrecy",
- "sqlx",
+ "sqlx-core",
+ "sqlx-postgres",
 ]
 
 [[package]]

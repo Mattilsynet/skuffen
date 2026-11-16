@@ -14,7 +14,7 @@ pub struct ArkivSakId(pub i32);
 pub struct Sak {
     pub client_reference: Option<Uuid>,
     pub sakstittel: Sakstittel,
-    pub saksbehandler: String,
+    pub saksbehandler: Option<String>,
     pub saksbehandler_enhet: Option<String>,
     pub saksstatus: Saksstatus,
     pub tilgang: Option<Tilgang>,
@@ -30,6 +30,22 @@ pub struct Sak {
 * SaksTittel benyttes på opprettelse av sak i arkiv
 */
 const SAKSTITTEL_MAX_LENGTH: usize = 256;
+
+pub fn valider_sakstildeling(
+    saksbehandler_id: Option<&str>,
+    saksbehandler_enhet: Option<&str>,
+) -> Result<(), &'static str> {
+    if saksbehandler_id.is_some_and(|id| id.trim().is_empty()) {
+        return Err("Saksbehandler er tom");
+    }
+    if saksbehandler_enhet.is_some_and(|enhet| enhet.trim().is_empty()) {
+        return Err("Saksbehandlerenhet er tom");
+    }
+    if saksbehandler_id.is_none() && saksbehandler_enhet.is_none() {
+        return Err("Saksbehandler eller enhet må være satt");
+    }
+    Ok(())
+}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Saksbehandler {

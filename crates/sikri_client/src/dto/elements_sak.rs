@@ -20,10 +20,12 @@ pub struct ElementsSak {
     pub journalenhet: String,
 
     /// Saksbehandler
-    pub saksbehandler: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saksbehandler: Option<String>,
 
     /// SaksbehandlerEnhet
-    pub saksbehandler_enhet: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saksbehandler_enhet: Option<String>,
 
     /// Saksstatus
     pub saksstatus: String,

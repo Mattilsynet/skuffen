@@ -500,8 +500,8 @@ mod tests {
             sakstittel: Sakstittel::try_from("Test sak".to_string()).unwrap(),
             ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
             arkivdel: WireArkivdel::Tilsynsdivisjonene,
-            saksbehandler_id: "Z12345".to_string(),
-            saksbehandler_enhet: "42".to_string(),
+            saksbehandler_id: Some("Z12345".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
             tilgjengelighet: wire_skjermet(),
         }));
         let command_id = envelope.command_id;
@@ -516,11 +516,34 @@ mod tests {
                 assert_eq!(command.sakstittel, "Test sak");
                 assert_eq!(command.ordningsverdi.get(), "123");
                 assert_eq!(command.arkivdel, Arkivdel::Tilsynsdivisjonene);
-                assert_eq!(command.saksbehandler_id, "Z12345");
-                assert_eq!(command.saksbehandler_enhet, "42");
+                assert_eq!(command.saksbehandler_id.as_deref(), Some("Z12345"));
+                assert_eq!(command.saksbehandler_enhet.as_deref(), Some("42"));
                 assert_eq!(command.tilgjengelighet, application_skjermet());
             }
             other => panic!("expected OpprettSak, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn opprett_sak_roundtrip_bevarer_valgfri_tildeling() {
+        for (id, enhet) in [(Some("Z12345"), None), (None, Some("42"))] {
+            let envelope = wire_envelope(WireCommand::OpprettSak(OpprettSak {
+                client_reference: Uuid::new_v4(),
+                sakstittel: Sakstittel::try_from("Testsak".to_string()).unwrap(),
+                ordningsverdi: Ordningsverdi::new("123".to_string()).unwrap(),
+                arkivdel: WireArkivdel::Tilsynsdivisjonene,
+                saksbehandler_id: id.map(str::to_string),
+                saksbehandler_enhet: enhet.map(str::to_string),
+                tilgjengelighet: WireTilgjengelighet::Offentlig,
+            }));
+
+            let mapped = map_wire_envelope(envelope.clone());
+            let ApplicationCommand::OpprettSak(command) = &mapped.payload else {
+                unreachable!();
+            };
+            assert_eq!(command.saksbehandler_id.as_deref(), id);
+            assert_eq!(command.saksbehandler_enhet.as_deref(), enhet);
+            assert_eq!(map_application_envelope_to_wire(&mapped).unwrap(), envelope);
         }
     }
 

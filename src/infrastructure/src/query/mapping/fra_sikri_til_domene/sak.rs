@@ -30,9 +30,7 @@ pub fn from_sikri_sak_to_domain_sak(sikri_sak: SikriSak) -> Result<domain::model
     Ok(domain::model::sak::Sak {
         client_reference: None,
         sakstittel: domain::model::sak::Sakstittel::try_from(sikri_sak.sakstittel)?,
-        saksbehandler: sikri_sak
-            .saksbehandler
-            .ok_or_else(|| anyhow!("Sak har ikke saksbehandler"))?,
+        saksbehandler: sikri_sak.saksbehandler,
         saksbehandler_enhet: sikri_sak.saksbehandler_enhet,
         saksstatus: saksstatus_from_char(
             sikri_sak
@@ -154,6 +152,17 @@ mod tests {
             ])
         );
         assert!(!respons.to_string().contains("c2hvdWxkLW5vdC1sZWFr"));
+    }
+
+    #[test]
+    fn sak_til_fordeling_kan_hentes_uten_saksbehandler() {
+        let mut sak = sikri_sak(None);
+        sak["saksbehandler"] = Value::Null;
+
+        let respons = til_respons(sak).unwrap();
+
+        assert_eq!(respons["saksbehandler"], Value::Null);
+        assert_eq!(respons["saksbehandler_enhet"], "M00001");
     }
 
     #[test]

@@ -453,6 +453,89 @@ async fn mottak_kobler_kommandoen_til_saken_for_validering() {
 }
 
 #[tokio::test]
+async fn opprett_sak_med_bare_saksbehandler_eller_bare_enhet_tas_imot() {
+    for (id, enhet) in [(Some("Z12345"), None), (None, Some("42"))] {
+        let dispatcher = FakeCommandDispatcher::default();
+        let service = build_service(
+            FakeCommandRepository::default(),
+            FakeEntitetRepository::default(),
+            dispatcher.clone(),
+            FakeStatusPublisher::default(),
+        );
+        let mut envelope = test_fixtures::opprett_sak_envelope(Uuid::new_v4(), Uuid::new_v4());
+        let Command::OpprettSak(command) = &mut envelope.payload else {
+            unreachable!();
+        };
+        command.saksbehandler_id = id.map(str::to_string);
+        command.saksbehandler_enhet = enhet.map(str::to_string);
+        let command_id = envelope.command_id;
+
+        assert_eq!(
+            service.handle(vec![envelope]).await.unwrap(),
+            vec![command_id]
+        );
+        assert_eq!(*dispatcher.dispatched.lock().unwrap(), vec![command_id]);
+    }
+}
+
+#[tokio::test]
+async fn ugyldig_sakstildeling_samles_med_andre_batchfeil_foer_noe_skrives() {
+    for (id, enhet) in [
+        (None, None),
+        (Some(""), Some("42")),
+        (Some(" \t"), Some("42")),
+        (Some("Z12345"), Some("")),
+        (Some("Z12345"), Some("\n ")),
+        (Some(""), None),
+        (None, Some("\u{2003}")),
+    ] {
+        let command_repo = FakeCommandRepository::default();
+        let entitet = FakeEntitetRepository::default();
+        let dispatcher = FakeCommandDispatcher::default();
+        let publisher = FakeStatusPublisher::default();
+        let service = build_service(
+            command_repo.clone(),
+            entitet.clone(),
+            dispatcher.clone(),
+            publisher.clone(),
+        );
+        let gyldig = test_fixtures::opprett_sak_envelope(Uuid::new_v4(), Uuid::new_v4());
+        let mut ugyldig = test_fixtures::opprett_sak_envelope(Uuid::new_v4(), Uuid::new_v4());
+        let Command::OpprettSak(command) = &mut ugyldig.payload else {
+            unreachable!();
+        };
+        command.saksbehandler_id = id.map(str::to_string);
+        command.saksbehandler_enhet = enhet.map(str::to_string);
+        let ukjent_sak = Uuid::new_v4();
+        let avslutt = test_fixtures::envelope(test_fixtures::avslutt_sak(SakKey::ClientReference(
+            ukjent_sak,
+        )));
+
+        let IngestFeil::UgyldigBatch(feil) = service
+            .handle(vec![gyldig, ugyldig, avslutt])
+            .await
+            .unwrap_err()
+        else {
+            panic!("forventet ugyldig batch");
+        };
+
+        assert_eq!(feil.len(), 2);
+        assert!(feil.contains(&Batchfeil::SakReferanseUkjent {
+            posisjon: 2,
+            client_reference: ukjent_sak,
+        }));
+        assert!(matches!(
+            feil[1],
+            Batchfeil::UgyldigSakstildeling { posisjon: 1, .. }
+        ));
+        assert!(command_repo.mottatt.lock().unwrap().is_empty());
+        assert!(entitet.entiteter.lock().unwrap().is_empty());
+        assert!(dispatcher.dispatched.lock().unwrap().is_empty());
+        assert!(publisher.command_status.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn ukjent_sak_avviser_batchen_foer_noe_skrives() {
     let command = FakeCommandRepository::default();
     let dispatcher = FakeCommandDispatcher::default();

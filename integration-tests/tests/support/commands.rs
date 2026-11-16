@@ -66,8 +66,8 @@ impl CommandScenario {
                     sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(sakstittel)
                         .unwrap(),
                     arkivdel: Arkivdel::Tilsynsdivisjonene,
-                    saksbehandler_id: saksbehandler_id.to_string(),
-                    saksbehandler_enhet: saksbehandler_enhet.to_string(),
+                    saksbehandler_id: Some(saksbehandler_id.to_string()),
+                    saksbehandler_enhet: Some(saksbehandler_enhet.to_string()),
                     ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())
                         .unwrap(),
                     tilgjengelighet: Tilgjengelighet::Offentlig,
@@ -118,8 +118,8 @@ impl CommandScenario {
                 client_reference: self.sak_client_reference,
                 sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(sakstittel).unwrap(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
-                saksbehandler_id: saksbehandler_id.to_string(),
-                saksbehandler_enhet: saksbehandler_enhet.to_string(),
+                saksbehandler_id: Some(saksbehandler_id.to_string()),
+                saksbehandler_enhet: Some(saksbehandler_enhet.to_string()),
                 ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())
                     .unwrap(),
                 tilgjengelighet,

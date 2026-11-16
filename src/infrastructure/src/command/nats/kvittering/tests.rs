@@ -86,6 +86,30 @@ fn hver_batchfeil_nevner_kommandoen_den_gjelder() {
 }
 
 #[test]
+fn ugyldig_sakstildeling_forklarer_hvilken_kommando_og_hva_som_maa_rettes() {
+    for aarsak in [
+        "Saksbehandler eller enhet må være satt",
+        "Saksbehandler er tom",
+        "Saksbehandlerenhet er tom",
+    ] {
+        let feil = [Batchfeil::UgyldigSakstildeling {
+            posisjon: 0,
+            melding: aarsak,
+        }];
+
+        assert_eq!(
+            ugyldig_batch(&feil, &NAVN),
+            format!(
+                "Batchen ble avvist, og ingen kommandoer er tatt imot. 1 feil:\n\
+                 - Ugyldig tildeling i kommando 1 (OpprettSak): {aarsak}. \
+                 Oppgi saksbehandler_id, saksbehandler_enhet eller begge. \
+                 Oppgitte verdier må ikke være tomme eller bare whitespace; utelat felt som ikke skal settes."
+            )
+        );
+    }
+}
+
+#[test]
 fn manglende_fil_forklares_med_dokument_og_kommando() {
     let feil = [Mediafeil {
         posisjon: 1,

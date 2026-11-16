@@ -38,8 +38,8 @@ async fn sett_saksansvarlig_happy_path() -> Result<()> {
             ))
             .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
-            saksbehandler_id: "Z12345".to_string(),
-            saksbehandler_enhet: "42".to_string(),
+            saksbehandler_id: Some("Z12345".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
             tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
@@ -102,8 +102,8 @@ async fn sett_saksansvarlig_med_client_reference() -> Result<()> {
             ))
             .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
-            saksbehandler_id: "Z12345".to_string(),
-            saksbehandler_enhet: "42".to_string(),
+            saksbehandler_id: Some("Z12345".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
             tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
@@ -238,8 +238,8 @@ async fn irrecoverable_arkivfeil_gir_terminal_feilet() -> Result<()> {
             ))
             .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
-            saksbehandler_id: "Z12345".to_string(),
-            saksbehandler_enhet: "42".to_string(),
+            saksbehandler_id: Some("Z12345".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
             tilgjengelighet: Tilgjengelighet::Offentlig,
         }),
@@ -298,8 +298,8 @@ async fn sett_saksansvarlig_sak_i_eksekvering() -> Result<()> {
             ))
             .unwrap(),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
-            saksbehandler_id: "Z12345".to_string(),
-            saksbehandler_enhet: "42".to_string(),
+            saksbehandler_id: Some("Z12345".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
             ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
             tilgjengelighet: Tilgjengelighet::Offentlig,
         }),

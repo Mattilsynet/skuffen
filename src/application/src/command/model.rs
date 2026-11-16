@@ -51,8 +51,8 @@ pub struct OpprettSakCommand {
     pub sakstittel: String,
     pub ordningsverdi: domain::model::sak::Ordningsverdi,
     pub arkivdel: Arkivdel,
-    pub saksbehandler_id: String,
-    pub saksbehandler_enhet: String,
+    pub saksbehandler_id: Option<String>,
+    pub saksbehandler_enhet: Option<String>,
     pub tilgjengelighet: Tilgjengelighet,
 }
 
@@ -221,8 +221,8 @@ pub mod test_fixtures {
             ordningsverdi: domain::model::sak::Ordningsverdi::new("123".to_string())
                 .expect("syntetisk ordningsverdi er gyldig"),
             arkivdel: Arkivdel::Tilsynsdivisjonene,
-            saksbehandler_id: "Z99999".to_string(),
-            saksbehandler_enhet: "42".to_string(),
+            saksbehandler_id: Some("Z99999".to_string()),
+            saksbehandler_enhet: Some("42".to_string()),
             tilgjengelighet: Tilgjengelighet::Offentlig,
         })
     }

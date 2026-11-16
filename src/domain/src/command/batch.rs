@@ -55,6 +55,10 @@ pub struct KjentTilstand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Batchfeil {
+    UgyldigSakstildeling {
+        posisjon: Posisjon,
+        melding: &'static str,
+    },
     CommandIdGjentatt {
         command_id: Uuid,
         posisjoner: Vec<Posisjon>,

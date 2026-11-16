@@ -85,13 +85,26 @@ impl IngestCommandService {
         let batch: Vec<Batchkommando> = commands.iter().map(batchkommando).collect();
         let kjent = self.hent_kjent_tilstand(&batch).await?;
 
-        valider_batch(&batch, &kjent).map_err(|feil| {
+        let mut feil = valider_batch(&batch, &kjent).err().unwrap_or_default();
+        for (posisjon, envelope) in commands.iter().enumerate() {
+            if let Command::OpprettSak(command) = &envelope.payload
+                && let Err(melding) = domain::model::sak::valider_sakstildeling(
+                    command.saksbehandler_id.as_deref(),
+                    command.saksbehandler_enhet.as_deref(),
+                )
+            {
+                feil.push(Batchfeil::UgyldigSakstildeling { posisjon, melding });
+            }
+        }
+        if feil.is_empty() {
+            Ok(())
+        } else {
             tracing::warn!(
                 antall_feil = feil.len(),
                 "kommandobatch avvist i batchkontrollen"
             );
-            IngestFeil::UgyldigBatch(feil)
-        })
+            Err(IngestFeil::UgyldigBatch(feil))
+        }
     }
 
     async fn hent_kjent_tilstand(&self, batch: &[Batchkommando]) -> anyhow::Result<KjentTilstand> {

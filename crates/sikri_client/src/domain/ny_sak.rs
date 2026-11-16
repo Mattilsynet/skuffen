@@ -34,8 +34,10 @@ pub struct NySak {
     pub arkivdel: Arkivdel,
 
     /// Saksbehandler
-    pub saksbehandler_id: String,
-    pub saksbehandler_enhet: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saksbehandler_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saksbehandler_enhet: Option<String>,
 
     /// Ordningsverdi slik den er registrert i Mattilsynets arkivnøkkel (required)
     /// Min length: 1

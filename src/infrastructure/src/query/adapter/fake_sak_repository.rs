@@ -28,7 +28,7 @@ impl SakRepository for FakeSakRepository {
         Ok(Sak {
             client_reference: None,
             sakstittel: Sakstittel("Fake sak".to_string()),
-            saksbehandler: saksbehandler.saksbehandler_id,
+            saksbehandler: Some(saksbehandler.saksbehandler_id),
             saksbehandler_enhet: Some(saksbehandler.saksbehandler_enhet),
             saksstatus: Saksstatus::UnderBehandling,
             tilgang: None,

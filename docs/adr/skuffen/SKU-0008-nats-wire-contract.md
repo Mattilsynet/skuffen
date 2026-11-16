@@ -1,7 +1,7 @@
 # SKU-0008. NATS wire contract for arkivering og queries
 
 Date: 2026-05-22
-Last-reviewed: 2026-11-06
+Last-reviewed: 2026-11-16
 Tier: B
 Status: Accepted
 Crates: skuffen, infrastructure, application, skuffen-integration-tests
@@ -14,7 +14,7 @@ References: SKU-0004, SKU-0016, SKU-0015
 
 Skuffen bruker NATS request-reply for command intake og synkrone read/query-kall. `arkiv.arkiver` tar en atomisk `CommandSequence`; queries ligger under `arkiv.request.*`.
 
-Kontraktene ligger delvis i `lib-schemas`. `lib-schemas` og `lib-nats` følger latest git HEAD; `lib-sql` bruker tag. `Cargo.lock` er resolved build boundary. Direct cutover ble godkjent av eier fordi ingen klienter finnes.
+Kontraktene ligger delvis i `lib-schemas`. Alle tre bibliotekene fra `landdyrtilsyn-libs` bruker tag, med `Cargo.lock` som resolved build boundary. Opprinnelig cutover ble godkjent uten klienter; utvidelsen av `OpprettSak` må støtte eksisterende klienter.
 
 ## Decision
 
@@ -36,13 +36,15 @@ R8 [5]: `lib-sql` kan fortsatt bruke release tag; lockfile eller `cargo update` 
 
 R9 [6]: Hvis uventede klienter feiler etter cutover, mitigasjon er ny deploy med midlertidige aliases eller rask klientoppdatering etter eierbeslutning.
 
+R10 [5]: `OpprettSak` støtter saksbehandler, enhet eller begge. Utelatt felt og `null` betyr fravær. Skuffen kontrollerer tildeling ved mottak, ikke i libs, og avviser manglende, tom eller blank tildeling med forståelig kvittering. Eksisterende meldinger med begge strenger støttes uten samtidig klientoppgradering.
+
 ## Consequences
 
-Dette er en direkte breaking wire-endring. Cutover bygger på eieropplysning i build-sesjonen om at ingen aktive klienter finnes; før produksjonscutover skal eier verifisere dette mot kjente consumers/operatører.
+Det opprinnelige kontraktskiftet var en direkte breaking wire-endring. Cutover bygget på eieropplysning i build-sesjonen om at ingen aktive klienter fantes; dette er ikke en generell tillatelse til senere breaking endringer.
 
 Klienter må behandle `arkiv.arkiver` som batch-kvittering og query subjects som `NatsResponse<T>`.
 
-Latest-HEAD policy gjør lockfile-endringer til kontraktspunkter som må reviewes. `arkiv.request.journalpost.hent` returnerer syntetisk fixture-data inntil ekte repository finnes; `arkiv.request.bruker.mt_enheter` har ingen success-payload-kontrakt ennå.
+Tag- og lockfile-endringer er kontraktspunkter som må reviewes. `arkiv.request.journalpost.hent` returnerer en eksplisitt feil inntil ekte repository finnes; `arkiv.request.bruker.mt_enheter` har ingen success-payload-kontrakt ennå.
 
 ### Skjermingssikker kontrakt-redesign (SKU-0015)
 
@@ -76,8 +78,8 @@ av de delte responstypene.
 
 Saksoppslag på `arkivId` går direkte til arkivet uten krav om lokal identitet.
 
-`lib-schemas` er pinnet til tag `1.7.5`, mens `lib-nats` og `lib-sql` blir på
-tag `1.7.2`; `Cargo.lock` er resolved boundary.
+Ved innføringen ble `lib-schemas` pinnet til tag `1.7.5`, mens `lib-nats` og
+`lib-sql` ble på tag `1.7.2`; `Cargo.toml` og `Cargo.lock` viser dagens boundary.
 
 ### Statusstrømmen (SKU-0020)
 
@@ -93,3 +95,25 @@ for «bare utfallet» — så stillhet. Den publiseres med `terminal: false`, fo
 utfallet ikke er avgjort, og taper for `feilet`, som er monotont. Enumet har
 ingen `#[serde(other)]`, så en klient som deserialiserer strengt må ta inn
 taggen. Cutover-grunnlaget er det samme som over: ingen aktive klienter.
+
+### Valgfri tildeling ved opprettelse av sak
+
+R10 er en bakoverkompatibel wire-utvidelse, ikke et nytt command eller subject.
+Saksbehandlerfeltene blir `Option<String>` i schemas og gjennom materialisering
+til Sikri. Fravær erstattes ikke med tom streng, og enhet utledes av arkivet.
+Query kan returnere en sak uten saksbehandler, slik responskontrakten allerede tillater.
+Tildelingsregelen sjekkes bare i Skuffens batchkontroll ved mottak, før lagring
+og dispatch. Feil inngår i batchens samlede, forståelige feilkvittering;
+schemas deserialiserer vanlige valgfrie strenger uten egen domenesjekk.
+
+Eier godkjenner en minor-release i libs og bekrefter at eksisterende klienter
+ikke sender blanke verdier. Rust-klienter som tar inn den nye taggen må tilpasse
+feltkonstruksjonen; klienter som beholder gammel tag trenger ingen endring.
+Hele Skuffen-pipelinen må være oppgradert før nye klienter utelater et felt.
+Gamle instanser tåler verken den nye meldingsformen eller uferdige saker med
+fraværende tildelingsfelt; rollback krever derfor håndtering av begge deler.
+
+`lib-schemas` og `lib-sql` er pinnet til publisert tag `1.8.1`
+(`8f444c7`), mens `lib-nats` beholdes på `1.7.7`. `Cargo.lock` er resolved
+boundary. `lib-sql` bruker `sqlx-core` og `sqlx-postgres` direkte, med samme
+pool- og feiltype; Skuffen aktiverer `macros` eksplisitt for egne migrasjoner.

@@ -328,8 +328,8 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
                 ))
                 .unwrap(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
-                saksbehandler_id: saksbehandler_id.clone(),
-                saksbehandler_enhet: saksbehandler_enhet.clone(),
+                saksbehandler_id: Some(saksbehandler_id.clone()),
+                saksbehandler_enhet: Some(saksbehandler_enhet.clone()),
                 ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
                 tilgjengelighet: Tilgjengelighet::Offentlig,
             }),
@@ -345,8 +345,8 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
                 ))
                 .unwrap(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
-                saksbehandler_id: saksbehandler_id.clone(),
-                saksbehandler_enhet: saksbehandler_enhet.clone(),
+                saksbehandler_id: Some(saksbehandler_id.clone()),
+                saksbehandler_enhet: Some(saksbehandler_enhet.clone()),
                 ordningsverdi: lib_schemas::skuffen::sak::Ordningsverdi::new("123".to_string())?,
                 tilgjengelighet: skjerming_tilgjengelighet.clone(),
             }),
