@@ -26,9 +26,6 @@ pub struct Sak {
     pub ordningsverdi: Ordningsverdi,
 }
 
-/**
-* SaksTittel benyttes på opprettelse av sak i arkiv
-*/
 const SAKSTITTEL_MAX_LENGTH: usize = 256;
 
 pub fn valider_sakstildeling(
