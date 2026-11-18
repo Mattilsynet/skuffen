@@ -203,6 +203,7 @@ impl DekomponerCommandService {
                         saksbehandler_id: command.saksbehandler_id.clone(),
                         saksbehandler_enhet: command.saksbehandler_enhet.clone(),
                         tilgang: tilgang(&command.tilgjengelighet),
+                        kildesystem: command.kildesystem.clone(),
                     }),
                     oensket_saksansvarlig: None,
                 };

@@ -31,6 +31,7 @@ async fn sett_saksansvarlig_happy_path() -> Result<()> {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
+            kildesystem: None,
             client_reference: scenario.sak_client_reference,
             sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "SettSaksansvarlig test {}",
@@ -95,6 +96,7 @@ async fn sett_saksansvarlig_med_client_reference() -> Result<()> {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
+            kildesystem: None,
             client_reference: scenario.sak_client_reference,
             sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "SettSaksansvarlig client ref test {}",
@@ -231,6 +233,7 @@ async fn irrecoverable_arkivfeil_gir_terminal_feilet() -> Result<()> {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
+            kildesystem: None,
             client_reference: scenario.sak_client_reference,
             sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Irrecoverable arkivfeil {}",
@@ -291,6 +294,7 @@ async fn sett_saksansvarlig_sak_i_eksekvering() -> Result<()> {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
+            kildesystem: None,
             client_reference: scenario.sak_client_reference,
             sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "SettSaksansvarlig state test {}",

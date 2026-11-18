@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use domain::eksekvering::id::SkuffenDokumentId;
+use domain::eksekvering::id::{SkuffenDokumentId, SkuffenJournalpostId};
 use domain::eksekvering::operasjon::{
     Beslutning, EntitetId, Operasjon, Operasjonstype, muterer_arkivet, vurder, vurder_avslutt_sak,
 };
@@ -365,7 +365,12 @@ impl EksekverOperasjonService {
             .ok_or_else(|| EksekveringFeil::intern("intern_oensket_saksansvarlig_mangler"))?;
 
         self.gateway
-            .sett_saksansvarlig(saksnummer, &oensket.saksbehandler_id, &oensket.enhet)
+            .sett_saksansvarlig(
+                saksnummer,
+                &oensket.saksbehandler_id,
+                &oensket.enhet,
+                facts.kildesystem.as_deref(),
+            )
             .await?;
 
         Ok(Utfall::Ferdig(Faktaoppdatering::SaksansvarligSatt {
@@ -376,7 +381,9 @@ impl EksekverOperasjonService {
 
     async fn avslutt_sak(&self, facts: &SakMedBarn) -> Result<Utfall, EksekveringFeil> {
         let saksnummer = krev_arkiv_id(facts.arkiv_id.as_deref(), "intern_sak_arkiv_id_mangler")?;
-        self.gateway.avslutt_sak(saksnummer).await?;
+        self.gateway
+            .avslutt_sak(saksnummer, facts.kildesystem.as_deref())
+            .await?;
         Ok(Utfall::Ferdig(Faktaoppdatering::SakAvsluttet))
     }
 
@@ -454,7 +461,11 @@ impl EksekverOperasjonService {
 
         let vedlegg_id = self
             .gateway
-            .legg_til_vedlegg(journalpost_arkiv_id, &attributter)
+            .legg_til_vedlegg(
+                journalpost_arkiv_id,
+                &attributter,
+                journalpost.kildesystem.as_deref(),
+            )
             .await?;
 
         Ok(Utfall::Ferdig(Faktaoppdatering::VedleggArkivert {
@@ -516,10 +527,10 @@ impl EksekverOperasjonService {
         tilstand: JournalpostTilstand,
     ) -> Result<Utfall, EksekveringFeil> {
         let journalpost_id = krev_journalpost(op)?;
-        let arkiv_id = self.journalpost_arkiv_id(facts, op)?;
+        let (arkiv_id, kildesystem) = self.journalpost_arkivdata(facts, journalpost_id)?;
 
         self.gateway
-            .sett_journalpost_status(arkiv_id, status)
+            .sett_journalpost_status(arkiv_id, status, kildesystem)
             .await?;
 
         Ok(Utfall::Ferdig(Faktaoppdatering::JournalpostStatus {
@@ -530,19 +541,9 @@ impl EksekverOperasjonService {
 
     async fn avskriv(&self, op: &Operasjon, facts: &SakMedBarn) -> Result<Utfall, EksekveringFeil> {
         let journalpost_id = krev_journalpost(op)?;
-        let arkiv_id = self.journalpost_arkiv_id(facts, op)?;
-        let attributter = self
-            .fakta_repo
-            .hent_journalpost_attributter(journalpost_id)
-            .await
-            .map_err(|err| {
-                EksekveringFeil::intern_midlertidig("intern_journalpost_attributter_utilgjengelig")
-                    .med_intern_detalj(err.to_string())
-            })?
-            .ok_or_else(|| EksekveringFeil::intern("intern_journalpost_attributter_mangler"))?;
-
+        let (arkiv_id, kildesystem) = self.journalpost_arkivdata(facts, journalpost_id)?;
         self.gateway
-            .avskriv_journalpost(arkiv_id, attributter.kildesystem.as_deref(), None)
+            .avskriv_journalpost(arkiv_id, kildesystem, None)
             .await?;
 
         Ok(Utfall::Ferdig(Faktaoppdatering::JournalpostStatus {
@@ -559,9 +560,12 @@ impl EksekverOperasjonService {
         facts: &SakMedBarn,
     ) -> Result<Utfall, EksekveringFeil> {
         let journalpost_id = krev_journalpost(op)?;
-        let arkiv_id = self.journalpost_arkiv_id(facts, op)?;
+        let (arkiv_id, kildesystem) = self.journalpost_arkivdata(facts, journalpost_id)?;
 
-        let observert = self.gateway.hent_journalstatus(arkiv_id).await?;
+        let observert = self
+            .gateway
+            .hent_journalstatus(arkiv_id, kildesystem)
+            .await?;
 
         match observert {
             ObservertJournalstatus::Journalfoert => {
@@ -584,16 +588,16 @@ impl EksekverOperasjonService {
         }
     }
 
-    fn journalpost_arkiv_id(
+    fn journalpost_arkivdata<'a>(
         &self,
-        facts: &SakMedBarn,
-        op: &Operasjon,
-    ) -> Result<i32, EksekveringFeil> {
-        let journalpost_id = krev_journalpost(op)?;
+        facts: &'a SakMedBarn,
+        journalpost_id: SkuffenJournalpostId,
+    ) -> Result<(i32, Option<&'a str>), EksekveringFeil> {
         let journalpost = facts
             .journalpost(journalpost_id)
             .ok_or_else(|| EksekveringFeil::intern("intern_journalpost_fakta_mangler"))?;
-        krev_journalpost_arkiv_id(journalpost.arkiv_id.as_deref())
+        let arkiv_id = krev_journalpost_arkiv_id(journalpost.arkiv_id.as_deref())?;
+        Ok((arkiv_id, journalpost.kildesystem.as_deref()))
     }
 
     /// Metadata leses her, ikke gjenbrukes fra før kjøringen. Kontekst er et

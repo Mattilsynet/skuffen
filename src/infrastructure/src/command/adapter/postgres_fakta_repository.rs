@@ -294,8 +294,9 @@ impl FaktaRepository for PostgresFaktaRepository {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         )> = sqlx::query_as(
-            r#"SELECT s.tilstand, e.arkiv_id,
+            r#"SELECT s.tilstand, e.arkiv_id, s.kildesystem,
                       s.oensket_saksansvarlig_id, s.oensket_saksansvarlig_enhet,
                       s.naavaerende_saksansvarlig_id, s.naavaerende_saksansvarlig_enhet
                FROM sak_tilstand s
@@ -307,24 +308,30 @@ impl FaktaRepository for PostgresFaktaRepository {
         .await
         .context("failed to load sak facts")?;
 
-        let Some((tilstand, arkiv_id, oensket_id, oensket_enhet, naa_id, naa_enhet)) = sak else {
+        let Some((tilstand, arkiv_id, kildesystem, oensket_id, oensket_enhet, naa_id, naa_enhet)) =
+            sak
+        else {
             return Ok(None);
         };
 
-        let journalposter: Vec<(Uuid, String, Option<String>, String, bool)> = sqlx::query_as(
-            r#"SELECT j.journalpost_id, j.tilstand, e.arkiv_id, j.journalposttype, j.med_utsending
+        let journalposter: Vec<(Uuid, String, Option<String>, Option<String>, String, bool)> =
+            sqlx::query_as(
+                r#"SELECT j.journalpost_id, j.tilstand, e.arkiv_id, j.kildesystem,
+                      j.journalposttype, j.med_utsending
                FROM journalpost_tilstand j
                JOIN entitet e ON e.skuffen_id = j.journalpost_id
                WHERE j.sak_id = $1
                ORDER BY j.created_at"#,
-        )
-        .bind(sak_uuid)
-        .fetch_all(&self.pool)
-        .await
-        .context("failed to load journalpost facts")?;
+            )
+            .bind(sak_uuid)
+            .fetch_all(&self.pool)
+            .await
+            .context("failed to load journalpost facts")?;
 
         let mut barn = Vec::with_capacity(journalposter.len());
-        for (journalpost_id, jp_tilstand, jp_arkiv_id, jp_type, med_utsending) in journalposter {
+        for (journalpost_id, jp_tilstand, jp_arkiv_id, jp_kildesystem, jp_type, med_utsending) in
+            journalposter
+        {
             let rader: Vec<DokumentRad> = sqlx::query_as(
                 r#"SELECT dokument_id, tilstand, rekkefolge, tittel, filtype,
                           dokument_referanse, mal_referanse, felter,
@@ -342,6 +349,7 @@ impl FaktaRepository for PostgresFaktaRepository {
                 journalpost_id: SkuffenJournalpostId::from(journalpost_id),
                 tilstand: journalpost_tilstand(&jp_tilstand)?,
                 arkiv_id: jp_arkiv_id,
+                kildesystem: jp_kildesystem,
                 journalposttype: journalposttype(&jp_type)?,
                 med_utsending,
                 dokumenter: rader
@@ -355,6 +363,7 @@ impl FaktaRepository for PostgresFaktaRepository {
             sak_id,
             tilstand: sak_tilstand(&tilstand)?,
             arkiv_id,
+            kildesystem,
             oensket_saksansvarlig: saksansvarlig(oensket_id, oensket_enhet),
             naavaerende_saksansvarlig: saksansvarlig(naa_id, naa_enhet),
             journalposter: barn,
@@ -370,9 +379,10 @@ impl FaktaRepository for PostgresFaktaRepository {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         )> = sqlx::query_as(
             r#"SELECT sakstittel, arkivdel, ordningsverdi, saksbehandler_id,
-                      saksbehandler_enhet, tilgangskode, tilgangshjemmel
+                      saksbehandler_enhet, tilgangskode, tilgangshjemmel, kildesystem
                FROM sak_tilstand WHERE sak_id = $1"#,
         )
         .bind(Uuid::from(sak_id))
@@ -388,6 +398,7 @@ impl FaktaRepository for PostgresFaktaRepository {
             saksbehandler_enhet,
             tilgangskode,
             tilgangshjemmel,
+            kildesystem,
         )) = rad
         else {
             return Ok(None);
@@ -407,6 +418,7 @@ impl FaktaRepository for PostgresFaktaRepository {
             saksbehandler_id,
             saksbehandler_enhet,
             tilgang: Tilgang::try_from((tilgangskode, tilgangshjemmel))?,
+            kildesystem,
         }))
     }
 

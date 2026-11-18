@@ -78,6 +78,7 @@ pub struct SakAttributter {
     pub saksbehandler_id: Option<String>,
     pub saksbehandler_enhet: Option<String>,
     pub tilgang: Tilgang,
+    pub kildesystem: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -120,7 +120,9 @@ impl ArkivGateway for SikriArkivGateway {
             virksomhetsmappe_id: None,
         };
 
-        let resp = sikri_client::opprett_sak(ny_sak).await.map_err(fra_sikri)?;
+        let resp = sikri_client::opprett_sak(ny_sak, attributter.kildesystem.as_deref())
+            .await
+            .map_err(fra_sikri)?;
         let saksnummer = resp.saksnr.ok_or_else(|| {
             EksekveringFeil::recoverable(
                 "sikri_response_unparsable",
@@ -161,9 +163,10 @@ impl ArkivGateway for SikriArkivGateway {
         &self,
         journalpost_id: i32,
         vedlegg: &DokumentAttributter,
+        kildesystem: Option<&str>,
     ) -> Result<Option<i32>, EksekveringFeil> {
         let dokument = self.map_dokument(vedlegg, false).await?;
-        let resp = sikri_client::legg_til_vedlegg(journalpost_id, vec![dokument])
+        let resp = sikri_client::legg_til_vedlegg(journalpost_id, vec![dokument], kildesystem)
             .await
             .map_err(fra_sikri)?;
         Ok(resp.into_iter().next().and_then(|d| d.dokument_id))
@@ -173,8 +176,9 @@ impl ArkivGateway for SikriArkivGateway {
         &self,
         journalpost_id: i32,
         status: Journalstatus,
+        kildesystem: Option<&str>,
     ) -> Result<(), EksekveringFeil> {
-        sikri_client::sett_journalpost_status(journalpost_id, status.as_arkivkode())
+        sikri_client::sett_journalpost_status(journalpost_id, status.as_arkivkode(), kildesystem)
             .await
             .map_err(fra_sikri)
     }
@@ -199,8 +203,9 @@ impl ArkivGateway for SikriArkivGateway {
     async fn hent_journalstatus(
         &self,
         journalpost_id: i32,
+        kildesystem: Option<&str>,
     ) -> Result<ObservertJournalstatus, EksekveringFeil> {
-        let journalpost = sikri_client::hent_journalpost(journalpost_id)
+        let journalpost = sikri_client::hent_journalpost(journalpost_id, kildesystem)
             .await
             .map_err(fra_sikri)?;
         Ok(match journalpost.journalstatus.as_deref() {
@@ -212,8 +217,12 @@ impl ArkivGateway for SikriArkivGateway {
         })
     }
 
-    async fn avslutt_sak(&self, saksnummer: &str) -> Result<(), EksekveringFeil> {
-        sikri_client::avslutt_sak(saksnummer)
+    async fn avslutt_sak(
+        &self,
+        saksnummer: &str,
+        kildesystem: Option<&str>,
+    ) -> Result<(), EksekveringFeil> {
+        sikri_client::avslutt_sak(saksnummer, kildesystem)
             .await
             .map_err(fra_sikri)
     }
@@ -223,10 +232,16 @@ impl ArkivGateway for SikriArkivGateway {
         saksnummer: &str,
         saksbehandler_id: &str,
         saksbehandler_enhet: &str,
+        kildesystem: Option<&str>,
     ) -> Result<(), EksekveringFeil> {
-        sikri_client::sett_saksansvarlig(saksnummer, saksbehandler_id, saksbehandler_enhet)
-            .await
-            .map_err(fra_sikri)
+        sikri_client::sett_saksansvarlig(
+            saksnummer,
+            saksbehandler_id,
+            saksbehandler_enhet,
+            kildesystem,
+        )
+        .await
+        .map_err(fra_sikri)
     }
 }
 

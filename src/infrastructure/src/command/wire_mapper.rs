@@ -51,6 +51,7 @@ fn map_application_command_to_wire(command: &ApplicationCommand) -> anyhow::Resu
                 saksbehandler_id: command.saksbehandler_id.clone(),
                 saksbehandler_enhet: command.saksbehandler_enhet.clone(),
                 tilgjengelighet: map_application_tilgjengelighet(&command.tilgjengelighet)?,
+                kildesystem: command.kildesystem.clone(),
             }))
         }
         ApplicationCommand::OpprettInngaaendeJournalpost(command) => {
@@ -354,6 +355,7 @@ fn map_opprett_sak(command: wire_sak::OpprettSak) -> OpprettSakCommand {
         saksbehandler_id: command.saksbehandler_id,
         saksbehandler_enhet: command.saksbehandler_enhet,
         tilgjengelighet: map_tilgjengelighet(command.tilgjengelighet),
+        kildesystem: command.kildesystem,
     }
 }
 
@@ -503,11 +505,13 @@ mod tests {
             saksbehandler_id: Some("Z12345".to_string()),
             saksbehandler_enhet: Some("42".to_string()),
             tilgjengelighet: wire_skjermet(),
+            kildesystem: Some("test-fagsystem".to_string()),
         }));
         let command_id = envelope.command_id;
         let correlation_id = envelope.correlation_id;
 
-        let mapped = map_wire_envelope(envelope);
+        let mapped = map_wire_envelope(envelope.clone());
+        assert_eq!(map_application_envelope_to_wire(&mapped).unwrap(), envelope);
 
         assert_metadata(&mapped, command_id, correlation_id);
         match mapped.payload {
@@ -519,6 +523,7 @@ mod tests {
                 assert_eq!(command.saksbehandler_id.as_deref(), Some("Z12345"));
                 assert_eq!(command.saksbehandler_enhet.as_deref(), Some("42"));
                 assert_eq!(command.tilgjengelighet, application_skjermet());
+                assert_eq!(command.kildesystem.as_deref(), Some("test-fagsystem"));
             }
             other => panic!("expected OpprettSak, got {other:?}"),
         }
@@ -535,6 +540,7 @@ mod tests {
                 saksbehandler_id: id.map(str::to_string),
                 saksbehandler_enhet: enhet.map(str::to_string),
                 tilgjengelighet: WireTilgjengelighet::Offentlig,
+                kildesystem: None,
             }));
 
             let mapped = map_wire_envelope(envelope.clone());

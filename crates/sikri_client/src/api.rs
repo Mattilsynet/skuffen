@@ -381,6 +381,7 @@ async fn send_get_sak(
 #[tracing::instrument(skip_all, name = "sikri.hent_journalpost")]
 pub async fn hent_journalpost(
     journalpost_id: i32,
+    kildesystem: Option<&str>,
 ) -> Result<ElementsJournalpostRespons, SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/HentJournalpost", base_url());
@@ -392,10 +393,14 @@ pub async fn hent_journalpost(
         "Sending request to Sikri"
     );
 
-    let resp = arkiv_client()
+    let mut request = arkiv_client()
         .get(&url)
+        .basic_auth(username, Some(password));
+    if let Some(kildesystem) = kildesystem {
+        request = request.query(&[("kildesystem", kildesystem)]);
+    }
+    let resp = request
         .query(&[("journalpostId", journalpost_id.to_string())])
-        .basic_auth(username, Some(password))
         .send()
         .await
         .map_err(|err| transportfeil("GET", &url, err))?;
@@ -412,6 +417,7 @@ pub async fn hent_journalpost(
 #[tracing::instrument(skip_all, name = "sikri.create_sak")]
 pub async fn create_sak(
     data: ElementsSak,
+    kildesystem: Option<&str>,
 ) -> Result<ElementsSakMedJournalposterResponse, SikriFeil> {
     // Vår egen forhåndsvalidering. Ekte irrecoverable: samme payload vil bli
     // avvist likt hver gang. Meldingen bærer kun lengder, ikke innhold.
@@ -423,16 +429,37 @@ pub async fn create_sak(
     })?;
 
     let (username, password) = hent_brukernavn_passord_sikri().await?;
-    let url = format!("{}/api/Archive/OpprettArkivsak", base_url());
+    send_create_sak(
+        arkiv_client(),
+        &base_url(),
+        &username,
+        &password,
+        data,
+        kildesystem,
+    )
+    .await
+}
+
+async fn send_create_sak(
+    client: &Client,
+    base_url: &str,
+    username: &str,
+    password: &str,
+    data: ElementsSak,
+    kildesystem: Option<&str>,
+) -> Result<ElementsSakMedJournalposterResponse, SikriFeil> {
+    let url = format!("{base_url}/api/Archive/OpprettArkivsak");
     info!(
         target: "sikri.http",
         method = "POST",
         endpoint = safe_endpoint_label(&url),
         "Sending OpprettArkivsak request to Sikri"
     );
-    let resp = arkiv_client()
-        .post(&url)
-        .basic_auth(username, Some(password))
+    let mut request = client.post(&url).basic_auth(username, Some(password));
+    if let Some(kildesystem) = kildesystem {
+        request = request.query(&[("kildesystem", kildesystem)]);
+    }
+    let resp = request
         .json(&data)
         .send()
         .await
@@ -516,6 +543,7 @@ async fn send_opprett_journalpost(
 pub async fn legg_til_vedlegg(
     journalpost_id: i32,
     dokumenter: Vec<ElementsDokument>,
+    kildesystem: Option<&str>,
 ) -> Result<Vec<ElementsDokumentRespons>, SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     send_legg_til_vedlegg(
@@ -525,6 +553,7 @@ pub async fn legg_til_vedlegg(
         &password,
         journalpost_id,
         dokumenter,
+        kildesystem,
     )
     .await
 }
@@ -536,6 +565,7 @@ async fn send_legg_til_vedlegg(
     password: &str,
     journalpost_id: i32,
     dokumenter: Vec<ElementsDokument>,
+    kildesystem: Option<&str>,
 ) -> Result<Vec<ElementsDokumentRespons>, SikriFeil> {
     let url = format!("{base_url}/api/Archive/LeggTilVedleggPaaJournalpost");
     info!(
@@ -545,9 +575,11 @@ async fn send_legg_til_vedlegg(
         dokument_count = dokumenter.len(),
         "Sending LeggTilVedlegg request to Sikri"
     );
-    let resp = client
-        .post(&url)
-        .basic_auth(username, Some(password))
+    let mut request = client.post(&url).basic_auth(username, Some(password));
+    if let Some(kildesystem) = kildesystem {
+        request = request.query(&[("kildesystem", kildesystem)]);
+    }
+    let resp = request
         .query(&[("journalpostId", journalpost_id.to_string())])
         .json(&dokumenter)
         .send()
@@ -570,7 +602,11 @@ async fn send_legg_til_vedlegg(
 }
 
 #[tracing::instrument(skip_all, name = "sikri.sett_journalpost_status", fields(journalpost_status = status))]
-pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Result<(), SikriFeil> {
+pub async fn sett_journalpost_status(
+    journalpost_id: i32,
+    status: &str,
+    kildesystem: Option<&str>,
+) -> Result<(), SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/SetJournalpostStatus", base_url());
     info!(
@@ -580,9 +616,13 @@ pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Resul
         journalpost_status = status,
         "Sending request to Sikri"
     );
-    let resp = arkiv_client()
+    let mut request = arkiv_client()
         .put(&url)
-        .basic_auth(username, Some(password))
+        .basic_auth(username, Some(password));
+    if let Some(kildesystem) = kildesystem {
+        request = request.query(&[("kildesystem", kildesystem)]);
+    }
+    let resp = request
         .query(&[
             ("journalpostId", journalpost_id.to_string()),
             ("nyJournalstatus", status.to_string()),
@@ -642,7 +682,7 @@ async fn send_avskriv_journalpost(
 }
 
 #[tracing::instrument(skip_all, name = "sikri.avslutt_sak")]
-pub async fn avslutt_sak(saksnummer: &str) -> Result<(), SikriFeil> {
+pub async fn avslutt_sak(saksnummer: &str, kildesystem: Option<&str>) -> Result<(), SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     send_avslutt_sak(
         arkiv_client(),
@@ -650,6 +690,7 @@ pub async fn avslutt_sak(saksnummer: &str) -> Result<(), SikriFeil> {
         &username,
         &password,
         saksnummer,
+        kildesystem,
     )
     .await
 }
@@ -660,6 +701,7 @@ async fn send_avslutt_sak(
     username: &str,
     password: &str,
     saksnummer: &str,
+    kildesystem: Option<&str>,
 ) -> Result<(), SikriFeil> {
     let url = format!("{base_url}/api/Archive/SetStatusForArkivSak");
     info!(
@@ -668,9 +710,11 @@ async fn send_avslutt_sak(
         endpoint = safe_endpoint_label(&url),
         "Sending request to Sikri"
     );
-    let resp = client
-        .put(&url)
-        .basic_auth(username, Some(password))
+    let mut request = client.put(&url).basic_auth(username, Some(password));
+    if let Some(kildesystem) = kildesystem {
+        request = request.query(&[("kildesystem", kildesystem)]);
+    }
+    let resp = request
         .query(&[("saksnr", saksnummer), ("nySaksstatus", "A")])
         .send()
         .await
@@ -684,6 +728,7 @@ pub async fn sett_saksansvarlig(
     saksnummer: &str,
     saksbehandler: &str,
     saksbehandler_enhet: &str,
+    kildesystem: Option<&str>,
 ) -> Result<(), SikriFeil> {
     let (username, password) = hent_brukernavn_passord_sikri().await?;
     let url = format!("{}/api/Archive/SetSaksansvarligIdForArkivSak", base_url());
@@ -693,9 +738,13 @@ pub async fn sett_saksansvarlig(
         endpoint = safe_endpoint_label(&url),
         "Sending SetSaksansvarligIdForArkivSak request to Sikri"
     );
-    let resp = arkiv_client()
+    let mut request = arkiv_client()
         .put(&url)
-        .basic_auth(username, Some(password))
+        .basic_auth(username, Some(password));
+    if let Some(kildesystem) = kildesystem {
+        request = request.query(&[("kildesystem", kildesystem)]);
+    }
+    let resp = request
         .query(&[
             ("saksnr", saksnummer),
             ("saksbehandler", saksbehandler),
@@ -753,8 +802,18 @@ mod tests {
                     break;
                 }
                 buffer.extend_from_slice(&chunk[..bytes_read]);
-                if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
-                    break;
+                if let Some(header_end) = buffer.windows(4).position(|window| window == b"\r\n\r\n")
+                {
+                    let headers = std::str::from_utf8(&buffer[..header_end]).unwrap();
+                    let content_length = headers
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                        .map(|(_, value)| value.trim().parse::<usize>().unwrap())
+                        .unwrap_or(0);
+                    if buffer.len() >= header_end + 4 + content_length {
+                        break;
+                    }
                 }
             }
             stream
@@ -771,6 +830,90 @@ mod tests {
         });
 
         (format!("http://{address}"), request)
+    }
+
+    fn syntetisk_sak() -> ElementsSak {
+        ElementsSak {
+            sakstittel: "Syntetisk sak".to_string(),
+            arkivdel: "TESTARKIV".to_string(),
+            journalenhet: "TESTENHET".to_string(),
+            saksbehandler: None,
+            saksbehandler_enhet: Some("TESTENHET".to_string()),
+            saksstatus: "B".to_string(),
+            ordningsverdi: "TESTNOKKEL".to_string(),
+            tilgangskode: None,
+            tilgangshjemmel: None,
+            virksomhetsmappe_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn opprett_sak_sender_kildesystem_kun_som_valgfri_queryparameter() {
+        for (kildesystem, expected_request_line) in [
+            (
+                Some("Test & fag/system æ+?"),
+                "POST /api/Archive/OpprettArkivsak?kildesystem=Test+%26+fag%2Fsystem+%C3%A6%2B%3F HTTP/1.1",
+            ),
+            (None, "POST /api/Archive/OpprettArkivsak HTTP/1.1"),
+        ] {
+            let (base_url, received_request) = start_mock_sikri_med_body(
+                "200 OK",
+                r#"{"saksnr":"2026/000123","sakstittel":"Syntetisk sak"}"#,
+            )
+            .await;
+            let data = syntetisk_sak();
+            let expected_body = serde_json::to_value(&data).unwrap();
+
+            let sak = send_create_sak(
+                &Client::new(),
+                &base_url,
+                "bruker",
+                "passord",
+                data,
+                kildesystem,
+            )
+            .await
+            .unwrap();
+
+            let request = received_request.await.unwrap();
+            assert_eq!(request.lines().next().unwrap(), expected_request_line);
+            let (_, body) = request.split_once("\r\n\r\n").unwrap();
+            let body: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(body, expected_body);
+            assert!(body.get("kildesystem").is_none());
+            assert_eq!(sak.saksnr.as_deref(), Some("2026/000123"));
+        }
+    }
+
+    #[tokio::test]
+    async fn avslutt_sak_sender_valgfritt_kildesystem_og_bevarer_status_og_saksnummer() {
+        for (kildesystem, expected_request_line) in [
+            (
+                Some("Test & fag/system æ+?"),
+                "PUT /api/Archive/SetStatusForArkivSak?kildesystem=Test+%26+fag%2Fsystem+%C3%A6%2B%3F&saksnr=2026%2F000123&nySaksstatus=A HTTP/1.1",
+            ),
+            (
+                None,
+                "PUT /api/Archive/SetStatusForArkivSak?saksnr=2026%2F000123&nySaksstatus=A HTTP/1.1",
+            ),
+        ] {
+            let (base_url, received_request) = start_mock_sikri("200 OK").await;
+
+            send_avslutt_sak(
+                &Client::new(),
+                &base_url,
+                "bruker",
+                "passord",
+                "2026/000123",
+                kildesystem,
+            )
+            .await
+            .unwrap();
+
+            let request = received_request.await.unwrap();
+            assert_eq!(request.lines().next().unwrap(), expected_request_line);
+            assert!(request.split_once("\r\n\r\n").unwrap().1.is_empty());
+        }
     }
 
     #[tokio::test]
@@ -1135,6 +1278,7 @@ mod tests {
             "bruker",
             "passord",
             "2026/000123",
+            None,
         )
         .await
         .unwrap_err();
@@ -1165,6 +1309,7 @@ mod tests {
             "bruker",
             "passord",
             "2026/000123",
+            None,
         )
         .await
         .unwrap_err();
@@ -1224,6 +1369,7 @@ mod tests {
                 filtype: Some("PDF".to_string()),
                 innhold: Some(String::new()),
             }],
+            Some("test-fagsystem"),
         )
         .await
         .unwrap_err();
@@ -1231,7 +1377,7 @@ mod tests {
         let request = received_request.await.unwrap();
         assert_eq!(
             request.lines().next().unwrap(),
-            "POST /api/Archive/LeggTilVedleggPaaJournalpost?journalpostId=123 HTTP/1.1"
+            "POST /api/Archive/LeggTilVedleggPaaJournalpost?kildesystem=test-fagsystem&journalpostId=123 HTTP/1.1"
         );
         assert_eq!(feil.kode, "sikri_missing_document_content");
         assert_eq!(feil.recoverability, crate::Recoverability::Irrecoverable);

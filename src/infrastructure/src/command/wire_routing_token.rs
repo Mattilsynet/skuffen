@@ -106,6 +106,7 @@ mod tests {
             (
                 fixed_uuid(100),
                 Command::OpprettSak(OpprettSak {
+                    kildesystem: None,
                     client_reference: fixed_uuid(1),
                     sakstittel: Sakstittel::try_from("Test sak".to_string()).unwrap(),
                     arkivdel: Arkivdel::Tilsynsdivisjonene,

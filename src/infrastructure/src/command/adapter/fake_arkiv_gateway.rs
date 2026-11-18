@@ -226,6 +226,7 @@ impl ArkivGateway for FakeArkivGateway {
         &self,
         _journalpost_id: i32,
         _vedlegg: &DokumentAttributter,
+        _kildesystem: Option<&str>,
     ) -> Result<Option<i32>, EksekveringFeil> {
         self.sjekk_feilmodus(Arkivkall::LeggTilVedlegg)?;
         let seq = self.dokument_counter.fetch_add(1, Ordering::SeqCst) + 1;
@@ -236,6 +237,7 @@ impl ArkivGateway for FakeArkivGateway {
         &self,
         journalpost_id: i32,
         status: Journalstatus,
+        _kildesystem: Option<&str>,
     ) -> Result<(), EksekveringFeil> {
         self.sjekk_feilmodus(Arkivkall::SettJournalpostStatus)?;
         let observert = match status {
@@ -264,6 +266,7 @@ impl ArkivGateway for FakeArkivGateway {
     async fn hent_journalstatus(
         &self,
         journalpost_id: i32,
+        _kildesystem: Option<&str>,
     ) -> Result<ObservertJournalstatus, EksekveringFeil> {
         self.sjekk_feilmodus(Arkivkall::HentJournalstatus)?;
         let mut statuser = self.journalstatus.lock().unwrap();
@@ -282,7 +285,11 @@ impl ArkivGateway for FakeArkivGateway {
         Ok(neste)
     }
 
-    async fn avslutt_sak(&self, _saksnummer: &str) -> Result<(), EksekveringFeil> {
+    async fn avslutt_sak(
+        &self,
+        _saksnummer: &str,
+        _kildesystem: Option<&str>,
+    ) -> Result<(), EksekveringFeil> {
         self.sjekk_feilmodus(Arkivkall::AvsluttSak)?;
         Ok(())
     }
@@ -292,6 +299,7 @@ impl ArkivGateway for FakeArkivGateway {
         _saksnummer: &str,
         _saksbehandler_id: &str,
         _saksbehandler_enhet: &str,
+        _kildesystem: Option<&str>,
     ) -> Result<(), EksekveringFeil> {
         self.sjekk_feilmodus(Arkivkall::SettSaksansvarlig)?;
         Ok(())
@@ -305,13 +313,13 @@ mod tests {
     #[tokio::test]
     async fn uten_feilmodus_lykkes_arkivkallet() {
         let gateway = FakeArkivGateway::med_feilmodus(Feilmodus::Ingen);
-        assert!(gateway.avslutt_sak("2026/000001").await.is_ok());
+        assert!(gateway.avslutt_sak("2026/000001", None).await.is_ok());
     }
 
     #[tokio::test]
     async fn irrecoverable_feilmodus_gir_terminal_feil() {
         let gateway = FakeArkivGateway::med_feilmodus(Feilmodus::Irrecoverable);
-        let feil = gateway.avslutt_sak("2026/000001").await.unwrap_err();
+        let feil = gateway.avslutt_sak("2026/000001", None).await.unwrap_err();
 
         assert!(!feil.er_recoverable());
         assert_eq!(feil.kode, "sikri_unknown_user");
@@ -323,7 +331,7 @@ mod tests {
         let gateway = FakeArkivGateway::med_feilmodus(Feilmodus::Recoverable);
 
         for _ in 0..3 {
-            let feil = gateway.avslutt_sak("2026/000001").await.unwrap_err();
+            let feil = gateway.avslutt_sak("2026/000001", None).await.unwrap_err();
             assert!(feil.er_recoverable());
         }
     }
@@ -332,7 +340,7 @@ mod tests {
     async fn feilinjeksjon_kan_begrenses_til_en_operasjon() {
         let gateway = FakeArkivGateway::med_feilinjeksjon("uavskrevne_restanser@avslutt_sak");
 
-        let feil = gateway.avslutt_sak("2026/000001").await.unwrap_err();
+        let feil = gateway.avslutt_sak("2026/000001", None).await.unwrap_err();
         assert!(!feil.er_recoverable());
         assert_eq!(feil.kode, "sikri_unresolved_journalposter");
         assert_eq!(feil.error_code, StatusErrorCode::PrerequisitePending);
@@ -343,7 +351,7 @@ mod tests {
 
         assert!(
             gateway
-                .sett_saksansvarlig("2026/000001", "Z12345", "MT-1")
+                .sett_saksansvarlig("2026/000001", "Z12345", "MT-1", None)
                 .await
                 .is_ok(),
             "andre kall skal lykkes som før"
@@ -363,11 +371,14 @@ mod tests {
             },
         };
 
-        let feil = gateway.legg_til_vedlegg(1, &vedlegg).await.unwrap_err();
+        let feil = gateway
+            .legg_til_vedlegg(1, &vedlegg, None)
+            .await
+            .unwrap_err();
         assert!(!feil.er_recoverable());
         assert_eq!(feil.kode, "sikri_missing_document_content");
         assert_eq!(feil.error_code, StatusErrorCode::InvalidRequest);
 
-        assert!(gateway.avslutt_sak("2026/000001").await.is_ok());
+        assert!(gateway.avslutt_sak("2026/000001", None).await.is_ok());
     }
 }

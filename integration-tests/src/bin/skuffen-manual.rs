@@ -321,6 +321,7 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
             command_id: Uuid::new_v4(),
             correlation_id,
             payload: Command::OpprettSak(OpprettSak {
+                kildesystem: None,
                 client_reference: sak_client_reference,
                 sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                     "Skuffen manual test {}",
@@ -338,6 +339,7 @@ async fn send_sequence(config: &ConnectionConfig) -> Result<()> {
             command_id: Uuid::new_v4(),
             correlation_id,
             payload: Command::OpprettSak(OpprettSak {
+                kildesystem: None,
                 client_reference: shielded_sak_client_reference,
                 sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                     "[|Ola Norrmann|] - Skuffen manual test {}",

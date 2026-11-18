@@ -37,8 +37,8 @@ pub async fn hent_sak(
     Ok(SakRespons::from(resp))
 }
 
-pub async fn opprett_sak(data: NySak) -> Result<SakRespons, SikriFeil> {
-    let sak = api::create_sak(ElementsSak::from(data)).await?;
+pub async fn opprett_sak(data: NySak, kildesystem: Option<&str>) -> Result<SakRespons, SikriFeil> {
+    let sak = api::create_sak(ElementsSak::from(data), kildesystem).await?;
     Ok(SakRespons::from(sak))
 }
 
@@ -53,32 +53,39 @@ pub async fn opprett_journalpost(
 pub async fn legg_til_vedlegg(
     journalpost_id: i32,
     dokumenter: Vec<ElementsDokument>,
+    kildesystem: Option<&str>,
 ) -> Result<Vec<ElementsDokumentRespons>, SikriFeil> {
-    api::legg_til_vedlegg(journalpost_id, dokumenter).await
+    api::legg_til_vedlegg(journalpost_id, dokumenter, kildesystem).await
 }
 
 pub async fn hent_journalpost(
     journalpost_id: i32,
+    kildesystem: Option<&str>,
 ) -> Result<ElementsJournalpostRespons, SikriFeil> {
-    api::hent_journalpost(journalpost_id).await
+    api::hent_journalpost(journalpost_id, kildesystem).await
 }
 
-pub async fn sett_journalpost_status(journalpost_id: i32, status: &str) -> Result<(), SikriFeil> {
-    api::sett_journalpost_status(journalpost_id, status).await
+pub async fn sett_journalpost_status(
+    journalpost_id: i32,
+    status: &str,
+    kildesystem: Option<&str>,
+) -> Result<(), SikriFeil> {
+    api::sett_journalpost_status(journalpost_id, status, kildesystem).await
 }
 
 pub async fn avskriv_journalpost(request: AvskrivJournalpost<'_>) -> Result<(), SikriFeil> {
     api::avskriv_journalpost(request).await
 }
 
-pub async fn avslutt_sak(saksnummer: &str) -> Result<(), SikriFeil> {
-    api::avslutt_sak(saksnummer).await
+pub async fn avslutt_sak(saksnummer: &str, kildesystem: Option<&str>) -> Result<(), SikriFeil> {
+    api::avslutt_sak(saksnummer, kildesystem).await
 }
 
 pub async fn sett_saksansvarlig(
     saksnummer: &str,
     saksbehandler: &str,
     saksbehandler_enhet: &str,
+    kildesystem: Option<&str>,
 ) -> Result<(), SikriFeil> {
-    api::sett_saksansvarlig(saksnummer, saksbehandler, saksbehandler_enhet).await
+    api::sett_saksansvarlig(saksnummer, saksbehandler, saksbehandler_enhet, kildesystem).await
 }

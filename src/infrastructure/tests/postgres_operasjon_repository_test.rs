@@ -135,6 +135,34 @@ async fn status(pool: &DbPool) -> String {
         .unwrap()
 }
 
+#[tokio::test]
+async fn migrasjonen_kan_bare_reverseres_uten_lagret_sakskilde() {
+    let fixture = start().await;
+    seed(&fixture.pool).await;
+    sqlx::query("UPDATE sak_tilstand SET kildesystem = 'test-opphav' WHERE sak_id = $1")
+        .bind(SAK_ID)
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+
+    let down = include_str!("../migrations/20261116120000_sak_kildesystem.down.sql");
+    let mut tx = fixture.pool.begin().await.unwrap();
+    let feil = sqlx::raw_sql(down).execute(&mut *tx).await.unwrap_err();
+    assert_eq!(
+        feil.as_database_error().unwrap().message(),
+        "Kan ikke fjerne kildesystem fra sak_tilstand uten å miste data"
+    );
+    tx.rollback().await.unwrap();
+
+    let mut tx = fixture.pool.begin().await.unwrap();
+    sqlx::query("UPDATE sak_tilstand SET kildesystem = NULL")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::raw_sql(down).execute(&mut *tx).await.unwrap();
+    tx.rollback().await.unwrap();
+}
+
 /// Legger inn én blokkert operasjon med egen entitet, egen forfallstid og
 /// egen opprettelsestid — alt regnet ut på databasens klokke.
 async fn seed_blokkert(

@@ -52,8 +52,7 @@ pub struct OpprettJournalpostResultat {
     pub journalpost_id: i32,
 }
 
-/// Alle argumenter er materialiserte attributter, så executor aldri rører
-/// wire-typer (SKU-0016 R12).
+/// Gatewayen mottar materialiserte fakta, aldri wire-typer (SKU-0016 R12).
 #[async_trait]
 pub trait ArkivGateway: Send + Sync {
     async fn opprett_sak(
@@ -74,12 +73,14 @@ pub trait ArkivGateway: Send + Sync {
         &self,
         journalpost_id: i32,
         vedlegg: &DokumentAttributter,
+        kildesystem: Option<&str>,
     ) -> Result<Option<i32>, EksekveringFeil>;
 
     async fn sett_journalpost_status(
         &self,
         journalpost_id: i32,
         status: Journalstatus,
+        kildesystem: Option<&str>,
     ) -> Result<(), EksekveringFeil>;
 
     /// Kun inngående avskrives (D21). `TE` — tatt til etterretning.
@@ -94,15 +95,21 @@ pub trait ArkivGateway: Send + Sync {
     async fn hent_journalstatus(
         &self,
         journalpost_id: i32,
+        kildesystem: Option<&str>,
     ) -> Result<ObservertJournalstatus, EksekveringFeil>;
 
-    async fn avslutt_sak(&self, saksnummer: &str) -> Result<(), EksekveringFeil>;
+    async fn avslutt_sak(
+        &self,
+        saksnummer: &str,
+        kildesystem: Option<&str>,
+    ) -> Result<(), EksekveringFeil>;
 
     async fn sett_saksansvarlig(
         &self,
         saksnummer: &str,
         saksbehandler_id: &str,
         saksbehandler_enhet: &str,
+        kildesystem: Option<&str>,
     ) -> Result<(), EksekveringFeil>;
 }
 

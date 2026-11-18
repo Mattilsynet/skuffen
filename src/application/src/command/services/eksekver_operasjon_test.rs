@@ -29,8 +29,7 @@ use domain::eksekvering::typer::{
 use uuid::Uuid;
 
 use crate::command::materialisering::{
-    Dekomponeringsplan, DokumentAttributter, JournalpostAttributter, Korrespondanseparter,
-    SakAttributter, Tilgang,
+    Dekomponeringsplan, DokumentAttributter, JournalpostAttributter, SakAttributter, Tilgang,
 };
 use crate::command::ports::eksekvering_port::{
     ArkivGateway, Journalstatus, ObservertJournalstatus, OpprettJournalpostResultat,
@@ -268,7 +267,6 @@ impl OperasjonRepository for FakeOperasjonRepository {
 #[derive(Clone)]
 struct FakeFaktaRepository {
     facts: SakMedBarn,
-    journalpost_attributter: Option<JournalpostAttributter>,
 }
 
 #[async_trait]
@@ -284,14 +282,22 @@ impl FaktaRepository for FakeFaktaRepository {
         &self,
         _sak_id: SkuffenSakId,
     ) -> Result<Option<SakAttributter>, anyhow::Error> {
-        Ok(None)
+        Ok(Some(SakAttributter {
+            sakstittel: "Testsak".to_string(),
+            arkivdel: crate::command::Arkivdel::Tilsynsdivisjonene,
+            ordningsverdi: "123".to_string(),
+            saksbehandler_id: Some("TESTBRUKER".to_string()),
+            saksbehandler_enhet: None,
+            tilgang: Tilgang::Offentlig,
+            kildesystem: self.facts.kildesystem.clone(),
+        }))
     }
 
     async fn hent_journalpost_attributter(
         &self,
         _journalpost_id: SkuffenJournalpostId,
     ) -> Result<Option<JournalpostAttributter>, anyhow::Error> {
-        Ok(self.journalpost_attributter.clone())
+        Ok(None)
     }
 
     async fn hent_dokument_attributter(
@@ -319,6 +325,7 @@ struct FeilendeArkivGateway {
     feil: EksekveringFeil,
     kall: Arc<Mutex<usize>>,
     avskrivingskall: Arc<Mutex<Option<Avskrivingsargumenter>>>,
+    kildesystem: Arc<Mutex<Option<String>>>,
 }
 
 impl FeilendeArkivGateway {
@@ -327,6 +334,7 @@ impl FeilendeArkivGateway {
             feil,
             kall: Arc::new(Mutex::new(0)),
             avskrivingskall: Arc::new(Mutex::new(None)),
+            kildesystem: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -348,8 +356,9 @@ impl FeilendeArkivGateway {
 impl ArkivGateway for FeilendeArkivGateway {
     async fn opprett_sak(
         &self,
-        _attributter: &SakAttributter,
+        attributter: &SakAttributter,
     ) -> Result<OpprettSakResultat, EksekveringFeil> {
+        *self.kildesystem.lock().unwrap() = attributter.kildesystem.clone();
         self.feil()
     }
 
@@ -366,6 +375,7 @@ impl ArkivGateway for FeilendeArkivGateway {
         &self,
         _journalpost_id: i32,
         _vedlegg: &DokumentAttributter,
+        _kildesystem: Option<&str>,
     ) -> Result<Option<i32>, EksekveringFeil> {
         self.feil()
     }
@@ -374,6 +384,7 @@ impl ArkivGateway for FeilendeArkivGateway {
         &self,
         _journalpost_id: i32,
         _status: Journalstatus,
+        _kildesystem: Option<&str>,
     ) -> Result<(), EksekveringFeil> {
         self.feil()
     }
@@ -395,11 +406,17 @@ impl ArkivGateway for FeilendeArkivGateway {
     async fn hent_journalstatus(
         &self,
         _journalpost_id: i32,
+        _kildesystem: Option<&str>,
     ) -> Result<ObservertJournalstatus, EksekveringFeil> {
         self.feil()
     }
 
-    async fn avslutt_sak(&self, _saksnummer: &str) -> Result<(), EksekveringFeil> {
+    async fn avslutt_sak(
+        &self,
+        _saksnummer: &str,
+        kildesystem: Option<&str>,
+    ) -> Result<(), EksekveringFeil> {
+        *self.kildesystem.lock().unwrap() = kildesystem.map(str::to_string);
         self.feil()
     }
 
@@ -408,7 +425,9 @@ impl ArkivGateway for FeilendeArkivGateway {
         _saksnummer: &str,
         _saksbehandler_id: &str,
         _saksbehandler_enhet: &str,
+        kildesystem: Option<&str>,
     ) -> Result<(), EksekveringFeil> {
+        *self.kildesystem.lock().unwrap() = kildesystem.map(str::to_string);
         self.feil()
     }
 }
@@ -471,6 +490,7 @@ fn facts_klar_for_sett_saksansvarlig() -> SakMedBarn {
         sak_id: sak_id(),
         tilstand: SakTilstand::Opprettet,
         arkiv_id: Some(SAKSNUMMER.to_string()),
+        kildesystem: None,
         oensket_saksansvarlig: Some(Saksansvarlig {
             saksbehandler_id: "Z12345".to_string(),
             enhet: "MT-1".to_string(),
@@ -502,7 +522,6 @@ fn oppsett(feil: EksekveringFeil) -> Oppsett {
     let publisher = FakeStatusPublisher::default();
     let fakta = FakeFaktaRepository {
         facts: facts_klar_for_sett_saksansvarlig(),
-        journalpost_attributter: None,
     };
 
     let service = EksekverOperasjonService::new(
@@ -533,29 +552,19 @@ fn oppsett_for_avskriving(feil: EksekveringFeil) -> Oppsett {
             sak_id: sak_id(),
             tilstand: SakTilstand::Opprettet,
             arkiv_id: Some(SAKSNUMMER.to_string()),
+            kildesystem: Some("sakens-fagsystem".to_string()),
             oensket_saksansvarlig: None,
             naavaerende_saksansvarlig: None,
             journalposter: vec![JournalpostMedDokumenter {
                 journalpost_id,
                 tilstand: JournalpostTilstand::Journalfoert,
                 arkiv_id: Some("123".to_string()),
+                kildesystem: Some("fagsystem & arkiv".to_string()),
                 journalposttype: JournalpostType::Inngaende,
                 med_utsending: false,
                 dokumenter: Vec::new(),
             }],
         },
-        journalpost_attributter: Some(JournalpostAttributter {
-            client_reference: Uuid::from_u128(4),
-            tittel: "Test".to_string(),
-            dokument_dato: "2026-08-27".to_string(),
-            journalposttype: JournalpostType::Inngaende,
-            med_utsending: false,
-            saksbehandler_id: "Z12345".to_string(),
-            saksbehandler_enhet: "MT-1".to_string(),
-            tilgang: Tilgang::default(),
-            korrespondanseparter: Korrespondanseparter::Ingen,
-            kildesystem: Some("fagsystem & arkiv".to_string()),
-        }),
     };
     let service = EksekverOperasjonService::new(
         Box::new(operasjon_repo.clone()),
@@ -682,7 +691,7 @@ async fn recoverable_arkivfeil_gir_retry_ikke_terminal_feil() {
 }
 
 #[tokio::test]
-async fn avskriving_bruker_sikri_id_og_materialisert_kildesystem_uten_oppdiktet_merknad() {
+async fn avskriving_bruker_journalpostens_sikri_id_og_kildesystem() {
     let Oppsett {
         gateway, service, ..
     } = oppsett_for_avskriving(sikri_irrecoverable());
@@ -700,6 +709,43 @@ async fn avskriving_bruker_sikri_id_og_materialisert_kildesystem_uten_oppdiktet_
         gateway.avskrivingskall(),
         Some((123, Some("fagsystem & arkiv".to_string()), None))
     );
+}
+
+#[tokio::test]
+async fn sakskall_bruker_sakens_kildesystem_uten_fallback() {
+    for operasjonstype in [
+        Operasjonstype::OpprettSak,
+        Operasjonstype::SettSaksansvarlig,
+        Operasjonstype::AvsluttSak,
+    ] {
+        for kildesystem in [Some("test-fagsystem"), None] {
+            let gateway = FeilendeArkivGateway::new(sikri_irrecoverable());
+            let mut facts = facts_klar_for_sett_saksansvarlig();
+            facts.kildesystem = kildesystem.map(str::to_string);
+            if operasjonstype == Operasjonstype::OpprettSak {
+                facts.tilstand = SakTilstand::IkkeOpprettet;
+                facts.arkiv_id = None;
+            }
+            let service = EksekverOperasjonService::new(
+                Box::new(FakeOperasjonRepository::default()),
+                Box::new(FakeFaktaRepository { facts }),
+                Box::new(gateway.clone()),
+                Box::new(UbruktRenderOperasjon),
+                Box::new(FakeStatusPublisher::default()),
+                "test-executor",
+                Duration::from_secs(60),
+            );
+            service
+                .execute(Operasjon {
+                    operasjonstype,
+                    ..operasjon()
+                })
+                .await
+                .unwrap();
+            assert_eq!(gateway.antall_kall(), 1);
+            assert_eq!(gateway.kildesystem.lock().unwrap().as_deref(), kildesystem);
+        }
+    }
 }
 
 #[tokio::test]
@@ -763,10 +809,7 @@ fn oppsett_allerede_utfort() -> Oppsett {
 
     let service = EksekverOperasjonService::new(
         Box::new(operasjon_repo.clone()),
-        Box::new(FakeFaktaRepository {
-            facts,
-            journalpost_attributter: None,
-        }),
+        Box::new(FakeFaktaRepository { facts }),
         Box::new(gateway.clone()),
         Box::new(UbruktRenderOperasjon),
         Box::new(publisher.clone()),

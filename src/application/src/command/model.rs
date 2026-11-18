@@ -54,6 +54,7 @@ pub struct OpprettSakCommand {
     pub saksbehandler_id: Option<String>,
     pub saksbehandler_enhet: Option<String>,
     pub tilgjengelighet: Tilgjengelighet,
+    pub kildesystem: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,6 +225,7 @@ pub mod test_fixtures {
             saksbehandler_id: Some("Z99999".to_string()),
             saksbehandler_enhet: Some("42".to_string()),
             tilgjengelighet: Tilgjengelighet::Offentlig,
+            kildesystem: None,
         })
     }
 

@@ -177,10 +177,11 @@ async fn skriv_sak(
         r#"INSERT INTO sak_tilstand (
                sak_id, tilstand, sakstittel, arkivdel, ordningsverdi,
                saksbehandler_id, saksbehandler_enhet, tilgangskode, tilgangshjemmel,
-               oensket_saksansvarlig_id, oensket_saksansvarlig_enhet, opprettet_av_command_id
+               oensket_saksansvarlig_id, oensket_saksansvarlig_enhet, opprettet_av_command_id,
+               kildesystem
            )
-           VALUES ($1, CASE WHEN $12 IS NULL THEN 'opprettet' ELSE 'ikke_opprettet' END,
-                   $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           VALUES ($1, CASE WHEN $13 THEN 'ikke_opprettet' ELSE 'opprettet' END,
+                   $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT (sak_id) DO UPDATE SET
                oensket_saksansvarlig_id = COALESCE(EXCLUDED.oensket_saksansvarlig_id,
                                                    sak_tilstand.oensket_saksansvarlig_id),
@@ -202,7 +203,12 @@ async fn skriv_sak(
             .map(|(_, enhet)| enhet.clone()),
     )
     .bind(command_id)
-    .bind(sak.attributter.as_ref().map(|_| 1i32))
+    .bind(
+        sak.attributter
+            .as_ref()
+            .and_then(|a| a.kildesystem.as_deref()),
+    )
+    .bind(sak.attributter.is_some())
     .execute(&mut **tx)
     .await
     .context("failed to write sak_tilstand")?;

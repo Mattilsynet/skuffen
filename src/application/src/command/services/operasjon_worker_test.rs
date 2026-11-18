@@ -368,6 +368,7 @@ impl FaktaRepository for BlokkerendeFaktaRepository {
             sak_id,
             tilstand: SakTilstand::IkkeOpprettet,
             arkiv_id: None,
+            kildesystem: None,
             oensket_saksansvarlig: Some(Saksansvarlig {
                 saksbehandler_id: "Z12345".to_string(),
                 enhet: "MT-1".to_string(),
@@ -432,6 +433,7 @@ impl ArkivGateway for UroertArkivGateway {
         &self,
         _journalpost_id: i32,
         _vedlegg: &DokumentAttributter,
+        _kildesystem: Option<&str>,
     ) -> Result<Option<i32>, EksekveringFeil> {
         unreachable!("worker-testene skal aldri nå arkivet")
     }
@@ -440,6 +442,7 @@ impl ArkivGateway for UroertArkivGateway {
         &self,
         _journalpost_id: i32,
         _status: Journalstatus,
+        _kildesystem: Option<&str>,
     ) -> Result<(), EksekveringFeil> {
         unreachable!("worker-testene skal aldri nå arkivet")
     }
@@ -456,11 +459,16 @@ impl ArkivGateway for UroertArkivGateway {
     async fn hent_journalstatus(
         &self,
         _journalpost_id: i32,
+        _kildesystem: Option<&str>,
     ) -> Result<ObservertJournalstatus, EksekveringFeil> {
         unreachable!("worker-testene skal aldri nå arkivet")
     }
 
-    async fn avslutt_sak(&self, _saksnummer: &str) -> Result<(), EksekveringFeil> {
+    async fn avslutt_sak(
+        &self,
+        _saksnummer: &str,
+        _kildesystem: Option<&str>,
+    ) -> Result<(), EksekveringFeil> {
         unreachable!("worker-testene skal aldri nå arkivet")
     }
 
@@ -469,6 +477,7 @@ impl ArkivGateway for UroertArkivGateway {
         _saksnummer: &str,
         _saksbehandler_id: &str,
         _saksbehandler_enhet: &str,
+        _kildesystem: Option<&str>,
     ) -> Result<(), EksekveringFeil> {
         unreachable!("worker-testene skal aldri nå arkivet")
     }

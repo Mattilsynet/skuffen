@@ -1,6 +1,12 @@
 use anyhow::Result;
+use application::command::ports::{entitet_port::EntitetRepository, fakta_port::FaktaRepository};
 use async_nats::jetstream;
 use bytes::Bytes;
+use infrastructure::command::adapter::{
+    postgres_entitet_repository::PostgresEntitetRepository,
+    postgres_fakta_repository::PostgresFaktaRepository,
+};
+use infrastructure::database::setup::setup_database;
 use lib_nats::chunked_upload::{
     ChunkedUploadClient, ChunkedUploadClientConfig, UploadError, UploadErrorCode, UploadRequest,
 };
@@ -196,6 +202,7 @@ async fn command_sequence_inngaende_journalpost_flow() -> Result<()> {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
+            kildesystem: None,
             client_reference: scenario.sak_client_reference,
             sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Inngaende test {}",
@@ -250,6 +257,7 @@ async fn command_sequence_utgaaende_journalpost_flow() -> Result<()> {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
+            kildesystem: None,
             client_reference: scenario.sak_client_reference,
             sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Utgaaende test {}",
@@ -303,6 +311,7 @@ async fn query_hent_sak_via_nats_slaar_opp_entitet() -> Result<()> {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
+            kildesystem: None,
             client_reference: scenario.sak_client_reference,
             sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Query test {}",
@@ -341,6 +350,7 @@ async fn query_hent_sak_via_nats_paa_client_reference() -> Result<()> {
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
+            kildesystem: None,
             client_reference: scenario.sak_client_reference,
             sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Query client_reference {}",
@@ -505,6 +515,7 @@ async fn avslutt_sak_uten_journalposter_er_tillatt() -> Result<()> {
             command_id: Uuid::new_v4(),
             correlation_id: Some(Uuid::new_v4()),
             payload: Command::OpprettSak(OpprettSak {
+                kildesystem: None,
                 client_reference: sak_client_reference,
                 sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                     "Skuffen E2E avslutt uten journalposter {}",
@@ -549,6 +560,7 @@ async fn avslutt_sak_med_arkiv_id_fullfoerer_gjennom_hele_flyten() -> Result<()>
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
+            kildesystem: Some("test-fagsystem".to_string()),
             client_reference: sak_client_reference,
             sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "Avslutt med arkiv_id {}",
@@ -592,6 +604,17 @@ async fn avslutt_sak_med_arkiv_id_fullfoerer_gjennom_hele_flyten() -> Result<()>
     // Verify saksnummer is present in the AvsluttSak terminal event
     let avslutt_saksnummer = extract_saksnummer(&events, avslutt_sak.command_id);
     assert_eq!(avslutt_saksnummer.as_deref(), Some(saksnummer.as_str()));
+
+    let pool = setup_database().await?;
+    let entitet = PostgresEntitetRepository::new(pool.clone())
+        .hent_for_client_reference(sak_client_reference)
+        .await?
+        .expect("opprettet sak skal ha lokal entitet");
+    let sak = PostgresFaktaRepository::new(pool)
+        .hent_sak_med_barn(entitet.skuffen_id.into())
+        .await?
+        .expect("opprettet sak skal ha lagret tilstand");
+    assert_eq!(sak.kildesystem.as_deref(), Some("test-fagsystem"));
 
     Ok(())
 }
@@ -880,6 +903,7 @@ fn opprett_sak_for(client_reference: Uuid, tittel: &str) -> CommandEnvelope<Comm
         command_id: Uuid::new_v4(),
         correlation_id: Some(Uuid::new_v4()),
         payload: Command::OpprettSak(OpprettSak {
+            kildesystem: None,
             client_reference,
             sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(format!(
                 "{tittel} {}",

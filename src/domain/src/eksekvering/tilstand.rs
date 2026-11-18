@@ -80,6 +80,7 @@ pub struct SakMedBarn {
     pub tilstand: SakTilstand,
     /// Saksnummer. Eneste kilde er `entitet.arkiv_id`.
     pub arkiv_id: Option<String>,
+    pub kildesystem: Option<String>,
     /// Materialisert ved dekomponering.
     pub oensket_saksansvarlig: Option<Saksansvarlig>,
     pub naavaerende_saksansvarlig: Option<Saksansvarlig>,
@@ -92,6 +93,7 @@ pub struct JournalpostMedDokumenter {
     pub tilstand: JournalpostTilstand,
     /// Eneste kilde er `entitet.arkiv_id`.
     pub arkiv_id: Option<String>,
+    pub kildesystem: Option<String>,
     pub journalposttype: JournalpostType,
     pub med_utsending: bool,
     pub dokumenter: Vec<DokumentMedTilstand>,

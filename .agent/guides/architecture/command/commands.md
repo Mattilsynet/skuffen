@@ -13,6 +13,23 @@
 | Opprett Journalpost Utgående med vedlegg og utsending | Oppretter journalpost av type utgående med vedlegg, sender ut og avskriver. | |
 | Opprett Journalpost Utgående med utsending | Oppretter journalpost av type utgående, sender ut og avskriver. | |
 
+## Kildesystem
+
+`OpprettSak` og alle varianter av opprett journalpost har valgfritt
+`kildesystem`. Ved opprettelse lagres verdien på entiteten i `sak_tilstand`
+eller `journalpost_tilstand`. Utelatt felt og `null` betyr fravær.
+
+Skuffen sender entitetens lagrede verdi som query-parameter til Sikri.
+Avslutning og tildeling bruker sakens verdi og kan ikke sette en ny.
+Vedlegg, statusendringer, avskriving og polling bruker journalpostens verdi,
+ikke sakens. Mangler entiteten lokal kilde, utelates parameteren fra disse
+kallene. Vanlige saksoppslag og saksoppslag under validering er uendret.
+
+`lib-schemas` tag `1.8.4` har ikke feltet på `AvsluttSak` eller
+`SettSaksansvarlig`; meldinger som oppgir det der, avvises som ukjent felt.
+Klienter må vente til ny Skuffen er rullet ut før de sender `kildesystem`
+på `OpprettSak`.
+
 ## Tildeling ved opprettelse av sak
 
 `OpprettSak.saksbehandler_id` og `saksbehandler_enhet` er `Option<String>`.
@@ -36,8 +53,8 @@ Eier har bekreftet at eksisterende klienter ikke sender blanke verdier.
 
 1. Publiser schemas-endringen som en ny tag i `landdyrtilsyn-libs`;
     eksisterende tags endres ikke.
-2. Skuffen bruker `lib-schemas` og `lib-sql` fra publisert tag `1.8.1`, med
-   `Cargo.lock` som resolved boundary. `lib-nats` beholdes på `1.7.7`.
+2. Skuffen bruker `lib-schemas` fra publisert tag `1.8.4` og `lib-sql` fra
+   `1.8.1`, med `Cargo.lock` som resolved boundary. `lib-nats` beholdes på `1.7.7`.
    `lib-sql` bruker Postgres-backend direkte; Skuffen aktiverer derfor `macros`
    på sin egen SQLx-avhengighet for `sqlx::migrate!`.
 3. Rull ut Skuffen og vent til gamle instanser er ute, før klienter begynner å

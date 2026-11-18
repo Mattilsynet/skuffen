@@ -18,7 +18,7 @@ yanked = "deny"
 
 # Advisories consciously accepted. Every entry needs a reason and a review date.
 ignore = [
-  # { id = "RUSTSEC-0000-0000", reason = "why", expires = "2026-12-31" },
+  { id = "RUSTSEC-2026-0543", reason = "Vedlikeholdsvarsel uten kjent sikkerhetsfeil. Overgang berører Skuffen, felles responskontrakter, SQLx og GCP-autentisering. Revurderes 2027-02-01." },
 ]
 
 [sources]

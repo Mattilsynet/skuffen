@@ -62,6 +62,7 @@ impl CommandScenario {
                 command_id: Uuid::new_v4(),
                 correlation_id: Some(Uuid::new_v4()),
                 payload: Command::OpprettSak(OpprettSak {
+                    kildesystem: None,
                     client_reference: self.sak_client_reference,
                     sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(sakstittel)
                         .unwrap(),
@@ -115,6 +116,7 @@ impl CommandScenario {
             command_id: Uuid::new_v4(),
             correlation_id: Some(Uuid::new_v4()),
             payload: Command::OpprettSak(OpprettSak {
+                kildesystem: None,
                 client_reference: self.sak_client_reference,
                 sakstittel: lib_schemas::skuffen::sak::Sakstittel::try_from(sakstittel).unwrap(),
                 arkivdel: Arkivdel::Tilsynsdivisjonene,
