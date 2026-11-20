@@ -214,9 +214,10 @@ work also emits no new status event.
 
 Admin forkast (SKU-0024) logs `admin forkast startet` and `admin forkast utført`
 with `utfort_av` and `command_ids`, like admin retry, inside the `admin.forkast`
-span. A blocked `AvsluttSak`
-logs `avslutning venter på kommandoer uten operasjoner` with
-`udekomponerte_command_ids`.
+span. When `AvsluttSak` checks for commands without operations, it logs
+`avslutning venter på kommandoer uten operasjoner` at `debug!` with
+`udekomponerte_command_ids`. The check recurs while the operation is blocked,
+so this diagnostic is not part of baseline `info!` logging.
 
 The `lib-nats` media server owns its own protocol handlers and is not included.
 

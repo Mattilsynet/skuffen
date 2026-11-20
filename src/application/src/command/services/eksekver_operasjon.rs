@@ -185,9 +185,7 @@ impl EksekverOperasjonService {
                 .hent_udekomponerte_kommandoer(op.sak_id)
                 .await?;
             if !udekomponerte.is_empty() {
-                // Står ikke i noen status; loggen viser hva som må retryes
-                // eller forkastes før saken kan avsluttes.
-                tracing::info!(
+                tracing::debug!(
                     udekomponerte_command_ids = ?udekomponerte,
                     "avslutning venter på kommandoer uten operasjoner"
                 );
